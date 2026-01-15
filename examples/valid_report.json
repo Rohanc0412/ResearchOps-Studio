@@ -1,0 +1,57 @@
+{
+  "artifact_type": "structured_report",
+  "sections": [
+    {
+      "name": "intro",
+      "text": "This report summarizes a narrow, test-only example.",
+      "claims": [
+        {
+          "claim_id": "claim_intro_1",
+          "text": "The referenced paper introduces a benchmark used in later sections.",
+          "severity": "non_trivial",
+          "citation_keys": ["S1"]
+        }
+      ],
+      "citations": {
+        "S1": { "snapshot_id": "snap_001", "snippet_id": "snip_001" }
+      }
+    },
+    {
+      "name": "background",
+      "text": "Background context for the example.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "related_work",
+      "text": "Related work is out of scope for this fixture.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "methods",
+      "text": "Methods are not implemented in Part 1; contract only.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "comparison",
+      "text": "Comparison section placeholder.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "gaps",
+      "text": "Gaps section placeholder.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "conclusions",
+      "text": "Conclusions section placeholder.",
+      "claims": [],
+      "citations": {}
+    }
+  ]
+}
+

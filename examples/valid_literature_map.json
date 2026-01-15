@@ -1,0 +1,29 @@
+{
+  "artifact_type": "literature_map",
+  "nodes": [
+    {
+      "node_id": "paper_001",
+      "type": "paper",
+      "metadata": { "title": "Example Paper", "year": 2020 },
+      "score": 0.8,
+      "evidence_refs": [{ "snapshot_id": "snap_001", "snippet_id": "snip_001" }]
+    },
+    {
+      "node_id": "dataset_001",
+      "type": "dataset",
+      "metadata": { "name": "Example Dataset", "license": "CC-BY" },
+      "score": 0.6,
+      "evidence_refs": [{ "snapshot_id": "snap_001", "snippet_id": "snip_001" }]
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_001",
+      "type": "cites",
+      "from_node_id": "paper_001",
+      "to_node_id": "dataset_001",
+      "evidence_refs": [{ "snapshot_id": "snap_001", "snippet_id": "snip_001" }]
+    }
+  ]
+}
+

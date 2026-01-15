@@ -1,0 +1,57 @@
+{
+  "artifact_type": "structured_report",
+  "sections": [
+    {
+      "name": "intro",
+      "text": "This report should be rejected due to a non-trivial claim with no citation keys.",
+      "claims": [
+        {
+          "claim_id": "claim_intro_1",
+          "text": "This non-trivial claim has no citations and must fail closed.",
+          "severity": "non_trivial",
+          "citation_keys": []
+        }
+      ],
+      "citations": {
+        "S1": { "snapshot_id": "snap_001", "snippet_id": "snip_001" }
+      }
+    },
+    {
+      "name": "background",
+      "text": "Background context.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "related_work",
+      "text": "Related work.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "methods",
+      "text": "Methods.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "comparison",
+      "text": "Comparison.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "gaps",
+      "text": "Gaps.",
+      "claims": [],
+      "citations": {}
+    },
+    {
+      "name": "conclusions",
+      "text": "Conclusions.",
+      "claims": [],
+      "citations": {}
+    }
+  ]
+}
+

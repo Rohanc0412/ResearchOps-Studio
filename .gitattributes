@@ -1,0 +1,18 @@
+# Line ending policy (Windows-friendly):
+# - With `core.autocrlf=true`, Git checks out text as CRLF on Windows,
+#   but normalizes to LF in the repo on commit.
+# - Avoid setting `eol=lf` globally, because it overrides `core.autocrlf`.
+* text=auto
+
+# Keep attributes files stable cross-platform
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+
+# Treat these as text (no forced checkout eol)
+*.py   text
+*.md   text
+*.yaml text
+*.yml  text
+*.json text
+*.toml text
+*.txt  text

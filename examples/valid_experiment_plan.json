@@ -1,0 +1,23 @@
+{
+  "artifact_type": "experiment_plan",
+  "hypothesis": "Using the referenced dataset improves evaluation consistency compared to ad-hoc splits.",
+  "datasets": [
+    {
+      "name": "Example Dataset",
+      "description": "A small dataset used only for fixtures.",
+      "evidence_refs": [{ "snapshot_id": "snap_001", "snippet_id": "snip_001" }]
+    }
+  ],
+  "baseline_models": [
+    {
+      "name": "BaselineModelV1",
+      "description": "A baseline for comparison in fixtures.",
+      "evidence_refs": [{ "snapshot_id": "snap_001", "snippet_id": "snip_001" }]
+    }
+  ],
+  "evaluation_metrics": ["accuracy"],
+  "ablation_plan": "Ablate preprocessing and model size.",
+  "compute_estimation": "Single GPU hour for the fixture plan.",
+  "risks_and_failure_cases": ["Metric inflation due to leakage in toy data."]
+}
+
