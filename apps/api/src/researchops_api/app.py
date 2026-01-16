@@ -2,24 +2,27 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
-
-from db.init_db import init_db
-from db.session import create_db_engine, create_sessionmaker
+from fastapi.routing import APIRouter
 from researchops_core import SERVICE_API, get_settings
 from researchops_observability import configure_logging, request_id_middleware
 from researchops_observability.context import bind
 
+from db.init_db import init_db
+from db.session import create_db_engine, create_sessionmaker
 from researchops_api.middlewares.auth import init_auth_runtime
-from researchops_api.routes.health import router as health_router
-from researchops_api.routes.runs import router as runs_router
-from researchops_api.routes.version import router as version_router
 from researchops_api.routes.auth import router as auth_router
+from researchops_api.routes.artifacts import router as artifacts_router
+from researchops_api.routes.evidence import router as evidence_router
+from researchops_api.routes.health import router as health_router
+from researchops_api.routes.projects import router as projects_router
+from researchops_api.routes.runs import router as runs_router
 from researchops_api.routes.tenants import router as tenants_router
+from researchops_api.routes.version import router as version_router
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +63,7 @@ def create_app() -> FastAPI:
     app.state.engine = engine
     app.state.SessionLocal = SessionLocal
     app.state.git_sha = _git_sha()
-    app.state.build_time = datetime.now(timezone.utc).isoformat()
+    app.state.build_time = datetime.now(UTC).isoformat()
 
     app.middleware("http")(request_id_middleware(SERVICE_API))
 
@@ -69,6 +72,20 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(tenants_router)
     app.include_router(runs_router)
+    app.include_router(projects_router)
+    app.include_router(evidence_router)
+    app.include_router(artifacts_router)
+
+    # Frontend uses `VITE_API_BASE_URL=/api` (Vite proxy doesn't rewrite paths), so
+    # we expose the same routes under `/api/*` for compatibility.
+    api = APIRouter(prefix="/api")
+    api.include_router(auth_router)
+    api.include_router(tenants_router)
+    api.include_router(runs_router)
+    api.include_router(projects_router)
+    api.include_router(evidence_router)
+    api.include_router(artifacts_router)
+    app.include_router(api)
 
     logger.info("api_started", extra={"port": settings.api_port})
     return app

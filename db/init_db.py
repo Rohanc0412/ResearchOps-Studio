@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import time
 
+import sqlalchemy as sa
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.engine import Engine
 
 from db.models.base import Base
@@ -20,16 +20,32 @@ def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) ->
     for _ in range(retries):
         try:
             if engine.dialect.name == "postgresql":
-                # Serialize schema init across api/worker containers to avoid races (e.g. ENUM type creation).
+                # Serialize schema init across api/worker containers to avoid races.
+                #
+                # We run Alembic migrations (idempotent via alembic_version). This is safer than
+                # `create_all()` when schemas evolve, and it enables pgvector + enums reliably.
+                from alembic import command
+                from alembic.config import Config
+
+                # Use a transaction-scoped advisory lock so we can safely commit/rollback and avoid
+                # leaking locks even when migrations error.
                 with engine.begin() as conn:
-                    conn.execute(text("SELECT pg_advisory_lock(42424242)"))
-                    try:
-                        Base.metadata.create_all(bind=conn, checkfirst=True)
-                        apply_sql_migrations(conn)
-                    finally:
-                        conn.execute(text("SELECT pg_advisory_unlock(42424242)"))
+                    conn.execute(text("SELECT pg_advisory_xact_lock(42424242)"))
+                    cfg = Config("alembic.ini")
+                    cfg.attributes["connection"] = conn
+
+                    inspector = sa.inspect(conn)
+                    has_alembic_version = inspector.has_table("alembic_version")
+                    has_projects = inspector.has_table("projects")
+                    if not has_alembic_version and has_projects:
+                        # Legacy dev DBs may have been initialized via `Base.metadata.create_all()`
+                        # (no alembic_version table). In that case, stamp to avoid duplicate DDL.
+                        command.stamp(cfg, "head")
+                    else:
+                        command.upgrade(cfg, "head")
             else:
                 Base.metadata.create_all(engine)
+                apply_sql_migrations(engine)
             return
         except IntegrityError as e:
             # A concurrent initializer may have created a named type between our check and create.

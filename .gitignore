@@ -12,6 +12,7 @@ env/
 # Env files
 .env
 .env.*
+*.local
 
 # Packaging / build artifacts
 build/
@@ -24,6 +25,7 @@ dist/
 .coverage
 coverage.xml
 htmlcov/
+coverage/
 
 # Type checker / tooling caches
 .mypy_cache/
@@ -41,3 +43,18 @@ desktop.ini
 # IDEs
 .vscode/
 .idea/
+
+# Node / frontend
+node_modules/
+.next/
+out/
+
+# Local DB files
+*.db
+*.sqlite
+
+# Local secrets / keys
+*.pem
+*.key
+*.p12
+*.pfx

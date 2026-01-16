@@ -150,7 +150,7 @@ Docker Compose sets `DEV_BYPASS_AUTH=true` for local runs, so you can call prote
 You can still simulate identities via headers:
 
 - `X-Dev-User-Id: dev-user`
-- `X-Dev-Tenant-Id: tenant_local`
+- `X-Dev-Tenant-Id: 00000000-0000-0000-0000-000000000001`
 - `X-Dev-Roles: owner,admin,researcher,viewer`
 
 ### RBAC Roles
@@ -182,7 +182,7 @@ Example query (Postgres):
 ```sql
 SELECT created_at, actor_user_id, action, target_type, target_id, metadata
 FROM audit_logs
-WHERE tenant_id = 'tenant_local'
+WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
 ORDER BY created_at DESC
 LIMIT 50;
 ```
@@ -195,11 +195,42 @@ LIMIT 50;
 ## Database (Minimal, Production-Shaped)
 
 SQLAlchemy models in `db/models/`:
-- `runs` (status enum: `created|queued|running|failed|succeeded`)
-- `artifacts` (JSON payload in `payload_json`)
+- `projects` (tenant-scoped workspace + last activity)
+- `runs` (status/stage/budgets/errors)
+- `run_events` (timeline stream)
+- `sources` / `snapshots` / `snippets` / `snippet_embeddings` (immutable evidence + vector search)
+- `artifacts` (blob metadata; binary data lives outside Postgres)
+- `claim_map` (claim ↔ snippet enforcement storage)
 - `jobs` (Postgres-backed queue, polled by worker)
 
 Local pgvector is enabled via `infra/docker/postgres/init/001_pgvector.sql`.
+
+## Database and Memory Model (Part 4)
+
+This schema is the UI truth layer for:
+- Projects list + last activity
+- Runs list + run viewer (status, stages, budgets, failure reasons)
+- Live run events timeline
+- Evidence (sources → immutable snapshots → citeable snippets + embeddings)
+- Artifacts listing + download metadata (`blob_ref`)
+- Claim maps for citation enforcement/debugging
+
+Quickstart (local):
+1) Start Postgres (Compose): `docker compose -f infra/compose.yaml up --build`
+2) Set env vars: `DATABASE_URL` (Postgres) + auth vars as needed
+3) Run migrations: `python -m alembic -c alembic.ini upgrade head`
+4) Start API (PowerShell): `$env:PYTHONPATH="apps/api/src;packages/core/src;packages/observability/src;packages/citations/src;."; python -m researchops_api.main`
+
+Useful commands:
+- Upgrade: `python -m alembic -c alembic.ini upgrade head`
+- New revision (future): `python -m alembic -c alembic.ini revision -m "..." --autogenerate`
+
+Tenant safety:
+- Every tenant-owned table includes `tenant_id` and all queries are tenant-scoped.
+
+Notes:
+- `pgvector` extension is required (`CREATE EXTENSION IF NOT EXISTS vector`).
+- Snapshots/artifacts store references (e.g. S3/local path) via `blob_ref` plus integrity hashes; blobs are not stored in Postgres.
 
 ## Repo Layout
 

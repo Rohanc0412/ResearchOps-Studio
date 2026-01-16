@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 
 import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from researchops_api import create_app
 from researchops_core.auth.config import get_auth_config
 from researchops_core.settings import get_settings
@@ -40,7 +38,9 @@ def _jwk_from_public(public_key, *, kid: str) -> dict:
 def _oidc_mock_client(*, issuer: str, jwks: dict) -> httpx.Client:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/openid-configuration":
-            return httpx.Response(200, json={"issuer": issuer.rstrip("/"), "jwks_uri": f"{issuer.rstrip('/')}/jwks"})
+            return httpx.Response(
+                200, json={"issuer": issuer.rstrip("/"), "jwks_uri": f"{issuer.rstrip('/')}/jwks"}
+            )
         if request.url.path == "/jwks":
             return httpx.Response(200, json=jwks)
         return httpx.Response(404, json={"error": "not found"})
@@ -49,8 +49,10 @@ def _oidc_mock_client(*, issuer: str, jwks: dict) -> httpx.Client:
     return httpx.Client(transport=transport, base_url=issuer.rstrip("/"))
 
 
-def _mint_token(*, private_key, issuer: str, audience: str, tenant_id: str, roles: list[str], kid: str) -> str:
-    now = datetime.now(timezone.utc)
+def _mint_token(
+    *, private_key, issuer: str, audience: str, tenant_id: str, roles: list[str], kid: str
+) -> str:
+    now = datetime.now(UTC)
     payload = {
         "sub": "user_123",
         "iss": issuer.rstrip("/"),
@@ -101,14 +103,14 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
             private_key=private_key,
             issuer=os.environ["OIDC_ISSUER"],
             audience=os.environ["OIDC_AUDIENCE"],
-            tenant_id="tenant_a",
+            tenant_id="00000000-0000-0000-0000-0000000000aa",
             roles=["researcher"],
             kid=kid,
         )
         headers_a = {"Authorization": f"Bearer {token_a}"}
 
         me = client.get("/me", headers=headers_a).json()
-        assert me["tenant_id"] == "tenant_a"
+        assert me["tenant_id"] == "00000000-0000-0000-0000-0000000000aa"
         assert "researcher" in me["roles"]
 
         stop = Event()
@@ -135,15 +137,16 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
 
         assert last is not None
         assert last["status"] == "succeeded"
-        assert len(last["artifacts"]) == 1
-        assert last["artifacts"][0]["artifact_type"] == "hello"
+        artifacts = client.get(f"/runs/{run_id}/artifacts", headers=headers_a).json()
+        assert len(artifacts) == 1
+        assert artifacts[0]["type"] == "hello"
 
         # Cross-tenant access is blocked (404, because tenant-scoped query)
         token_b = _mint_token(
             private_key=private_key,
             issuer=os.environ["OIDC_ISSUER"],
             audience=os.environ["OIDC_AUDIENCE"],
-            tenant_id="tenant_b",
+            tenant_id="00000000-0000-0000-0000-0000000000bb",
             roles=["viewer"],
             kid=kid,
         )

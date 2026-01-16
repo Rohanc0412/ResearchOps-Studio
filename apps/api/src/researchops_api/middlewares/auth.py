@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from fastapi import Depends, HTTPException, Request
-
 from researchops_core.auth.config import get_auth_config
 from researchops_core.auth.exceptions import (
     AuthAudienceError,
@@ -34,29 +32,37 @@ def init_auth_runtime() -> AuthRuntime:
     cfg.validate_for_startup(environment=settings.environment)
     if cfg.auth_required and not cfg.dev_bypass_auth:
         assert cfg.oidc_issuer is not None
-        jwks_cache = JWKSCache(issuer=str(cfg.oidc_issuer), cache_seconds=cfg.oidc_jwks_cache_seconds)
+        jwks_cache = JWKSCache(
+            issuer=str(cfg.oidc_issuer), cache_seconds=cfg.oidc_jwks_cache_seconds
+        )
     else:
         jwks_cache = None
     return AuthRuntime(jwks_cache=jwks_cache)
 
 
 def get_identity(request: Request) -> Identity:
-    settings = get_settings()
     cfg = get_auth_config()
     runtime: AuthRuntime = request.app.state.auth_runtime
 
     if cfg.dev_bypass_auth:
         user_id = request.headers.get("x-dev-user-id", "dev-user")
-        tenant_id = request.headers.get("x-dev-tenant-id", "tenant_local")
+        tenant_id = request.headers.get("x-dev-tenant-id", "00000000-0000-0000-0000-000000000001")
         roles_raw = request.headers.get("x-dev-roles", "owner")
         roles = [r.strip().lower() for r in roles_raw.split(",") if r.strip()]
-        identity = Identity(user_id=user_id, tenant_id=tenant_id, roles=roles or ["viewer"], raw_claims={})
+        identity = Identity(
+            user_id=user_id, tenant_id=tenant_id, roles=roles or ["viewer"], raw_claims={}
+        )
         request.state.identity = identity
         bind_log_context(tenant_id_value=identity.tenant_id, run_id_value=None)
         return identity
 
     if not cfg.auth_required:
-        identity = Identity(user_id="anonymous", tenant_id="tenant_local", roles=["viewer"], raw_claims={})
+        identity = Identity(
+            user_id="anonymous",
+            tenant_id="00000000-0000-0000-0000-000000000001",
+            roles=["viewer"],
+            raw_claims={},
+        )
         request.state.identity = identity
         bind_log_context(tenant_id_value=identity.tenant_id, run_id_value=None)
         return identity
@@ -98,4 +104,3 @@ def get_identity(request: Request) -> Identity:
 
 
 IdentityDep = Depends(get_identity)
-

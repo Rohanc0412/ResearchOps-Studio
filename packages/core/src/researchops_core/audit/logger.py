@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
+from researchops_core.tenancy import tenant_uuid
 
 from fastapi import Request
+from researchops_observability.context import request_id as request_id_ctx
 from sqlalchemy.orm import Session
 
 from db.models.audit_logs import AuditLogRow
 from researchops_core.auth.identity import Identity
-from researchops_observability.context import request_id as request_id_ctx
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def write_audit_log(
@@ -35,7 +36,7 @@ def write_audit_log(
 
     db.add(
         AuditLogRow(
-            tenant_id=identity.tenant_id,
+            tenant_id=tenant_uuid(identity.tenant_id),
             actor_user_id=identity.user_id,
             action=action,
             target_type=target_type,

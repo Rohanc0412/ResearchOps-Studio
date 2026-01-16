@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import UTC, datetime
 from threading import Event
-from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -22,12 +22,15 @@ logger = logging.getLogger(__name__)
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _claim_next_job(session: Session) -> JobRow | None:
     stmt = (
-        select(JobRow).where(JobRow.status == JobStatusDb.queued).order_by(JobRow.created_at.asc()).limit(1)
+        select(JobRow)
+        .where(JobRow.status == JobStatusDb.queued)
+        .order_by(JobRow.created_at.asc())
+        .limit(1)
     )
     # SQLite doesn't support SKIP LOCKED; this code path is for local tests only.
     if session.get_bind().dialect.name != "sqlite":
@@ -43,7 +46,9 @@ def _claim_next_job(session: Session) -> JobRow | None:
 
 def _mark_job_done(session: Session, job_id: UUID) -> None:
     session.execute(
-        update(JobRow).where(JobRow.id == job_id).values(status=JobStatusDb.succeeded, updated_at=_now_utc())
+        update(JobRow)
+        .where(JobRow.id == job_id)
+        .values(status=JobStatusDb.succeeded, updated_at=_now_utc())
     )
 
 
@@ -55,12 +60,20 @@ def _mark_job_failed(session: Session, job_id: UUID, error: str) -> None:
     )
 
 
-def _mark_run_failed(session: Session, *, run_id: UUID, tenant_id: str, error: str) -> None:
+def _mark_run_failed(session: Session, *, run_id: UUID, tenant_id: UUID, error: str) -> None:
+    now = _now_utc()
     session.execute(
         update(RunRow)
         .where(RunRow.id == run_id, RunRow.tenant_id == tenant_id)
-        .values(status=RunStatusDb.failed, error_message=error, updated_at=_now_utc())
+        .values(
+            status=RunStatusDb.failed,
+            failure_reason=error,
+            error_code="worker_error",
+            finished_at=now,
+            updated_at=now,
+        )
     )
+
 
 def run_forever(*, poll_seconds: float, stop_event: Event | None = None) -> None:
     settings = get_settings()
@@ -82,7 +95,8 @@ def run_once(*, SessionLocal) -> bool:
             return False
 
         logger.info(
-            "job_claimed", extra={"job_id": str(job.id), "job_type": job.job_type, "run_id": str(job.run_id)}
+            "job_claimed",
+            extra={"job_id": str(job.id), "job_type": job.job_type, "run_id": str(job.run_id)},
         )
 
         try:
