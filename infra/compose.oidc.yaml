@@ -1,0 +1,31 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.6
+    # Overwrite realm/client config on each start to keep local dev deterministic.
+    command:
+      [
+        "start-dev",
+        "--import-realm",
+        "--spi-import-export-import-strategy=OVERWRITE_EXISTING"
+      ]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME: keycloak.localhost
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_PROXY: edge
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-researchops.json:/opt/keycloak/data/import/realm-researchops.json:ro
+
+  api:
+    environment:
+      DEV_BYPASS_AUTH: "false"
+      AUTH_REQUIRED: "true"
+      OIDC_ISSUER: "http://keycloak.localhost:8080/realms/researchops"
+      OIDC_AUDIENCE: "researchops-api"
+    extra_hosts:
+      - "keycloak.localhost:host-gateway"

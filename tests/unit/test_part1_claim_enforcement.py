@@ -14,7 +14,9 @@ def test_report_non_trivial_claim_missing_citations_fails_closed(repo_root: Path
     policy = load_system_policy(repo_root / "claim_policy.yaml")
     enforcer = ClaimEnforcer(policy)
 
-    data = json.loads((repo_root / "examples" / "rejected_report_missing_citations.json").read_text(encoding="utf-8"))
+    data = json.loads(
+        (repo_root / "tests" / "golden" / "rejected_report_missing_citations.json").read_text(encoding="utf-8")
+    )
     report = StructuredReport.model_validate(data)
 
     with pytest.raises(ClaimPolicyViolationError) as e:
@@ -57,4 +59,3 @@ def test_report_claim_references_missing_citation_key_fails_closed(repo_root: Pa
         enforcer.enforce_report(report)
 
     assert str(e.value) == "Claim references unknown citation_key: claim_id=claim_1 citation_key=MISSING"
-

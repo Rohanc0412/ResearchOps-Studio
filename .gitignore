@@ -9,6 +9,10 @@ venv/
 ENV/
 env/
 
+# Env files
+.env
+.env.*
+
 # Packaging / build artifacts
 build/
 dist/
@@ -37,4 +41,3 @@ desktop.ini
 # IDEs
 .vscode/
 .idea/
-

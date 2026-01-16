@@ -1,19 +1,42 @@
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
-from src.contracts.evidence import EvidenceSnapshot, EvidenceSnippet
-from src.enforcement.evidence_validator import EvidenceStore
-from src.utils.hash import sha256_hex
+
+def _add_path(p: Path) -> None:
+    sys.path.insert(0, str(p))
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Make monorepo src trees importable without editable installs.
+_add_path(REPO_ROOT / "apps" / "api" / "src")
+_add_path(REPO_ROOT / "apps" / "orchestrator" / "src")
+_add_path(REPO_ROOT / "apps" / "workers" / "src")
+_add_path(REPO_ROOT / "packages" / "core" / "src")
+_add_path(REPO_ROOT / "packages" / "observability" / "src")
+_add_path(REPO_ROOT / "packages" / "citations" / "src")  # placeholder for now
+_add_path(REPO_ROOT)  # db/ package + legacy src/ Part 1
 
 
 @pytest.fixture()
-def evidence_store() -> EvidenceStore:
-    store = EvidenceStore()
+def repo_root() -> Path:
+    return REPO_ROOT
 
+
+@pytest.fixture()
+def evidence_store():
+    from src.contracts.evidence import EvidenceSnapshot, EvidenceSnippet
+    from src.enforcement.evidence_validator import EvidenceStore
+    from src.utils.hash import sha256_hex
+
+    store = EvidenceStore()
     raw_text = "Example evidence text used for fixtures. It is immutable."
     snapshot = EvidenceSnapshot(
         snapshot_id="snap_001",
@@ -39,6 +62,6 @@ def evidence_store() -> EvidenceStore:
 
 
 @pytest.fixture()
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
+def sqlite_engine(tmp_path: Path) -> Engine:
+    db_path = tmp_path / "test.db"
+    return create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
