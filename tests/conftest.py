@@ -22,6 +22,9 @@ _add_path(REPO_ROOT / "apps" / "workers" / "src")
 _add_path(REPO_ROOT / "packages" / "core" / "src")
 _add_path(REPO_ROOT / "packages" / "observability" / "src")
 _add_path(REPO_ROOT / "packages" / "citations" / "src")  # placeholder for now
+_add_path(REPO_ROOT / "packages" / "connectors" / "src")
+_add_path(REPO_ROOT / "packages" / "ingestion" / "src")
+_add_path(REPO_ROOT / "packages" / "retrieval" / "src")
 _add_path(REPO_ROOT)  # db/ package + legacy src/ Part 1
 
 

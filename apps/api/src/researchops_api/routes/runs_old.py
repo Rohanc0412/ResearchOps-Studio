@@ -1,5 +1,3 @@
-"""Run management endpoints with production-grade lifecycle and SSE streaming."""
-
 from __future__ import annotations
 
 import asyncio
@@ -19,14 +17,6 @@ from researchops_api.schemas.truth import (
     RunEventCreate,
     RunEventOut,
     RunUpdateStatus,
-)
-from researchops_core.runs import (
-    RunNotFoundError,
-    RunTransitionError,
-    check_cancel_requested,
-    emit_run_event,
-    request_cancel,
-    retry_run,
 )
 from researchops_core.audit.logger import write_audit_log
 from researchops_core.auth.identity import Identity
@@ -66,19 +56,12 @@ class WebRunOut(BaseModel):
 
     id: UUID
     status: str
-    current_stage: str | None = None
     project_id: UUID | None = None
     tenant_id: UUID | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    cancel_requested_at: datetime | None = None
-    retry_count: int = 0
     error_message: str | None = None
-    error_code: str | None = None
     budgets: dict = Field(default_factory=dict)
-    usage: dict = Field(default_factory=dict)
 
 
 def _run_to_web(run) -> WebRunOut:
@@ -87,17 +70,10 @@ def _run_to_web(run) -> WebRunOut:
         tenant_id=run.tenant_id,
         project_id=run.project_id,
         status=run.status.value,
-        current_stage=run.current_stage,
         created_at=run.created_at,
         updated_at=run.updated_at,
-        started_at=run.started_at,
-        finished_at=run.finished_at,
-        cancel_requested_at=run.cancel_requested_at,
-        retry_count=run.retry_count,
         error_message=run.failure_reason,
-        error_code=run.error_code,
         budgets=run.budgets_json or {},
-        usage=run.usage_json or {},
     )
 
 
@@ -105,41 +81,23 @@ _ALLOWED_STAGES = {"retrieve", "ingest", "outline", "draft", "validate", "factch
 
 
 def _event_to_sse(event) -> str:
-    """Convert RunEventRow to SSE format.
-
-    SSE format:
-    id: <event_number>
-    event: run_event
-    data: {...}
-
-    """
     level = event.level.value
     if level == "debug":
         level = "info"
     if level not in {"info", "warn", "error"}:
         level = "info"
-
-    stage = (event.stage or "retrieve").strip().lower() if event.stage else None
-    if stage and stage not in _ALLOWED_STAGES:
+    stage = (event.stage or "retrieve").strip().lower()
+    if stage not in _ALLOWED_STAGES:
         stage = "retrieve"
-
     payload = event.payload_json or {}
     data = {
-        "id": event.event_number,
         "ts": event.ts.isoformat(),
         "level": level,
         "stage": stage,
-        "event_type": event.event_type,
         "message": event.message,
         "payload": payload,
     }
-
-    # SSE format requires:
-    # id: <event_number>
-    # event: <event_type>
-    # data: <json>
-    # <blank line>
-    return f"id: {event.event_number}\nevent: run_event\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+    return f"event: message\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
 
 
 @router.post("/hello")
@@ -226,7 +184,6 @@ def post_run_event(
                 level=RunEventLevelDb(body.level),
                 message=body.message,
                 stage=body.stage,
-                event_type=getattr(body, "event_type", "log"),
                 payload_json=body.payload_json,
             )
         except ValueError as e:
@@ -235,107 +192,41 @@ def post_run_event(
 
 
 @router.get("/{run_id}/events")
-def get_run_events(
-    request: Request,
-    run_id: UUID,
-    identity: Identity = IdentityDep,
-    after_id: int | None = None,
-):
-    """Get run events as JSON list or SSE stream.
-
-    Query parameters:
-        after_id: Only return events with event_number > this value (for SSE reconnect)
-
-    Headers:
-        Accept: text/event-stream - Enable SSE streaming mode
-        Last-Event-ID: <event_number> - Resume from this event (SSE reconnect)
-
-    SSE event format:
-        id: <event_number>
-        event: run_event
-        data: {"id": <event_number>, "ts": "...", "level": "...", "stage": "...", "message": "...", ...}
-
-    """
+def get_run_events(request: Request, run_id: UUID, identity: Identity = IdentityDep):
     accept = request.headers.get("accept", "")
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
-
-    # Handle Last-Event-ID header for SSE reconnect
-    last_event_id_header = request.headers.get("last-event-id")
-    if last_event_id_header:
-        try:
-            after_id = int(last_event_id_header)
-        except ValueError:
-            pass  # Ignore invalid Last-Event-ID
 
     if "text/event-stream" in accept:
-        # SSE streaming mode
-        async def _gen():
-            last_event_number = after_id or 0
-            poll_interval = 0.5  # 500ms polling
-            terminal_states = {RunStatusDb.succeeded, RunStatusDb.failed, RunStatusDb.canceled}
-            grace_polls_after_terminal = 2  # Poll 2 more times after terminal state
-            polls_since_terminal = 0
+        tenant_id = _tenant_uuid(identity)
 
+        async def _gen():
+            last_ts: datetime | None = None
+            last_id: UUID | None = None
             while True:
                 with session_scope(SessionLocal) as session:
-                    # Get new events
-                    events = list_run_events(
-                        session=session,
-                        tenant_id=tenant_id,
-                        run_id=run_id,
-                        after_event_number=last_event_number,
-                        limit=200,
+                    rows = list_run_events(
+                        session=session, tenant_id=tenant_id, run_id=run_id, limit=500
                     )
-
-                    # Stream new events
-                    for event in events:
-                        yield _event_to_sse(event)
-                        last_event_number = event.event_number
-
-                    # Check if run is terminal
-                    run = get_run(session=session, tenant_id=tenant_id, run_id=run_id)
-                    if run and run.status in terminal_states:
-                        if len(events) == 0:
-                            polls_since_terminal += 1
-                            if polls_since_terminal >= grace_polls_after_terminal:
-                                # Send final keepalive comment and close stream
-                                yield ": stream complete\n\n"
-                                break
-                        else:
-                            # Reset counter if we got new events
-                            polls_since_terminal = 0
-                    else:
-                        polls_since_terminal = 0
-
-                # Wait before next poll
-                await asyncio.sleep(poll_interval)
+                    for row in rows:
+                        if last_ts is not None:
+                            if row.ts < last_ts:
+                                continue
+                            if row.ts == last_ts and last_id is not None and row.id <= last_id:
+                                continue
+                        yield _event_to_sse(row)
+                        last_ts = row.ts
+                        last_id = row.id
+                await asyncio.sleep(1.0)
 
         return StreamingResponse(_gen(), media_type="text/event-stream")
 
-    # JSON mode: return all events (or events after after_id)
     with session_scope(SessionLocal) as session:
-        rows = list_run_events(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            after_event_number=after_id,
-            limit=1000,
-        )
+        rows = list_run_events(session=session, tenant_id=_tenant_uuid(identity), run_id=run_id)
         return [RunEventOut.model_validate(r) for r in rows]
 
 
 @router.post("/{run_id}/cancel", response_model=OkResponse)
 def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep) -> OkResponse:
-    """Request cancellation of a run.
-
-    If the run is queued, it will be canceled immediately.
-    If the run is running, the cancel flag will be set for cooperative cancellation
-    (the worker will check the flag between stages and stop execution).
-
-    If the run is already in a terminal state (succeeded, failed, canceled),
-    this endpoint returns success without making changes.
-    """
     try:
         require_roles("researcher", "admin", "owner")(identity)
     except PermissionError as e:
@@ -343,43 +234,23 @@ def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep)
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        try:
-            run = request_cancel(
-                session=session,
-                tenant_id=_tenant_uuid(identity),
-                run_id=run_id,
-                force_immediate=False,
-            )
-            write_audit_log(
-                db=session,
-                identity=identity,
-                action="run.cancel",
-                target_type="run",
-                target_id=str(run_id),
-                metadata={"status": run.status.value},
-                request=request,
-            )
-        except RunNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-
+        run = get_run(session=session, tenant_id=_tenant_uuid(identity), run_id=run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        if run.status in {RunStatusDb.failed, RunStatusDb.succeeded, RunStatusDb.canceled}:
+            return OkResponse()
+        update_run_status(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            run_id=run_id,
+            status=RunStatusDb.canceled,
+            finished_at=datetime.now(UTC),
+        )
         return OkResponse()
 
 
-@router.post("/{run_id}/retry", response_model=WebRunOut)
-def retry_run_endpoint(
-    request: Request, run_id: UUID, identity: Identity = IdentityDep
-) -> WebRunOut:
-    """Retry a failed or blocked run.
-
-    This endpoint:
-    1. Validates the run is in a failed or blocked state
-    2. Increments the retry counter
-    3. Resets the run to queued status
-    4. Clears failure info and cancel requests
-    5. Re-enqueues the job for execution
-
-    Only allowed for runs in 'failed' or 'blocked' status.
-    """
+@router.post("/{run_id}/retry", response_model=OkResponse)
+def retry_run(request: Request, run_id: UUID, identity: Identity = IdentityDep) -> OkResponse:
     try:
         require_roles("researcher", "admin", "owner")(identity)
     except PermissionError as e:
@@ -387,30 +258,20 @@ def retry_run_endpoint(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        try:
-            run = retry_run(
-                session=session,
-                tenant_id=_tenant_uuid(identity),
-                run_id=run_id,
-            )
-            write_audit_log(
-                db=session,
-                identity=identity,
-                action="run.retry",
-                target_type="run",
-                target_id=str(run_id),
-                metadata={"retry_count": run.retry_count},
-                request=request,
-            )
-
-            # TODO: Re-enqueue job in job queue
-            # For now, we just update the run status to queued
-            # The worker should pick it up on next poll
-
-        except (RunNotFoundError, RunTransitionError) as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-        return _run_to_web(run)
+        run = get_run(session=session, tenant_id=_tenant_uuid(identity), run_id=run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        update_run_status(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            run_id=run_id,
+            status=RunStatusDb.queued,
+            current_stage=None,
+            failure_reason=None,
+            error_code=None,
+            finished_at=None,
+        )
+        return OkResponse()
 
 
 @router.get("/{run_id}/artifacts", response_model=list[ArtifactOut])

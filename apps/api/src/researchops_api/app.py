@@ -79,6 +79,8 @@ def create_app() -> FastAPI:
     # Frontend uses `VITE_API_BASE_URL=/api` (Vite proxy doesn't rewrite paths), so
     # we expose the same routes under `/api/*` for compatibility.
     api = APIRouter(prefix="/api")
+    api.include_router(health_router)
+    api.include_router(version_router)
     api.include_router(auth_router)
     api.include_router(tenants_router)
     api.include_router(runs_router)

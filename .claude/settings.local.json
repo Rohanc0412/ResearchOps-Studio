@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest:*)",
+      "Bash(PYTHONPATH=\"packages/ingestion/src:packages/retrieval/src:packages/core/src:packages/observability/src:db:.\" python -m pytest:*)",
+      "Bash(pip install:*)",
+      "Bash(python:*)"
+    ]
+  }
+}

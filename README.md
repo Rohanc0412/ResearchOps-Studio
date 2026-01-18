@@ -6,6 +6,15 @@ Backend production skeleton for ResearchOps: API + orchestrator + worker + Postg
 
 A standalone React + Vite dashboard lives in `apps/web`.
 
+From repo root:
+
+```powershell
+npm --prefix apps/web install
+npm run dev
+```
+
+Or from within `apps/web`:
+
 ```powershell
 cd apps/web
 npm install
@@ -74,10 +83,18 @@ Expected `GET /runs/{run_id}` fields:
 
 ## API Endpoints
 
+### Health & Version
 - `GET /healthz` → `{ "status": "ok" }`
 - `GET /version` → `{ "name": "...", "git_sha": "...", "build_time": "..." }`
-- `POST /runs/hello` → `{ "run_id": "<uuid>" }`
-- `GET /runs/{run_id}` → run status + artifact metadata
+
+### Run Management
+- `POST /runs/hello` → `{ "run_id": "<uuid>" }` - Enqueue a hello test run
+- `GET /runs/{run_id}` → Run status + metadata (status, current_stage, timestamps, error info)
+- `GET /runs/{run_id}/events` → List events as JSON or stream via SSE (see below)
+- `POST /runs/{run_id}/cancel` → Request cancellation (cooperative)
+- `POST /runs/{run_id}/retry` → Retry a failed or blocked run
+- `GET /runs/{run_id}/artifacts` → List artifacts for run
+- `GET /runs/{run_id}/claims` → List claim map entries for run
 
 ## Architecture (Text Diagram)
 
@@ -266,6 +283,191 @@ python -m venv .venv
 - Postgres init races: schema creation uses a Postgres advisory lock (`db/init_db.py`) so `api` and `worker` can start together safely.
 - PowerShell script execution blocked: run scripts with `powershell -NoProfile -ExecutionPolicy Bypass -File ...`.
 - Line endings: `.gitattributes` is configured so `core.autocrlf=true` works on Windows without noisy diffs.
+
+## Runs and Live Timeline (SSE Streaming)
+
+ResearchOps Studio implements a production-grade run lifecycle state machine with Server-Sent Events (SSE) streaming for real-time UI updates.
+
+### Run States
+
+A run progresses through the following states:
+
+- `created` → Initial state when run is created
+- `queued` → Waiting for worker to pick up
+- `running` → Actively executing pipeline stages
+- `blocked` → Paused waiting for external input (future use)
+- `failed` → Execution failed with error
+- `succeeded` → Completed successfully
+- `canceled` → User canceled or system stopped
+
+State transitions are validated and enforced. Only allowed transitions can occur (e.g., you cannot go from `succeeded` back to `running`).
+
+### Run Stages
+
+During execution, runs progress through stages. The current stage is stored in `runs.current_stage`:
+
+- `retrieve` → Fetching sources/evidence
+- `ingest` → Processing and chunking content
+- `outline` → Generating document structure
+- `draft` → Writing content
+- `validate` → Checking quality/constraints
+- `factcheck` → Verifying claims against evidence
+- `export` → Generating final artifacts
+
+### Run Events Timeline
+
+Every stage emits events that are persisted in the `run_events` table:
+
+- `stage_start` - Beginning of a stage
+- `stage_finish` - Completion of a stage
+- `log` - Informational messages during execution
+- `error` - Errors with error_code and reason
+- `state` - State transitions (created→queued, running→succeeded, etc.)
+
+Each event has:
+- `event_number` - Sequential ID for SSE Last-Event-ID support
+- `ts` - Timestamp
+- `level` - info/warn/error
+- `stage` - Which stage emitted this event
+- `message` - Human-readable description
+- `payload_json` - Structured metadata
+
+### SSE Streaming API
+
+The Run Viewer UI streams events in real-time using Server-Sent Events.
+
+#### Basic Streaming
+
+Stream all events for a run:
+
+```bash
+curl -N -H "Accept: text/event-stream" http://localhost:8000/runs/<RUN_ID>/events
+```
+
+Output format:
+```
+id: 1
+event: run_event
+data: {"id":1,"ts":"2026-01-17T12:00:00Z","level":"info","stage":"retrieve","event_type":"stage_start","message":"Starting stage: retrieve","payload":{}}
+
+id: 2
+event: run_event
+data: {"id":2,"ts":"2026-01-17T12:00:05Z","level":"info","stage":"retrieve","event_type":"stage_finish","message":"Finished stage: retrieve","payload":{"duration":5.2}}
+```
+
+#### Reconnect-Safe Streaming (Last-Event-ID)
+
+If the connection drops, reconnect and resume from where you left off:
+
+```bash
+# Browser automatically sends Last-Event-ID header on reconnect
+# Manual example:
+curl -N \
+  -H "Accept: text/event-stream" \
+  -H "Last-Event-ID: 10" \
+  http://localhost:8000/runs/<RUN_ID>/events
+```
+
+The server will only send events with `event_number > 10`.
+
+#### Query Parameter Alternative
+
+You can also use `?after_id=<event_number>`:
+
+```bash
+curl -N -H "Accept: text/event-stream" \
+  "http://localhost:8000/runs/<RUN_ID>/events?after_id=10"
+```
+
+This is useful when Last-Event-ID header is not available.
+
+#### JSON Mode (No Streaming)
+
+Get all events as JSON array:
+
+```bash
+curl http://localhost:8000/runs/<RUN_ID>/events
+```
+
+Or get events after a specific event number:
+
+```bash
+curl "http://localhost:8000/runs/<RUN_ID>/events?after_id=10"
+```
+
+### Canceling Runs
+
+Request cancellation of a running job:
+
+```bash
+curl -X POST http://localhost:8000/runs/<RUN_ID>/cancel
+```
+
+**Cancellation behavior:**
+- **Queued runs**: Immediately transition to `canceled`
+- **Running runs**: Set `cancel_requested_at` timestamp for cooperative cancellation
+  - Worker checks the flag between stages
+  - When detected, emits a canceled event and stops execution
+- **Terminal runs** (succeeded/failed/canceled): No-op, returns success
+
+### Retrying Failed Runs
+
+Retry a run that failed or got blocked:
+
+```bash
+curl -X POST http://localhost:8000/runs/<RUN_ID>/retry
+```
+
+**Retry behavior:**
+- Only works for runs in `failed` or `blocked` status
+- Increments `retry_count`
+- Clears `failure_reason`, `error_code`, `finished_at`
+- Resets status to `queued`
+- Clears `cancel_requested_at` if set
+- Re-enqueues the job for execution
+
+### Complete Example: Create, Monitor, Cancel
+
+```powershell
+# 1. Create a run
+$r = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/hello"
+$runId = $r.run_id
+
+# 2. Get run status
+Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
+
+# 3. Stream events in real-time (use a separate terminal)
+curl.exe -N -H "Accept: text/event-stream" "http://localhost:8000/runs/$runId/events"
+
+# 4. Cancel the run (from main terminal)
+Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/$runId/cancel"
+
+# 5. Check final status
+Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
+```
+
+### Implementation Details
+
+**State Machine:**
+- Transitions are validated using `ALLOWED_TRANSITIONS` map
+- Uses database row-level locking (`SELECT FOR UPDATE`) to prevent race conditions
+- All state changes emit events atomically in the same transaction
+
+**Event Emission:**
+- Every stage emits at least `stage_start` and `stage_finish`
+- Failures emit `error` event with structured error_code and reason
+- Idempotent: emitting `stage_start` twice for the same stage is safe
+
+**SSE Streaming:**
+- Polls database every 500ms for new events
+- Uses `event_number` (sequential) for reliable cursor-based pagination
+- Supports both `Last-Event-ID` header and `?after_id` query param
+- Automatically closes stream after terminal state + grace period
+
+**Concurrency:**
+- Multiple clients can stream the same run simultaneously
+- State transitions are serialized via row locks
+- Event numbers are assigned from a PostgreSQL sequence (globally unique)
 
 ## Part 1 Contract
 

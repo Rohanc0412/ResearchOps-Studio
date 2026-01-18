@@ -1,10 +1,19 @@
 """
-Placeholder retrieval interfaces (hybrid search + reranking).
+pgvector-based semantic search for evidence snippets.
+
+Provides:
+- Cosine similarity search
+- Multi-tenant safe queries
+- Snippet context retrieval
 """
 
 from __future__ import annotations
 
+from researchops_retrieval.search import SearchResult, get_snippet_with_context, search_snippets
 
-def retrieve(query: str) -> list[dict]:
-    raise NotImplementedError("retrieval is a placeholder in Part 2")
+__all__ = [
+    "search_snippets",
+    "get_snippet_with_context",
+    "SearchResult",
+]
 

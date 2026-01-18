@@ -164,6 +164,7 @@ def append_run_event(
     level: RunEventLevelDb,
     message: str,
     stage: str | None = None,
+    event_type: str = "log",
     payload_json: dict | None = None,
     allow_finished: bool = False,
 ) -> RunEventRow:
@@ -178,11 +179,22 @@ def append_run_event(
         raise ValueError("cannot append events to a finished run")
 
     now = _now_utc()
+    next_event_number = (
+        session.execute(
+            select(func.coalesce(func.max(RunEventRow.event_number), 0) + 1).where(
+                RunEventRow.tenant_id == tenant_id,
+                RunEventRow.run_id == run_id,
+            )
+        ).scalar_one()
+        or 1
+    )
     row = RunEventRow(
         tenant_id=tenant_id,
         run_id=run_id,
+        event_number=int(next_event_number),
         ts=now,
         stage=stage,
+        event_type=event_type,
         level=level,
         message=message,
         payload_json=payload_json or {},
@@ -197,14 +209,32 @@ def append_run_event(
 
 
 def list_run_events(
-    *, session: Session, tenant_id: UUID, run_id: UUID, limit: int = 1000
+    *,
+    session: Session,
+    tenant_id: UUID,
+    run_id: UUID,
+    limit: int = 1000,
+    after_event_number: int | None = None,
 ) -> list[RunEventRow]:
-    stmt = (
-        select(RunEventRow)
-        .where(RunEventRow.tenant_id == tenant_id, RunEventRow.run_id == run_id)
-        .order_by(RunEventRow.ts.asc(), RunEventRow.id.asc())
-        .limit(limit)
-    )
+    """List run events, optionally filtering by event_number for SSE streaming.
+
+    Args:
+        session: Database session
+        tenant_id: Tenant ID
+        run_id: Run ID
+        limit: Maximum number of events to return
+        after_event_number: If provided, only return events with event_number > this value
+
+    Returns:
+        List of RunEventRow ordered by event_number ascending
+    """
+    stmt = select(RunEventRow).where(RunEventRow.tenant_id == tenant_id, RunEventRow.run_id == run_id)
+
+    if after_event_number is not None:
+        stmt = stmt.where(RunEventRow.event_number > after_event_number)
+
+    stmt = stmt.order_by(RunEventRow.event_number.asc()).limit(limit)
+
     return list(session.execute(stmt).scalars().all())
 
 

@@ -33,6 +33,7 @@ class RunStatusDb(str, enum.Enum):
     created = "created"
     queued = "queued"
     running = "running"
+    blocked = "blocked"
     failed = "failed"
     succeeded = "succeeded"
     canceled = "canceled"
@@ -63,6 +64,8 @@ class RunRow(Base):
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
