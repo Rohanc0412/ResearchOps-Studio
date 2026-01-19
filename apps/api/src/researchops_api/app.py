@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
 from researchops_core import SERVICE_API, get_settings
 from researchops_observability import configure_logging, request_id_middleware
@@ -59,6 +60,18 @@ def create_app() -> FastAPI:
         yield
 
     app = FastAPI(title="ResearchOps Studio API", lifespan=lifespan)
+    cors_origins = [
+        o.strip()
+        for o in os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173").split(",")
+        if o.strip()
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.settings = settings
     app.state.engine = engine
     app.state.SessionLocal = SessionLocal

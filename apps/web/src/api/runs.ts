@@ -20,7 +20,7 @@ export function useCreateRunMutation(projectId: string) {
   return useMutation({
     mutationFn: async (input: {
       prompt: string;
-      output_type: "report" | "litmap" | "experiment_plan";
+      output_type?: "report" | "litmap" | "experiment_plan";
       budget_override?: {
         token_limit?: number;
         time_limit?: number;
@@ -29,7 +29,7 @@ export function useCreateRunMutation(projectId: string) {
     }) =>
       apiFetchJson(`/projects/${encodeURIComponent(projectId)}/runs`, {
         method: "POST",
-        body: input,
+        body: { ...input, output_type: input.output_type ?? "report" },
         schema: RunSchema
       }),
     onSuccess: async (run) => {

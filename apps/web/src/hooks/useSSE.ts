@@ -12,11 +12,19 @@ export function useSSE(path: string | null, enabled: boolean) {
   const [lastError, setLastError] = useState<string | null>(null);
   const attemptRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const lastEventIdRef = useRef<number>(0);
 
-  const reset = () => setEvents([]);
+  const reset = () => {
+    lastEventIdRef.current = 0;
+    setEvents([]);
+  };
 
   useEffect(() => {
-    if (!enabled || !path) return;
+    if (!enabled || !path) {
+      abortRef.current?.abort();
+      setState("idle");
+      return;
+    }
 
     let cancelled = false;
     const baseDelayMs = 500;
@@ -35,7 +43,8 @@ export function useSSE(path: string | null, enabled: boolean) {
         const response = await apiFetch(ssePath, {
           method: "GET",
           headers: {
-            accept: "text/event-stream"
+            accept: "text/event-stream",
+            ...(lastEventIdRef.current > 0 ? { "last-event-id": String(lastEventIdRef.current) } : {})
           },
           signal: abort.signal
         });
@@ -69,6 +78,11 @@ export function useSSE(path: string | null, enabled: boolean) {
               const json = JSON.parse(evt.data) as unknown;
               const parsed = RunEventSchema.safeParse(json);
               if (parsed.success) {
+                const eventId = evt?.id ?? parsed.data.id;
+                if (typeof eventId === "number" && eventId <= lastEventIdRef.current) {
+                  continue;
+                }
+                if (typeof eventId === "number") lastEventIdRef.current = eventId;
                 setEvents((prev) => (prev.length > 2000 ? [...prev.slice(-1500), parsed.data] : [...prev, parsed.data]));
               }
             } catch {
@@ -105,17 +119,22 @@ export function useSSE(path: string | null, enabled: boolean) {
   return { events, state, lastError, latestStage, reset };
 }
 
-function parseSseEvent(chunk: string): { event?: string; data?: string } | null {
+function parseSseEvent(chunk: string): { id?: number; event?: string; data?: string } | null {
   const lines = chunk.split("\n").map((l) => l.replace(/\r$/, ""));
+  let id: number | undefined;
   let event: string | undefined;
   const dataLines: string[] = [];
   for (const line of lines) {
     if (!line || line.startsWith(":")) continue;
+    if (line.startsWith("id:")) {
+      const v = Number(line.slice("id:".length).trim());
+      if (!Number.isNaN(v)) id = v;
+    }
     if (line.startsWith("event:")) event = line.slice("event:".length).trim();
     if (line.startsWith("data:")) dataLines.push(line.slice("data:".length).trimStart());
   }
   if (!event && dataLines.length === 0) return null;
-  return { event, data: dataLines.join("\n") };
+  return { id, event, data: dataLines.join("\n") };
 }
 
 function sleep(ms: number): Promise<void> {

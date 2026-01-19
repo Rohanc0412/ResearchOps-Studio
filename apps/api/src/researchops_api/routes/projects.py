@@ -15,6 +15,7 @@ from researchops_api.schemas.truth import (
 from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
 from researchops_core.tenancy import tenant_uuid
+from researchops_orchestrator import HELLO_JOB_TYPE, enqueue_run_job
 
 from db.models.runs import RunStatusDb
 from db.services.truth import (
@@ -148,8 +149,14 @@ def post_run_for_project(
                 session=session,
                 tenant_id=_tenant_uuid(identity),
                 project_id=project_id,
-                status=RunStatusDb.created,
+                status=RunStatusDb.queued,
                 budgets_json=budgets,
+            )
+            enqueue_run_job(
+                session=session,
+                tenant_id=_tenant_uuid(identity),
+                run_id=run.id,
+                job_type=HELLO_JOB_TYPE,
             )
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e

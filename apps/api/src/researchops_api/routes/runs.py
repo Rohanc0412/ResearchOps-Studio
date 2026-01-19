@@ -33,7 +33,7 @@ from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
 from researchops_core.tenancy import tenant_uuid
 from researchops_observability.logging import bind_log_context
-from researchops_orchestrator import enqueue_hello_run
+from researchops_orchestrator import HELLO_JOB_TYPE, enqueue_hello_run, enqueue_run_job
 
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
@@ -276,6 +276,8 @@ def get_run_events(
             terminal_states = {RunStatusDb.succeeded, RunStatusDb.failed, RunStatusDb.canceled}
             grace_polls_after_terminal = 2  # Poll 2 more times after terminal state
             polls_since_terminal = 0
+            keepalive_every = 10  # send keepalive every ~5s during idle
+            keepalive_counter = 0
 
             while True:
                 with session_scope(SessionLocal) as session:
@@ -305,8 +307,16 @@ def get_run_events(
                         else:
                             # Reset counter if we got new events
                             polls_since_terminal = 0
+                        keepalive_counter = 0
                     else:
                         polls_since_terminal = 0
+                        if len(events) == 0:
+                            keepalive_counter += 1
+                            if keepalive_counter >= keepalive_every:
+                                yield ": keepalive\n\n"
+                                keepalive_counter = 0
+                        else:
+                            keepalive_counter = 0
 
                 # Wait before next poll
                 await asyncio.sleep(poll_interval)
@@ -393,6 +403,12 @@ def retry_run_endpoint(
                 tenant_id=_tenant_uuid(identity),
                 run_id=run_id,
             )
+            enqueue_run_job(
+                session=session,
+                tenant_id=_tenant_uuid(identity),
+                run_id=run.id,
+                job_type=HELLO_JOB_TYPE,
+            )
             write_audit_log(
                 db=session,
                 identity=identity,
@@ -402,10 +418,6 @@ def retry_run_endpoint(
                 metadata={"retry_count": run.retry_count},
                 request=request,
             )
-
-            # TODO: Re-enqueue job in job queue
-            # For now, we just update the run status to queued
-            # The worker should pick it up on next poll
 
         except (RunNotFoundError, RunTransitionError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e

@@ -27,6 +27,8 @@ from db.services.truth import create_artifact, create_project
 
 logger = logging.getLogger(__name__)
 
+HELLO_JOB_TYPE = "hello.run"
+
 
 def _now_utc() -> datetime:
     return datetime.now(UTC)
@@ -236,18 +238,7 @@ def enqueue_hello_run(*, session: Session, tenant_id: UUID) -> UUID:
     session.add(run)
     session.flush()
 
-    session.add(
-        JobRow(
-            run_id=run.id,
-            tenant_id=tenant_id,
-            job_type="hello.run",
-            status=JobStatusDb.queued,
-            attempts=0,
-            last_error=None,
-            created_at=now,
-            updated_at=now,
-        )
-    )
+    enqueue_run_job(session=session, tenant_id=tenant_id, run_id=run.id, job_type=HELLO_JOB_TYPE)
     logger.info("run_enqueued", extra={"run_id": str(run.id), "tenant_id": tenant_id})
     return run.id
 
@@ -275,3 +266,54 @@ def process_hello_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> Non
                 reason=str(e),
             )
         raise
+
+
+def enqueue_run_job(
+    *, session: Session, tenant_id: UUID, run_id: UUID, job_type: str = HELLO_JOB_TYPE
+) -> UUID:
+    """Ensure a queued job exists for the run."""
+    existing = (
+        session.execute(
+            select(JobRow.id)
+            .where(
+                JobRow.tenant_id == tenant_id,
+                JobRow.run_id == run_id,
+                JobRow.status.in_([JobStatusDb.queued, JobStatusDb.running]),
+            )
+            .order_by(JobRow.created_at.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if existing:
+        return existing
+
+    run = (
+        session.execute(
+            select(RunRow).where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        )
+        .scalars()
+        .first()
+    )
+    if run is None:
+        raise ValueError("run not found")
+
+    now = _now_utc()
+    if run.status == RunStatusDb.created:
+        run.status = RunStatusDb.queued
+        run.updated_at = now
+
+    job = JobRow(
+        run_id=run.id,
+        tenant_id=tenant_id,
+        job_type=job_type,
+        status=JobStatusDb.queued,
+        attempts=0,
+        last_error=None,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(job)
+    session.flush()
+    logger.info("job_enqueued", extra={"run_id": str(run.id), "tenant_id": tenant_id, "job_type": job_type})
+    return job.id

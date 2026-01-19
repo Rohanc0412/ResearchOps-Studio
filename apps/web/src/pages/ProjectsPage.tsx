@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Plus, Search } from "lucide-react";
 
 import { useCreateProjectMutation, useProjectsQuery } from "../api/projects";
@@ -13,6 +13,7 @@ import { Spinner } from "../components/ui/Spinner";
 import { formatTs } from "../utils/format";
 
 export function ProjectsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const projects = useProjectsQuery();
   const create = useCreateProjectMutation();
 
@@ -20,6 +21,13 @@ export function ProjectsPage() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      setOpen(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const rows = useMemo(() => {
     const list = projects.data ?? [];

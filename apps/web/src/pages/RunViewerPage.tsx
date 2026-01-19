@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import { RefreshCw, Square, RotateCcw, ExternalLink } from "lucide-react";
-import { useMemo, useState, type ComponentProps } from "react";
+import { useEffect, useMemo, useState, type ComponentProps } from "react";
 
 import { useRunArtifactsQuery } from "../api/artifacts";
 import { useCancelRunMutation, useRetryRunMutation, useRunQuery } from "../api/runs";
@@ -26,8 +26,9 @@ export function RunViewerPage() {
   const cancel = useCancelRunMutation(id);
   const retry = useRetryRunMutation(id);
 
-  const sse = useSSE(id ? `/runs/${encodeURIComponent(id)}/events` : null, auth.isAuthenticated);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [streamEnabled, setStreamEnabled] = useState<boolean>(auth.isAuthenticated);
+  const sse = useSSE(id ? `/runs/${encodeURIComponent(id)}/events` : null, streamEnabled);
 
   type BadgeTone = NonNullable<ComponentProps<typeof Badge>["tone"]>;
   const statusTone: BadgeTone = useMemo(() => {
@@ -39,6 +40,34 @@ export function RunViewerPage() {
   }, [run.data?.status]);
 
   const stage = sse.latestStage as Stage | null;
+  const terminalFromEvents = useMemo(() => {
+    const terminal = new Set(["succeeded", "failed", "canceled"]);
+    return sse.events.some((evt) => {
+      const payload = (evt as { payload?: Record<string, unknown> }).payload;
+      const status = payload?.status;
+      if (typeof status === "string" && terminal.has(status)) return true;
+      const toStatus = payload?.to_status;
+      if (typeof toStatus === "string" && terminal.has(toStatus)) return true;
+      return false;
+    });
+  }, [sse.events]);
+  const shouldStream = auth.isAuthenticated && run.data?.status !== "succeeded" && !terminalFromEvents;
+
+  useEffect(() => {
+    setStreamEnabled(shouldStream);
+  }, [shouldStream]);
+
+  useEffect(() => {
+    if (terminalFromEvents && run.data?.status !== "succeeded") {
+      void run.refetch();
+    }
+  }, [terminalFromEvents, run]);
+
+  useEffect(() => {
+    if (terminalFromEvents || run.data?.status === "succeeded") {
+      void artifacts.refetch();
+    }
+  }, [terminalFromEvents, run.data?.status, artifacts]);
 
   if (run.isLoading) {
     return (
@@ -57,7 +86,7 @@ export function RunViewerPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {sse.state !== "open" ? (
+      {r.status !== "succeeded" && !terminalFromEvents && sse.state !== "open" ? (
         <ErrorBanner
           title="Live stream disconnected"
           message={
