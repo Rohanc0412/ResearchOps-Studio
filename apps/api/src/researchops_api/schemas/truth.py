@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ApiModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", from_attributes=True)
+    model_config = ConfigDict(extra="forbid", from_attributes=True, populate_by_name=True)
 
 
 RunStatus = Literal["created", "queued", "running", "failed", "succeeded", "canceled"]

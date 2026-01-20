@@ -6,6 +6,8 @@ Makes routing decisions based on validation errors and iteration count.
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import instrument_node
@@ -15,6 +17,7 @@ from researchops_core.orchestrator.state import (
     ValidationErrorType,
 )
 
+logger = logging.getLogger(__name__)
 
 @instrument_node("evaluation")
 def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorState:
@@ -43,18 +46,42 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     if iteration_count >= state.max_iterations:
         state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
         state.evaluation_reason = "Maximum iterations reached, proceeding with best effort"
+        logger.info(
+            "evaluation_decision",
+            extra={
+                "run_id": str(state.run_id),
+                "decision": state.evaluator_decision.value,
+                "reason": state.evaluation_reason,
+            },
+        )
         return state
 
     # Check repair attempt limit
     if repair_attempts >= state.max_repair_attempts:
         state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
         state.evaluation_reason = "Maximum repair attempts reached, proceeding with current draft"
+        logger.info(
+            "evaluation_decision",
+            extra={
+                "run_id": str(state.run_id),
+                "decision": state.evaluator_decision.value,
+                "reason": state.evaluation_reason,
+            },
+        )
         return state
 
     # No errors -> success
     if not errors:
         state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
         state.evaluation_reason = "All validation checks passed"
+        logger.info(
+            "evaluation_decision",
+            extra={
+                "run_id": str(state.run_id),
+                "decision": state.evaluator_decision.value,
+                "reason": state.evaluation_reason,
+            },
+        )
         return state
 
     # Count error types
@@ -77,6 +104,14 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         else:
             state.evaluator_decision = EvaluatorDecision.CONTINUE_REPAIR
             state.evaluation_reason = f"Found {critical_errors} critical errors, attempting repair"
+        logger.info(
+            "evaluation_decision",
+            extra={
+                "run_id": str(state.run_id),
+                "decision": state.evaluator_decision.value,
+                "reason": state.evaluation_reason,
+            },
+        )
         return state
 
     # Only warnings (unsupported claims)
@@ -93,11 +128,27 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             state.evaluation_reason = (
                 f"Minor warnings ({warning_count}) present but within tolerance"
             )
+        logger.info(
+            "evaluation_decision",
+            extra={
+                "run_id": str(state.run_id),
+                "decision": state.evaluator_decision.value,
+                "reason": state.evaluation_reason,
+            },
+        )
         return state
 
     # Default: success
     state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
     state.evaluation_reason = "Evaluation complete, no major issues"
+    logger.info(
+        "evaluation_decision",
+        extra={
+            "run_id": str(state.run_id),
+            "decision": state.evaluator_decision.value,
+            "reason": state.evaluation_reason,
+        },
+    )
 
     return state
 

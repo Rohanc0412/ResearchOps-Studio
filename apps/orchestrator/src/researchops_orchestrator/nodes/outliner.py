@@ -7,6 +7,8 @@ Each section includes guidance on required evidence.
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import instrument_node
@@ -16,6 +18,7 @@ from researchops_core.orchestrator.state import (
     OutlineSection,
 )
 
+logger = logging.getLogger(__name__)
 
 @instrument_node("outline")
 def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorState:
@@ -210,5 +213,9 @@ def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorSta
 
     # Update state
     state.outline = outline
+    logger.info(
+        "outline_complete",
+        extra={"run_id": str(state.run_id), "sections": len(outline.sections)},
+    )
 
     return state

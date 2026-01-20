@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from db.models.snippets import SnippetRow
 
 
-_EMBEDDING_DIMS = 1536
+_EMBEDDING_DIMS = 1024
 
 
 class SnippetEmbeddingRow(Base):

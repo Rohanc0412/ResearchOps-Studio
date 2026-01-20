@@ -6,6 +6,7 @@ FAIL CLOSED: If citations are missing or invalid, block the pipeline.
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from researchops_core.orchestrator.state import (
     ValidationErrorType,
 )
 
+logger = logging.getLogger(__name__)
 
 @instrument_node("citation_validation")
 def citation_validator_node(
@@ -81,5 +83,9 @@ def citation_validator_node(
 
     # Update state
     state.citation_errors = errors
+    logger.info(
+        "citation_validation_complete",
+        extra={"run_id": str(state.run_id), "errors": len(errors)},
+    )
 
     return state

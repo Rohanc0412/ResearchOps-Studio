@@ -10,11 +10,14 @@ Generates 3 artifacts:
 from __future__ import annotations
 
 import json
+import logging
 
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import instrument_node
 from researchops_core.orchestrator.state import OrchestratorState
+
+logger = logging.getLogger(__name__)
 
 
 @instrument_node("export")
@@ -49,6 +52,10 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
         "report.md": final_report,
         "experiment_plan.md": experiment_plan,
     }
+    logger.info(
+        "export_complete",
+        extra={"run_id": str(state.run_id), "artifacts": len(state.artifacts)},
+    )
 
     return state
 

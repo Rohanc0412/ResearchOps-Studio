@@ -10,9 +10,14 @@ This module provides:
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 import random
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from typing import Protocol
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingProvider(Protocol):
@@ -90,6 +95,10 @@ class StubEmbeddingProvider:
             List of "embedding" vectors (random but deterministic)
         """
         embeddings = []
+        logger.info(
+            "embedding_batch",
+            extra={"provider": "stub", "model": self._model_name, "count": len(texts)},
+        )
         for text in texts:
             # Use hash of text as seed for deterministic randomness
             seed = int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:16], 16)
@@ -106,6 +115,110 @@ class StubEmbeddingProvider:
             embeddings.append(vector)
 
         return embeddings
+
+
+# Local model provider for production-quality embeddings
+class SentenceTransformerEmbeddingProvider:
+    """
+    Embedding provider using sentence-transformers.
+
+    Defaults to BAAI/bge-large-en-v1.5 for strong English retrieval performance.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-large-en-v1.5",
+        device: str | None = None,
+        normalize_embeddings: bool = True,
+    ):
+        self._model_name = model_name
+        self._normalize = normalize_embeddings
+
+        try:
+            from sentence_transformers import SentenceTransformer
+        except Exception as exc:
+            raise RuntimeError(
+                "sentence-transformers is required for local embeddings. Install it via pip."
+            ) from exc
+
+        resolved_device = device or _default_device()
+        logger.info(
+            "embedding_model_load",
+            extra={
+                "provider": "sentence-transformers",
+                "model": model_name,
+                "device": resolved_device,
+            },
+        )
+        self._model = SentenceTransformer(model_name, device=resolved_device)
+        self._dimensions = self._model.get_sentence_embedding_dimension()
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        logger.info(
+            "embedding_batch",
+            extra={
+                "provider": "sentence-transformers",
+                "model": self._model_name,
+                "count": len(texts),
+            },
+        )
+        embeddings = self._model.encode(
+            texts,
+            normalize_embeddings=self._normalize,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )
+        return embeddings.tolist()
+
+
+def _default_device() -> str:
+    forced = os.getenv("EMBEDDING_DEVICE")
+    if forced:
+        return forced
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+@lru_cache(maxsize=1)
+def get_embedding_provider() -> EmbeddingProvider:
+    provider = os.getenv("EMBEDDING_PROVIDER", "sentence-transformers").lower()
+    if provider in {"stub", "fake"}:
+        logger.info("embedding_provider_selected", extra={"provider": provider})
+        return StubEmbeddingProvider()
+    if provider in {"sentence-transformers", "bge", "local"}:
+        model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+        normalize_env = os.getenv("EMBEDDING_NORMALIZE", "true").lower()
+        normalize = normalize_env not in {"0", "false", "no"}
+        device = os.getenv("EMBEDDING_DEVICE")
+        logger.info(
+            "embedding_provider_selected",
+            extra={
+                "provider": provider,
+                "model": model_name,
+                "normalize": normalize,
+                "device": device or "auto",
+            },
+        )
+        return SentenceTransformerEmbeddingProvider(
+            model_name=model_name,
+            device=device,
+            normalize_embeddings=normalize,
+        )
+    raise ValueError(f"Unknown EMBEDDING_PROVIDER: {provider}")
 
 
 # Future providers can be added here:

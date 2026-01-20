@@ -45,6 +45,16 @@ Issuer:
 - Exposes a small FastAPI service with run management endpoints.
 - Enqueues a background job (`hello.run`) into Postgres.
 - Runs a minimal LangGraph pipeline that writes a dummy artifact and marks the run succeeded.
+- Project runs (`POST /projects/{project_id}/runs`) execute the full research pipeline.
+
+## Retrieval Connectors (Part 7)
+
+- OpenAlex
+- arXiv
+- Crossref
+- PubMed
+- GitHub
+- Hugging Face
 
 ## Prerequisites
 
@@ -89,6 +99,7 @@ Expected `GET /runs/{run_id}` fields:
 
 ### Run Management
 - `POST /runs/hello` → `{ "run_id": "<uuid>" }` - Enqueue a hello test run
+- `POST /projects/{project_id}/runs` - Enqueue a research run (prompt + output_type)
 - `GET /runs/{run_id}` → Run status + metadata (status, current_stage, timestamps, error info)
 - `GET /runs/{run_id}/events` → List events as JSON or stream via SSE (see below)
 - `POST /runs/{run_id}/cancel` → Request cancellation (cooperative)
@@ -128,6 +139,12 @@ Important env vars:
 - `LOG_LEVEL` (default `INFO`)
 - `API_HOST`, `API_PORT`
 - `WORKER_POLL_SECONDS`
+
+LLM configuration (optional):
+- `LLM_PROVIDER` = `local` or `hosted` (default `local`)
+- `LLM_LOCAL_MODEL` (default `llama3.1:8b`)
+- `OLLAMA_BASE_URL` (default `http://localhost:11434`)
+- `HOSTED_LLM_BASE_URL`, `HOSTED_LLM_API_KEY`, `HOSTED_LLM_MODEL` (for hosted)
 
 ## Auth Overview (OIDC + JWT)
 
@@ -236,7 +253,7 @@ Quickstart (local):
 1) Start Postgres (Compose): `docker compose -f infra/compose.yaml up --build`
 2) Set env vars: `DATABASE_URL` (Postgres) + auth vars as needed
 3) Run migrations: `python -m alembic -c alembic.ini upgrade head`
-4) Start API (PowerShell): `$env:PYTHONPATH="apps/api/src;packages/core/src;packages/observability/src;packages/citations/src;."; python -m researchops_api.main`
+4) Start API (PowerShell): `$env:PYTHONPATH="apps/api/src;packages/core/src;packages/observability/src;packages/citations/src;packages/llm/src;."; python -m researchops_api.main`
 
 Useful commands:
 - Upgrade: `python -m alembic -c alembic.ini upgrade head`

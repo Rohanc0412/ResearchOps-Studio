@@ -6,6 +6,7 @@ TARGETED REPAIR: Only modifies failing sections, not full rewrites.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from researchops_core.orchestrator.state import (
     ValidationErrorType,
 )
 
+logger = logging.getLogger(__name__)
 
 @instrument_node("repair")
 def repair_agent_node(state: OrchestratorState, session: Session) -> OrchestratorState:
@@ -110,6 +112,14 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
     # Update state
     state.draft_text = repaired_draft
     state.draft_version += 1
+    logger.info(
+        "repair_complete",
+        extra={
+            "run_id": str(state.run_id),
+            "repair_attempt": state.repair_attempts,
+            "draft_version": state.draft_version,
+        },
+    )
 
     return state
 

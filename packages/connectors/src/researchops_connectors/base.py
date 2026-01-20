@@ -11,6 +11,7 @@ Provides:
 
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from typing import Any, Protocol
 from enum import Enum
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class SourceType(str, Enum):
@@ -42,14 +45,13 @@ class CanonicalIdentifier:
     pubmed_id: str | None = None
     arxiv_id: str | None = None
     openalex_id: str | None = None
-    s2_id: str | None = None  # Semantic Scholar
     url: str | None = None
 
     def get_primary(self) -> tuple[str, str] | None:
         """
         Get primary identifier based on priority.
 
-        Priority: DOI > PubMed > arXiv > OpenAlex/S2 > URL
+        Priority: DOI > PubMed > arXiv > OpenAlex > URL
 
         Returns:
             (id_type, id_value) or None
@@ -62,8 +64,6 @@ class CanonicalIdentifier:
             return ("arxiv", self.arxiv_id)
         if self.openalex_id:
             return ("openalex", self.openalex_id)
-        if self.s2_id:
-            return ("s2", self.s2_id)
         if self.url:
             return ("url", self.url)
         return None
@@ -246,13 +246,30 @@ class BaseConnector(ABC):
             timeout_seconds: Request timeout
             max_retries: Maximum number of retries on failure
         """
+        if max_requests_per_second <= 0:
+            raise ValueError("max_requests_per_second must be positive")
+        if max_requests_per_second < 1.0:
+            max_requests = 1
+            window_seconds = 1.0 / max_requests_per_second
+        else:
+            max_requests = int(max_requests_per_second)
+            window_seconds = 1.0
         self.rate_limiter = RateLimiter(
-            max_requests=int(max_requests_per_second),
-            window_seconds=1.0,
+            max_requests=max_requests,
+            window_seconds=window_seconds,
         )
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.client = httpx.Client(timeout=timeout_seconds)
+        logger.info(
+            "connector_init",
+            extra={
+                "connector": self.name,
+                "timeout_seconds": timeout_seconds,
+                "max_retries": max_retries,
+                "max_rps": max_requests_per_second,
+            },
+        )
 
     @property
     @abstractmethod
@@ -285,6 +302,15 @@ class BaseConnector(ABC):
         for attempt in range(self.max_retries):
             try:
                 # Respect rate limit
+                logger.info(
+                    "connector_request",
+                    extra={
+                        "connector": self.name,
+                        "method": method,
+                        "url": url,
+                        "attempt": attempt + 1,
+                    },
+                )
                 self.rate_limiter.acquire()
 
                 # Make request
@@ -294,6 +320,15 @@ class BaseConnector(ABC):
                 if response.status_code == 429:
                     retry_after = int(response.headers.get("Retry-After", 60))
                     if attempt < self.max_retries - 1:
+                        logger.warning(
+                            "connector_rate_limited",
+                            extra={
+                                "connector": self.name,
+                                "url": url,
+                                "retry_after": retry_after,
+                                "attempt": attempt + 1,
+                            },
+                        )
                         time.sleep(retry_after)
                         continue
                     raise RateLimitError(f"Rate limit exceeded for {url}")
@@ -301,12 +336,30 @@ class BaseConnector(ABC):
                 # Raise for other HTTP errors
                 response.raise_for_status()
 
+                logger.info(
+                    "connector_response",
+                    extra={
+                        "connector": self.name,
+                        "method": method,
+                        "url": url,
+                        "status_code": response.status_code,
+                    },
+                )
                 return response
 
             except httpx.TimeoutException as e:
                 if attempt < self.max_retries - 1:
                     # Exponential backoff
                     sleep_time = 2 ** attempt
+                    logger.warning(
+                        "connector_timeout",
+                        extra={
+                            "connector": self.name,
+                            "url": url,
+                            "attempt": attempt + 1,
+                            "sleep_seconds": sleep_time,
+                        },
+                    )
                     time.sleep(sleep_time)
                     continue
                 raise TimeoutError(f"Request to {url} timed out") from e
@@ -315,11 +368,33 @@ class BaseConnector(ABC):
                 if attempt < self.max_retries - 1 and e.response.status_code >= 500:
                     # Retry server errors
                     sleep_time = 2 ** attempt
+                    logger.warning(
+                        "connector_http_error_retry",
+                        extra={
+                            "connector": self.name,
+                            "url": url,
+                            "status_code": e.response.status_code,
+                            "attempt": attempt + 1,
+                            "sleep_seconds": sleep_time,
+                        },
+                    )
                     time.sleep(sleep_time)
                     continue
+                logger.warning(
+                    "connector_http_error",
+                    extra={
+                        "connector": self.name,
+                        "url": url,
+                        "status_code": e.response.status_code,
+                    },
+                )
                 raise ConnectorError(f"HTTP error {e.response.status_code}: {url}") from e
 
             except Exception as e:
+                logger.exception(
+                    "connector_unexpected_error",
+                    extra={"connector": self.name, "url": url},
+                )
                 raise ConnectorError(f"Unexpected error fetching {url}: {e}") from e
 
         raise ConnectorError(f"Max retries exceeded for {url}")

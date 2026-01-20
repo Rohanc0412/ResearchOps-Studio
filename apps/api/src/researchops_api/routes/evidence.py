@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,7 +19,7 @@ from researchops_api.schemas.truth import (
 from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
 from researchops_core.tenancy import tenant_uuid
-from researchops_ingestion import StubEmbeddingProvider, ingest_source
+from researchops_ingestion import get_embedding_provider, ingest_source
 from researchops_retrieval import get_snippet_with_context, search_snippets
 
 from db.models import SnippetRow, SnapshotRow, SourceRow
@@ -27,6 +28,7 @@ from db.session import session_scope
 
 router = APIRouter(tags=["evidence"])
 
+logger = logging.getLogger(__name__)
 
 # --- New Pydantic Schemas for Part 6 ---
 
@@ -115,6 +117,10 @@ def post_sources_upsert(
             url=body.url,
             metadata_json=body.metadata_json,
         )
+        logger.info(
+            "source_upserted",
+            extra={"tenant_id": str(_tenant_uuid(identity)), "source_id": str(s.id)},
+        )
         return SourceOut.model_validate(s)
 
 
@@ -157,6 +163,14 @@ def post_snapshot(
             )
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        logger.info(
+            "snapshot_created",
+            extra={
+                "tenant_id": str(_tenant_uuid(identity)),
+                "source_id": str(source_id),
+                "snapshot_id": str(snap.id),
+            },
+        )
         return SnapshotOut.model_validate(snap)
 
 
@@ -183,6 +197,14 @@ def post_snippets(
             )
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        logger.info(
+            "snippets_created",
+            extra={
+                "tenant_id": str(_tenant_uuid(identity)),
+                "snapshot_id": str(snapshot_id),
+                "count": len(rows),
+            },
+        )
         return [SnippetOut.model_validate(r) for r in rows]
 
 
@@ -214,6 +236,14 @@ def get_snippet(request: Request, snippet_id: UUID, identity: Identity = Identit
                 tenant_id=_tenant_uuid(identity),
                 snippet_id=snippet_id,
                 context_snippets=context_snippets,
+            )
+            logger.info(
+                "snippet_context_loaded",
+                extra={
+                    "tenant_id": str(_tenant_uuid(identity)),
+                    "snippet_id": str(snippet_id),
+                    "context_snippets": context_snippets,
+                },
             )
             return result
         except ValueError:
@@ -276,10 +306,17 @@ def ingest_evidence(
     SessionLocal = request.app.state.SessionLocal
 
     with session_scope(SessionLocal) as session:
-        # Use stub embedding provider for now
-        # TODO: Replace with OpenAI or other production provider
-        embedding_provider = StubEmbeddingProvider()
+        # Use configured embedding provider (local or API-backed).
+        embedding_provider = get_embedding_provider()
 
+        logger.info(
+            "ingest_request",
+            extra={
+                "tenant_id": str(_tenant_uuid(identity)),
+                "canonical_id": body.canonical_id,
+                "source_type": body.source_type,
+            },
+        )
         result = ingest_source(
             session=session,
             tenant_id=_tenant_uuid(identity),
@@ -297,6 +334,15 @@ def ingest_evidence(
             overlap_chars=body.overlap_chars,
         )
 
+        logger.info(
+            "ingest_complete",
+            extra={
+                "tenant_id": str(_tenant_uuid(identity)),
+                "source_id": str(result.source_id),
+                "snapshot_id": str(result.snapshot_id),
+                "snippet_count": result.snippet_count,
+            },
+        )
         return IngestSourceResponse(
             source_id=result.source_id,
             snapshot_id=result.snapshot_id,
@@ -322,9 +368,8 @@ def search_evidence(
     SessionLocal = request.app.state.SessionLocal
 
     with session_scope(SessionLocal) as session:
-        # Embed query using stub provider
-        # TODO: Use same provider as ingestion
-        embedding_provider = StubEmbeddingProvider()
+        # Embed query using configured provider.
+        embedding_provider = get_embedding_provider()
         query_embedding = embedding_provider.embed_texts([body.query])[0]
 
         # Search
@@ -337,6 +382,14 @@ def search_evidence(
             min_similarity=body.min_similarity,
         )
 
+        logger.info(
+            "search_complete",
+            extra={
+                "tenant_id": str(_tenant_uuid(identity)),
+                "query": body.query,
+                "count": len(results),
+            },
+        )
         return SearchResponse(
             results=[
                 SearchResultOut(

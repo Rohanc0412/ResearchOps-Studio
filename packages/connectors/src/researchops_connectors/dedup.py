@@ -2,7 +2,7 @@
 Deduplication logic for retrieved sources.
 
 Implements canonical ID priority:
-DOI > PubMed > arXiv > OpenAlex/S2 > URL
+DOI > PubMed > arXiv > OpenAlex > URL
 
 This prevents:
 - Duplicate papers from different connectors
@@ -12,11 +12,13 @@ This prevents:
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
 from researchops_connectors.base import RetrievedSource
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class DeduplicationStats:
@@ -45,7 +47,7 @@ def deduplicate_sources(
     """
     Deduplicate sources using canonical ID priority.
 
-    Priority: DOI > PubMed > arXiv > OpenAlex/S2 > URL > Title hash
+    Priority: DOI > PubMed > arXiv > OpenAlex > URL > Title hash
 
     When duplicates are found:
     1. Use highest priority identifier
@@ -65,6 +67,7 @@ def deduplicate_sources(
         >>> print(f"Removed {stats.duplicates_removed} duplicates")
     """
     if not sources:
+        logger.info("dedup_empty_input")
         return [], DeduplicationStats(
             total_input=0,
             total_output=0,
@@ -109,6 +112,15 @@ def deduplicate_sources(
         connectors_merged=dict(connector_counts),
     )
 
+    logger.info(
+        "dedup_complete",
+        extra={
+            "total_input": stats.total_input,
+            "total_output": stats.total_output,
+            "duplicates_removed": stats.duplicates_removed,
+            "by_identifier": stats.by_identifier,
+        },
+    )
     return deduplicated, stats
 
 
@@ -158,8 +170,6 @@ def _merge_sources(
             merged_id.arxiv_id = source.canonical_id.arxiv_id
         if not merged_id.openalex_id and source.canonical_id.openalex_id:
             merged_id.openalex_id = source.canonical_id.openalex_id
-        if not merged_id.s2_id and source.canonical_id.s2_id:
-            merged_id.s2_id = source.canonical_id.s2_id
         if not merged_id.url and source.canonical_id.url:
             merged_id.url = source.canonical_id.url
 

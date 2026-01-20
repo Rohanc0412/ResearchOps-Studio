@@ -28,7 +28,7 @@ Part 7 implements a production-grade retrieval system that determines the **qual
    - PDF URL support
 
 4. **Deduplication with canonical ID priority** ✅
-   - Priority: DOI > PubMed > arXiv > OpenAlex/S2 > URL
+   - Priority: DOI > PubMed > arXiv > OpenAlex > URL
    - Intelligent metadata merging
    - Statistics tracking
    - Existing source filtering
@@ -80,7 +80,6 @@ class CanonicalIdentifier:
     pubmed_id: str | None = None    # Priority 2
     arxiv_id: str | None = None     # Priority 3
     openalex_id: str | None = None  # Priority 4
-    s2_id: str | None = None        # Priority 4
     url: str | None = None          # Priority 5
 ```
 
@@ -88,7 +87,7 @@ class CanonicalIdentifier:
 - DOI is authoritative (if present)
 - PubMed for biomedical literature
 - arXiv for preprints
-- OpenAlex/S2 for coverage
+- OpenAlex for coverage
 - URL as fallback
 
 ### Retrieved Source Format
@@ -625,10 +624,9 @@ assert all(r.abstract for r in results)
 ### 🔧 Future Enhancements
 
 1. **Additional Connectors:**
-   - Semantic Scholar (S2)
-   - Crossref (DOI metadata)
-   - PubMed (biomedical)
    - Google Scholar (broad coverage)
+   - Lens.org / CORE (open access)
+   - SSRN (preprints)
    - Microsoft Academic (deprecated but archives exist)
 
 2. **Advanced Reranking:**
@@ -661,7 +659,6 @@ assert all(r.abstract for r in results)
 |-----------|------------|------------|-------|
 | OpenAlex | 1 req/s | 10 req/s | Email for polite pool |
 | arXiv | 0.3 req/s | - | 1 request per 3 seconds |
-| Semantic Scholar | 1 req/s | 10 req/s | API key available |
 | Crossref | 50 req/s | - | No auth required |
 | PubMed | 3 req/s | 10 req/s | API key recommended |
 

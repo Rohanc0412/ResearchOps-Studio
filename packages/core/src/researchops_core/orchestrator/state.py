@@ -141,6 +141,8 @@ class OrchestratorState(BaseModel):
     user_query: str
     research_goal: str | None = None
     constraints: dict[str, Any] = Field(default_factory=dict)
+    llm_provider: str | None = None
+    llm_model: str | None = None
 
     # Stage 1: Question generation
     generated_queries: list[str] = Field(default_factory=list)

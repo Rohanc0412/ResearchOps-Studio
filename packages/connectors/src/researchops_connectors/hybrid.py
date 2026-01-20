@@ -9,15 +9,18 @@ Strategy:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from researchops_connectors.base import RetrievedSource
+from researchops_connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
 from researchops_connectors.dedup import deduplicate_sources, DeduplicationStats
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class HybridRetrievalResult:
@@ -73,20 +76,44 @@ def keyword_search_multi_connector(
     """
     all_sources = []
 
+    per_connector = max(1, max_per_connector)
+    logger.info(
+        "keyword_search_start",
+        extra={
+            "query": query,
+            "connector_count": len(connectors),
+            "max_per_connector": per_connector,
+        },
+    )
     for connector in connectors:
         try:
+            logger.info(
+                "keyword_search_connector_start",
+                extra={"connector": connector.name, "query": query, "max_results": per_connector},
+            )
             sources = connector.search(
                 query=query,
-                max_results=max_per_connector,
+                max_results=per_connector,
                 year_from=year_from,
                 year_to=year_to,
             )
             all_sources.extend(sources)
+            logger.info(
+                "keyword_search_connector_complete",
+                extra={"connector": connector.name, "query": query, "count": len(sources)},
+            )
         except Exception as e:
             # Log error but continue with other connectors
-            print(f"Error searching {connector.name}: {e}")
+            logger.warning(
+                "keyword_search_connector_error",
+                extra={"connector": connector.name, "query": query, "error": str(e)},
+            )
             continue
 
+    logger.info(
+        "keyword_search_complete",
+        extra={"query": query, "total_sources": len(all_sources)},
+    )
     return all_sources
 
 
@@ -96,7 +123,7 @@ def vector_search_existing(
     query: str,
     embedding_provider: Any,  # EmbeddingProvider
     max_results: int = 10,
-) -> list[dict]:
+) -> list[RetrievedSource]:
     """
     Search existing snippets using vector similarity.
 
@@ -108,14 +135,17 @@ def vector_search_existing(
         max_results: Max results to return
 
     Returns:
-        List of snippet search results with source metadata
+        List of sources reconstructed from snippet search results
     """
     from researchops_retrieval import search_snippets
 
     # Embed query
+    logger.info(
+        "vector_search_start",
+        extra={"query": query, "max_results": max_results, "model": embedding_provider.model_name},
+    )
     query_embedding = embedding_provider.embed_texts([query])[0]
 
-    # Search snippets
     results = search_snippets(
         session=session,
         tenant_id=tenant_id,
@@ -124,7 +154,52 @@ def vector_search_existing(
         limit=max_results,
     )
 
-    return results
+    seen_sources: set[UUID] = set()
+    sources: list[RetrievedSource] = []
+
+    for result in results:
+        source_id = result["source_id"]
+        if source_id in seen_sources:
+            continue
+        seen_sources.add(source_id)
+
+        canonical_id = _canonical_identifier_from_string(result.get("source_canonical_id"))
+        source_type = _source_type_from_string(result.get("source_type"))
+        title = result.get("source_title") or "Untitled source"
+        authors = list(result.get("source_authors") or [])
+        year = result.get("source_year")
+        url = result.get("source_url")
+
+        sources.append(
+            RetrievedSource(
+                canonical_id=canonical_id,
+                title=title,
+                authors=authors,
+                year=year,
+                source_type=source_type,
+                abstract=None,
+                full_text=None,
+                url=url,
+                pdf_url=None,
+                connector="vector",
+                retrieved_at=datetime.utcnow(),
+                venue=None,
+                citations_count=None,
+                keywords=None,
+                extra_metadata={
+                    "vector_similarity": result.get("similarity"),
+                    "snippet_id": str(result.get("snippet_id")),
+                    "snippet_text": result.get("snippet_text"),
+                    "source_id": str(source_id),
+                },
+            )
+        )
+
+    logger.info(
+        "vector_search_complete",
+        extra={"query": query, "result_count": len(sources)},
+    )
+    return sources
 
 
 def rerank_sources(
@@ -174,8 +249,10 @@ def rerank_sources(
             import math
             citation_score = math.log(source.citations_count + 1) / 10
 
+        vector_similarity = _extract_vector_similarity(source.extra_metadata)
+
         # Combined score
-        total_score = relevance_score + citation_score
+        total_score = relevance_score + citation_score + (vector_similarity * 1.5)
 
         scored_sources.append((total_score, source))
 
@@ -275,6 +352,16 @@ def hybrid_retrieve(
         HybridRetrievalResult with sources and statistics
     """
     # Step 1: Keyword search via connectors
+    logger.info(
+        "hybrid_retrieve_start",
+        extra={
+            "query": query,
+            "connector_count": len(connectors),
+            "max_keyword_results": max_keyword_results,
+            "max_vector_results": max_vector_results,
+            "max_final_results": max_final_results,
+        },
+    )
     keyword_sources = keyword_search_multi_connector(
         connectors=connectors,
         query=query,
@@ -296,11 +383,9 @@ def hybrid_retrieve(
                 embedding_provider=embedding_provider,
                 max_results=max_vector_results,
             )
-            # Note: These are snippet results, not full sources
-            # In a full implementation, would convert to RetrievedSource
-            # For now, we'll skip adding them to avoid complexity
+            vector_sources = vector_results
         except Exception as e:
-            print(f"Vector search error: {e}")
+            logger.warning("vector_search_error", extra={"query": query, "error": str(e)})
 
     vector_count = len(vector_sources)
 
@@ -318,7 +403,19 @@ def hybrid_retrieve(
 
     # Collect statistics
     connectors_used = [c.name for c in connectors]
+    if vector_sources:
+        connectors_used.append("vector")
 
+    logger.info(
+        "hybrid_retrieve_complete",
+        extra={
+            "query": query,
+            "keyword_count": keyword_count,
+            "vector_count": vector_count,
+            "total_candidates": len(all_sources),
+            "final_count": len(final_sources),
+        },
+    )
     return HybridRetrievalResult(
         sources=final_sources,
         keyword_count=keyword_count,
@@ -329,3 +426,47 @@ def hybrid_retrieve(
         query=query,
         connectors_used=connectors_used,
     )
+
+
+def _canonical_identifier_from_string(canonical_id: str | None) -> CanonicalIdentifier:
+    if not canonical_id:
+        return CanonicalIdentifier()
+    if ":" not in canonical_id:
+        return CanonicalIdentifier(url=canonical_id)
+    id_type, id_value = canonical_id.split(":", 1)
+    id_type = id_type.lower().strip()
+    id_value = id_value.strip()
+    if id_type == "doi":
+        return CanonicalIdentifier(doi=id_value)
+    if id_type == "pubmed":
+        return CanonicalIdentifier(pubmed_id=id_value)
+    if id_type == "arxiv":
+        return CanonicalIdentifier(arxiv_id=id_value)
+    if id_type == "openalex":
+        return CanonicalIdentifier(openalex_id=id_value)
+    if id_type == "url":
+        return CanonicalIdentifier(url=id_value)
+    return CanonicalIdentifier()
+
+
+def _source_type_from_string(source_type: str | None) -> SourceType:
+    if not source_type:
+        return SourceType.PAPER
+    try:
+        return SourceType(source_type)
+    except ValueError:
+        return SourceType.PAPER
+
+
+def _extract_vector_similarity(extra_metadata: dict | None) -> float:
+    if not extra_metadata:
+        return 0.0
+    similarity = None
+    if "vector_similarity" in extra_metadata:
+        similarity = extra_metadata.get("vector_similarity")
+    elif "vector_metadata" in extra_metadata and isinstance(extra_metadata.get("vector_metadata"), dict):
+        similarity = extra_metadata["vector_metadata"].get("vector_similarity")
+    try:
+        return float(similarity)
+    except (TypeError, ValueError):
+        return 0.0

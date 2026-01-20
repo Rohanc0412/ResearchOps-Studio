@@ -7,12 +7,15 @@ Extracts citations associated with each claim.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import instrument_node
 from researchops_core.orchestrator.state import Claim, OrchestratorState
+
+logger = logging.getLogger(__name__)
 
 
 @instrument_node("claim_extraction")
@@ -79,6 +82,10 @@ def claim_extractor_node(state: OrchestratorState, session: Session) -> Orchestr
 
     # Update state
     state.extracted_claims = claims
+    logger.info(
+        "claim_extraction_complete",
+        extra={"run_id": str(state.run_id), "claims": len(claims)},
+    )
 
     return state
 

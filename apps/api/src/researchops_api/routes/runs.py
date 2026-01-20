@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -50,6 +51,7 @@ from db.session import session_scope
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
+logger = logging.getLogger(__name__)
 
 def _tenant_uuid(identity: Identity) -> UUID:
     return tenant_uuid(identity.tenant_id)
@@ -154,6 +156,10 @@ def hello_run(request: Request, identity: Identity = IdentityDep) -> dict[str, s
 
     with session_scope(SessionLocal) as session:
         run_id = enqueue_hello_run(session=session, tenant_id=_tenant_uuid(identity))
+        logger.info(
+            "hello_run_enqueued",
+            extra={"run_id": str(run_id), "tenant_id": str(_tenant_uuid(identity))},
+        )
         write_audit_log(
             db=session,
             identity=identity,
@@ -201,6 +207,15 @@ def patch_run(
                 error_code=body.error_code,
                 started_at=body.started_at,
                 finished_at=body.finished_at,
+            )
+            logger.info(
+                "run_status_updated",
+                extra={
+                    "run_id": str(run_id),
+                    "tenant_id": str(_tenant_uuid(identity)),
+                    "status": body.status,
+                    "current_stage": body.current_stage,
+                },
             )
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
@@ -360,6 +375,10 @@ def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep)
                 run_id=run_id,
                 force_immediate=False,
             )
+            logger.info(
+                "run_cancel_requested",
+                extra={"run_id": str(run_id), "tenant_id": str(_tenant_uuid(identity))},
+            )
             write_audit_log(
                 db=session,
                 identity=identity,
@@ -403,11 +422,25 @@ def retry_run_endpoint(
                 tenant_id=_tenant_uuid(identity),
                 run_id=run_id,
             )
+            job_type = None
+            if isinstance(run.usage_json, dict):
+                job_type = run.usage_json.get("job_type")
+            if not isinstance(job_type, str) or not job_type:
+                job_type = HELLO_JOB_TYPE
             enqueue_run_job(
                 session=session,
                 tenant_id=_tenant_uuid(identity),
                 run_id=run.id,
-                job_type=HELLO_JOB_TYPE,
+                job_type=job_type,
+            )
+            logger.info(
+                "run_retry_enqueued",
+                extra={
+                    "run_id": str(run_id),
+                    "tenant_id": str(_tenant_uuid(identity)),
+                    "job_type": job_type,
+                    "retry_count": run.retry_count,
+                },
             )
             write_audit_log(
                 db=session,
@@ -425,7 +458,7 @@ def retry_run_endpoint(
         return _run_to_web(run)
 
 
-@router.get("/{run_id}/artifacts", response_model=list[ArtifactOut])
+@router.get("/{run_id}/artifacts", response_model=list[ArtifactOut], response_model_by_alias=True)
 def get_artifacts_for_run(
     request: Request, run_id: UUID, identity: Identity = IdentityDep
 ) -> list[ArtifactOut]:

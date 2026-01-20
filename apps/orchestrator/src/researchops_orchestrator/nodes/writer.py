@@ -7,12 +7,16 @@ Uses a simple template-based approach (can be enhanced with LLM later).
 
 from __future__ import annotations
 
+import logging
 import random
 
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import emit_run_event, instrument_node
 from researchops_core.orchestrator.state import OrchestratorState
+from researchops_llm import LLMError, get_llm_client
+
+logger = logging.getLogger(__name__)
 
 
 @instrument_node("draft")
@@ -39,6 +43,20 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
 
     evidence_snippets = state.evidence_snippets
     vetted_sources = state.vetted_sources
+    llm_client = None
+    try:
+        llm_client = get_llm_client(state.llm_provider, state.llm_model)
+    except LLMError as exc:
+        logger.warning("llm_unavailable", extra={"error": str(exc)})
+    if llm_client:
+        logger.info(
+            "writer_llm_enabled",
+            extra={
+                "run_id": str(state.run_id),
+                "llm_provider": state.llm_provider,
+                "llm_model": state.llm_model,
+            },
+        )
 
     # Build draft
     draft_lines = []
@@ -77,6 +95,19 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
 
         # Generate section content
         if relevant_snippets:
+            if llm_client:
+                llm_text = _generate_section_with_llm(
+                    llm_client,
+                    section,
+                    relevant_snippets,
+                    vetted_sources,
+                )
+                if llm_text:
+                    draft_lines.append(llm_text)
+                    draft_lines.append("")
+                    draft_lines.append("")
+                    continue
+
             # Introduction sentence
             draft_lines.append(section.description + ".")
             draft_lines.append("")
@@ -109,8 +140,64 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
     # Update state
     state.draft_text = draft_text
     state.draft_version += 1
+    logger.info(
+        "writer_complete",
+        extra={
+            "run_id": str(state.run_id),
+            "draft_version": state.draft_version,
+            "draft_length": len(draft_text),
+        },
+    )
 
     return state
+
+
+def _generate_section_with_llm(
+    llm_client,
+    section,
+    snippets,
+    sources,
+    max_snippets: int = 3,
+) -> str | None:
+    selected = snippets[:max_snippets]
+    if not selected:
+        return None
+
+    context_lines = []
+    for snippet_ref in selected:
+        source = next((s for s in sources if s.source_id == snippet_ref.source_id), None)
+        source_label = source.title if source and source.title else "Unknown source"
+        authors = _format_authors(source.authors) if source else "unknown authors"
+        year = source.year if source and source.year else "n.d."
+        snippet_text = snippet_ref.text.strip().replace("\n", " ")
+        if len(snippet_text) > 300:
+            snippet_text = snippet_text[:300].strip() + "..."
+        context_lines.append(
+            f"- [CITE:{snippet_ref.snippet_id}] {snippet_text} (Source: {source_label}, {authors}, {year})"
+        )
+
+    prompt = (
+        f"Write a concise paragraph for the section titled '{section.title}'.\n"
+        f"Section description: {section.description}\n\n"
+        "IMPORTANT RULES:\n"
+        "1. Use ONLY the evidence snippets provided below\n"
+        "2. Cite sources inline using the exact [CITE:...] tokens shown\n"
+        "3. Do NOT repeat phrases or use filler text\n"
+        "4. Do NOT invent facts or add information not in the evidence\n"
+        "5. Write clear, direct sentences without repetition\n\n"
+        "Evidence:\n"
+        + "\n".join(context_lines)
+        + "\n\nWrite one focused paragraph using this evidence:"
+    )
+    system = "You are a technical writer who creates clear, concise research summaries from evidence snippets. Never repeat yourself or use filler phrases."
+    try:
+        response = llm_client.generate(prompt, system=system, max_tokens=320, temperature=0.7)
+    except LLMError as exc:
+        logger.warning("llm_section_generation_failed", extra={"error": str(exc)})
+        return None
+
+    text = response.strip()
+    return text or None
 
 
 def _find_relevant_snippets(
@@ -167,21 +254,34 @@ def _generate_sentence_from_snippet(snippet_ref, source) -> str:
     Returns:
         Generated sentence with citation
     """
-    # Extract a phrase from the snippet (first 100 chars)
-    snippet_text = snippet_ref.text[:100].strip()
-    if len(snippet_ref.text) > 100:
-        snippet_text += "..."
+    # Extract a complete sentence or up to 300 chars
+    snippet_text = snippet_ref.text.strip()
+
+    # Try to find a complete sentence
+    sentences = snippet_text.split('. ')
+    if len(sentences) > 0:
+        # Take first complete sentence
+        first_sentence = sentences[0].strip()
+        if len(first_sentence) > 300:
+            # Too long, truncate at word boundary
+            truncated = first_sentence[:300].rsplit(' ', 1)[0]
+            snippet_text = truncated + "..."
+        else:
+            snippet_text = first_sentence
+            if not snippet_text.endswith('.'):
+                snippet_text += "..."
+    else:
+        # No sentence breaks, just truncate
+        if len(snippet_text) > 300:
+            snippet_text = snippet_text[:300].rsplit(' ', 1)[0] + "..."
 
     # Citation marker
     citation = f"[CITE:{snippet_ref.snippet_id}]"
 
-    # Template patterns
+    # Template patterns with proper punctuation
     templates = [
-        f"Research indicates that {snippet_text} {citation}.",
-        f"According to {_format_authors(source.authors)}, {snippet_text} {citation}.",
-        f"Studies have shown that {snippet_text} {citation}.",
-        f"Evidence suggests that {snippet_text} {citation}.",
-        f"As noted in recent work, {snippet_text} {citation}.",
+        f"{snippet_text} {citation}",
+        f"According to {_format_authors(source.authors)}, {snippet_text.lower()} {citation}",
     ]
 
     # Pick a random template

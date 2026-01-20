@@ -32,7 +32,7 @@ class ArXivConnector(BaseConnector):
     - Math, physics, CS, biology coverage
     """
 
-    BASE_URL = "http://export.arxiv.org/api/query"
+    BASE_URL = "https://export.arxiv.org/api/query"
 
     def __init__(self, **kwargs):
         """Initialize arXiv connector."""

@@ -7,10 +7,16 @@ Uses a simple rule-based approach (can be enhanced with LLM later).
 
 from __future__ import annotations
 
+import logging
+import re
+
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import instrument_node
 from researchops_core.orchestrator.state import OrchestratorState
+from researchops_llm import LLMError, get_llm_client
+
+logger = logging.getLogger(__name__)
 
 
 @instrument_node("question_generation")
@@ -35,6 +41,18 @@ def question_generator_node(state: OrchestratorState, session: Session) -> Orche
     research_goal = state.research_goal or user_query
 
     queries = []
+    llm_queries = _generate_queries_with_llm(state)
+    if llm_queries:
+        queries.extend(llm_queries)
+        logger.info(
+            "question_generation_llm",
+            extra={
+                "run_id": str(state.run_id),
+                "llm_provider": state.llm_provider,
+                "llm_model": state.llm_model,
+                "count": len(llm_queries),
+            },
+        )
 
     # 1. Original query
     queries.append(user_query)
@@ -77,8 +95,44 @@ def question_generator_node(state: OrchestratorState, session: Session) -> Orche
 
     # Update state
     state.generated_queries = queries
+    logger.info(
+        "question_generation_complete",
+        extra={"run_id": str(state.run_id), "count": len(queries)},
+    )
 
     return state
+
+
+def _generate_queries_with_llm(state: OrchestratorState) -> list[str]:
+    try:
+        client = get_llm_client(state.llm_provider, state.llm_model)
+    except LLMError as exc:
+        logger.warning("llm_unavailable", extra={"error": str(exc)})
+        return []
+
+    if client is None:
+        return []
+
+    prompt = (
+        "Generate 10-15 diverse academic search queries for the research topic below. "
+        "Return one query per line, no numbering or extra text.\n\n"
+        f"Topic: {state.user_query}\n"
+    )
+    system = "You generate concise scholarly search queries."
+    try:
+        response = client.generate(prompt, system=system, max_tokens=256, temperature=0.4)
+    except LLMError as exc:
+        logger.warning("llm_query_generation_failed", extra={"error": str(exc)})
+        return []
+
+    lines = [line.strip() for line in response.splitlines() if line.strip()]
+    cleaned = []
+    for line in lines:
+        cleaned_line = re.sub(r"^[\W_]+", "", line).strip()
+        cleaned_line = re.sub(r"^\d+[.)\s-]*", "", cleaned_line).strip()
+        if cleaned_line:
+            cleaned.append(cleaned_line)
+    return cleaned[:20]
 
 
 def _extract_key_terms(query: str) -> list[str]:

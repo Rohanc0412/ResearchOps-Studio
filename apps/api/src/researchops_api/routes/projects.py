@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,7 +17,7 @@ from researchops_api.schemas.truth import (
 from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
 from researchops_core.tenancy import tenant_uuid
-from researchops_orchestrator import HELLO_JOB_TYPE, enqueue_run_job
+from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
 from db.models.runs import RunStatusDb
 from db.services.truth import (
@@ -33,6 +35,7 @@ from db.session import session_scope
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+logger = logging.getLogger(__name__)
 
 def _tenant_uuid(identity: Identity) -> UUID:
     return tenant_uuid(identity.tenant_id)
@@ -51,6 +54,8 @@ class WebRunCreate(BaseModel):
     prompt: str = Field(min_length=1)
     output_type: str = Field(min_length=1)
     budget_override: dict | None = None
+    llm_provider: str | None = Field(default=None, pattern="^(local|hosted)$")
+    llm_model: str | None = Field(default=None, min_length=1)
 
 
 class WebRunOut(BaseModel):
@@ -86,6 +91,10 @@ def patch_project(
         if body.description is not None:
             p.description = body.description
         session.flush()
+        logger.info(
+            "project_updated",
+            extra={"project_id": str(project_id), "tenant_id": str(_tenant_uuid(identity))},
+        )
         return ProjectOut.model_validate(p)
 
 
@@ -106,6 +115,10 @@ def post_project(
             name=body.name,
             description=body.description,
             created_by=identity.user_id,
+        )
+        logger.info(
+            "project_created",
+            extra={"project_id": str(row.id), "tenant_id": str(_tenant_uuid(identity))},
         )
         return ProjectOut.model_validate(row)
 
@@ -145,6 +158,12 @@ def post_run_for_project(
     with session_scope(SessionLocal) as session:
         try:
             budgets = body.budget_override or {}
+            llm_provider = body.llm_provider or "local"
+            llm_model = body.llm_model
+            if llm_provider == "local" and not llm_model:
+                llm_model = os.getenv("LLM_LOCAL_MODEL", "llama3.1:8b")
+            if llm_provider == "hosted" and not llm_model:
+                llm_model = os.getenv("HOSTED_LLM_MODEL")
             run = create_run(
                 session=session,
                 tenant_id=_tenant_uuid(identity),
@@ -152,12 +171,39 @@ def post_run_for_project(
                 status=RunStatusDb.queued,
                 budgets_json=budgets,
             )
+            run.usage_json = {
+                "job_type": RESEARCH_JOB_TYPE,
+                "user_query": body.prompt,
+                "output_type": body.output_type,
+                "research_goal": body.output_type,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+            }
             enqueue_run_job(
                 session=session,
                 tenant_id=_tenant_uuid(identity),
                 run_id=run.id,
-                job_type=HELLO_JOB_TYPE,
+                job_type=RESEARCH_JOB_TYPE,
             )
+            logger.info(
+                "project_run_enqueued",
+                extra={
+                    "run_id": str(run.id),
+                    "project_id": str(project_id),
+                    "tenant_id": str(_tenant_uuid(identity)),
+                    "llm_provider": llm_provider,
+                    "llm_model": llm_model,
+                    "prompt": body.prompt[:100] + "..." if len(body.prompt) > 100 else body.prompt,
+                },
+            )
+            print(f"\n{'='*60}")
+            print(f"  NEW RUN QUEUED")
+            print(f"{'='*60}")
+            print(f"  Run ID:   {run.id}")
+            print(f"  Project:  {project_id}")
+            print(f"  LLM:      {llm_provider} / {llm_model}")
+            print(f"  Prompt:   {body.prompt[:80]}{'...' if len(body.prompt) > 80 else ''}")
+            print(f"{'='*60}\n")
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         return WebRunOut(

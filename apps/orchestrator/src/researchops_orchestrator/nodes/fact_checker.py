@@ -6,7 +6,7 @@ Checks if the evidence actually supports the claims being made.
 
 from __future__ import annotations
 
-from uuid import UUID
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from researchops_core.orchestrator.state import (
     ValidationErrorType,
 )
 
+logger = logging.getLogger(__name__)
 
 @instrument_node("fact_checking")
 def fact_checker_node(state: OrchestratorState, session: Session) -> OrchestratorState:
@@ -151,10 +152,10 @@ def fact_checker_node(state: OrchestratorState, session: Session) -> Orchestrato
                 claim_id=claim.claim_id,
                 status=status,
                 supporting_snippets=[
-                    UUID(s.snippet_id) for s in cited_snippets if support_score > 0.5
+                    s.snippet_id for s in cited_snippets if support_score > 0.5
                 ],
                 contradicting_snippets=[
-                    UUID(s.snippet_id) for s in cited_snippets if contradiction_score > 0.5
+                    s.snippet_id for s in cited_snippets if contradiction_score > 0.5
                 ],
                 confidence=confidence,
                 explanation=explanation,
@@ -166,6 +167,14 @@ def fact_checker_node(state: OrchestratorState, session: Session) -> Orchestrato
 
     # Append fact-checking errors to citation errors
     state.citation_errors.extend(additional_errors)
+    logger.info(
+        "fact_check_complete",
+        extra={
+            "run_id": str(state.run_id),
+            "results": len(results),
+            "new_errors": len(additional_errors),
+        },
+    )
 
     return state
 

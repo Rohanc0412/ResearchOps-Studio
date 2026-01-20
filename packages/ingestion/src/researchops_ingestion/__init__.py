@@ -11,7 +11,12 @@ Provides:
 from __future__ import annotations
 
 from researchops_ingestion.chunking import Chunk, chunk_text, rechunk_with_size
-from researchops_ingestion.embeddings import EmbeddingProvider, StubEmbeddingProvider
+from researchops_ingestion.embeddings import (
+    EmbeddingProvider,
+    SentenceTransformerEmbeddingProvider,
+    StubEmbeddingProvider,
+    get_embedding_provider,
+)
 from researchops_ingestion.pipeline import (
     IngestionResult,
     create_or_get_source,
@@ -32,6 +37,8 @@ __all__ = [
     # Embeddings
     "EmbeddingProvider",
     "StubEmbeddingProvider",
+    "SentenceTransformerEmbeddingProvider",
+    "get_embedding_provider",
     # Pipeline
     "ingest_source",
     "ingest_snapshot",

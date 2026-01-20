@@ -26,6 +26,8 @@ export function useCreateRunMutation(projectId: string) {
         time_limit?: number;
         connector_calls_limit?: number;
       };
+      llm_provider?: "local" | "hosted";
+      llm_model?: string;
     }) =>
       apiFetchJson(`/projects/${encodeURIComponent(projectId)}/runs`, {
         method: "POST",

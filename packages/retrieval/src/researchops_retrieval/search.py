@@ -10,6 +10,7 @@ This module provides:
 
 from __future__ import annotations
 
+import logging
 from typing import TypedDict
 from uuid import UUID
 
@@ -17,6 +18,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.models import SnippetEmbeddingRow, SnippetRow, SnapshotRow, SourceRow
+
+logger = logging.getLogger(__name__)
 
 
 class SearchResult(TypedDict):
@@ -48,6 +51,15 @@ class SearchResult(TypedDict):
 
     source_type: str
     """Source type (paper, webpage, etc.)."""
+
+    source_canonical_id: str
+    """Canonical identifier string for the source."""
+
+    source_year: int | None
+    """Source publication year."""
+
+    source_authors: list
+    """Source authors list."""
 
     source_url: str | None
     """Source URL."""
@@ -96,6 +108,15 @@ def search_snippets(
         >>> len(results) <= 5
         True
     """
+    logger.info(
+        "vector_search_query",
+        extra={
+            "tenant_id": str(tenant_id),
+            "embedding_model": embedding_model,
+            "limit": limit,
+            "min_similarity": min_similarity,
+        },
+    )
     # pgvector cosine similarity: 1 - (embedding <=> query_embedding)
     # This returns a value in [0, 2], where:
     # - 0 = identical vectors
@@ -118,6 +139,9 @@ def search_snippets(
             SourceRow.id.label("source_id"),
             SourceRow.title.label("source_title"),
             SourceRow.source_type,
+            SourceRow.canonical_id.label("source_canonical_id"),
+            SourceRow.year.label("source_year"),
+            SourceRow.authors_json.label("source_authors"),
             SourceRow.url.label("source_url"),
             SnapshotRow.id.label("snapshot_id"),
             SnapshotRow.snapshot_version,
@@ -155,12 +179,19 @@ def search_snippets(
                 source_id=row.source_id,
                 source_title=row.source_title,
                 source_type=row.source_type,
+                source_canonical_id=row.source_canonical_id,
+                source_year=row.source_year,
+                source_authors=row.source_authors,
                 source_url=row.source_url,
                 snapshot_id=row.snapshot_id,
                 snapshot_version=row.snapshot_version,
             )
         )
 
+    logger.info(
+        "vector_search_results",
+        extra={"tenant_id": str(tenant_id), "count": len(results)},
+    )
     return results
 
 
@@ -206,6 +237,10 @@ def get_snippet_with_context(
     )
 
     if not snippet:
+        logger.warning(
+            "snippet_not_found",
+            extra={"tenant_id": str(tenant_id), "snippet_id": str(snippet_id)},
+        )
         raise ValueError(f"Snippet {snippet_id} not found for tenant {tenant_id}")
 
     # Get snapshot and source

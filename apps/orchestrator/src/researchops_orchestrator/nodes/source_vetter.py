@@ -10,10 +10,14 @@ Assigns quality scores based on:
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import instrument_node
 from researchops_core.orchestrator.state import OrchestratorState, SourceRef
+
+logger = logging.getLogger(__name__)
 
 
 @instrument_node("source_vetting")
@@ -56,6 +60,15 @@ def source_vetter_node(
 
     # Update state
     state.vetted_sources = vetted_sources
+
+    logger.info(
+        "source_vetting_complete",
+        extra={
+            "run_id": str(state.run_id),
+            "input_sources": len(sources),
+            "vetted_sources": len(vetted_sources),
+        },
+    )
 
     return state
 

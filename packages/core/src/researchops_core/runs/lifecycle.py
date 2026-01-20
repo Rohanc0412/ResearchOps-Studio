@@ -510,6 +510,13 @@ def retry_run(session: Session, tenant_id: UUID, run_id: UUID) -> RunRow:
     # Increment retry count
     run.retry_count += 1
 
+    # Clear prior failure/cancel info for a clean retry view.
+    run.failure_reason = None
+    run.error_code = None
+    run.finished_at = None
+    run.cancel_requested_at = None
+    run.current_stage = None
+
     # Transition to queued
     transition_run_status(
         session=session,
@@ -517,10 +524,10 @@ def retry_run(session: Session, tenant_id: UUID, run_id: UUID) -> RunRow:
         run_id=run_id,
         to_status=RunStatusDb.queued,
         current_stage=None,  # Reset stage
-        failure_reason=None,  # Clear failure info
+        failure_reason=None,  # Cleared above (retained for clarity)
         error_code=None,
-        finished_at=None,  # Clear finished timestamp
-        cancel_requested_at=None,  # Clear cancel request
+        finished_at=None,  # Cleared above
+        cancel_requested_at=None,  # Cleared above
         emit_event=False,  # We'll emit our own event
     )
 

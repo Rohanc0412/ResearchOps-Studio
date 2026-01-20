@@ -15,6 +15,7 @@ Multi-tenant safe: all operations are scoped to tenant_id.
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -24,6 +25,8 @@ from db.models import SnapshotRow, SnippetEmbeddingRow, SnippetRow, SourceRow
 from researchops_ingestion.chunking import chunk_text
 from researchops_ingestion.embeddings import EmbeddingProvider
 from researchops_ingestion.sanitize import sanitize_text
+
+logger = logging.getLogger(__name__)
 
 
 def _now_utc() -> datetime:
@@ -85,6 +88,7 @@ def create_or_get_source(
     authors: list[str] | None = None,
     year: int | None = None,
     url: str | None = None,
+    pdf_url: str | None = None,
     metadata: dict | None = None,
 ) -> SourceRow:
     """
@@ -99,6 +103,7 @@ def create_or_get_source(
         authors: List of author names
         year: Publication year
         url: Source URL
+        pdf_url: Optional PDF URL (stored in metadata if provided)
         metadata: Additional metadata JSON
 
     Returns:
@@ -115,10 +120,31 @@ def create_or_get_source(
     )
 
     if existing:
+        updated = False
+        if url and not existing.url:
+            existing.url = url
+            updated = True
+        if pdf_url:
+            existing_meta = dict(existing.metadata_json or {})
+            if existing_meta.get("pdf_url") != pdf_url:
+                existing_meta["pdf_url"] = pdf_url
+                existing.metadata_json = existing_meta
+                updated = True
+        if updated:
+            existing.updated_at = _now_utc()
+            session.flush()
+        logger.info(
+            "ingest_source_exists",
+            extra={"tenant_id": str(tenant_id), "canonical_id": canonical_id},
+        )
         return existing
 
     # Create new source
     now = _now_utc()
+    metadata_json = dict(metadata or {})
+    if pdf_url:
+        metadata_json.setdefault("pdf_url", pdf_url)
+
     source = SourceRow(
         tenant_id=tenant_id,
         canonical_id=canonical_id,
@@ -127,12 +153,16 @@ def create_or_get_source(
         authors_json=authors or [],
         year=year,
         url=url,
-        metadata_json=metadata or {},
+        metadata_json=metadata_json,
         created_at=now,
         updated_at=now,
     )
     session.add(source)
     session.flush()
+    logger.info(
+        "ingest_source_created",
+        extra={"tenant_id": str(tenant_id), "canonical_id": canonical_id, "source_id": str(source.id)},
+    )
     return source
 
 
@@ -192,6 +222,16 @@ def create_snapshot(
     )
     session.add(snapshot)
     session.flush()
+    logger.info(
+        "ingest_snapshot_created",
+        extra={
+            "tenant_id": str(tenant_id),
+            "source_id": str(source_id),
+            "snapshot_id": str(snapshot.id),
+            "version": version,
+            "size_bytes": size_bytes,
+        },
+    )
     return snapshot
 
 
@@ -224,9 +264,26 @@ def ingest_snapshot(
     sanitized = sanitize_text(raw_content)
     clean_text = sanitized["text"]
     risk_flags = sanitized["risk_flags"]
+    logger.info(
+        "ingest_snapshot_sanitized",
+        extra={
+            "tenant_id": str(tenant_id),
+            "snapshot_id": str(snapshot.id),
+            "clean_text_len": len(clean_text),
+            "risk_flags": risk_flags,
+        },
+    )
 
     # Step 2: Chunk text
     chunks = chunk_text(clean_text, max_chars=max_chunk_chars, overlap_chars=overlap_chars)
+    logger.info(
+        "ingest_snapshot_chunked",
+        extra={
+            "tenant_id": str(tenant_id),
+            "snapshot_id": str(snapshot.id),
+            "chunk_count": len(chunks),
+        },
+    )
 
     # Step 3: Create snippet rows
     snippets: list[SnippetRow] = []
@@ -251,6 +308,16 @@ def ingest_snapshot(
     # Step 4: Generate embeddings
     snippet_texts = [s.text for s in snippets]
     embedding_vectors = embedding_provider.embed_texts(snippet_texts)
+    logger.info(
+        "ingest_snapshot_embedded",
+        extra={
+            "tenant_id": str(tenant_id),
+            "snapshot_id": str(snapshot.id),
+            "snippet_count": len(snippets),
+            "embedding_count": len(embedding_vectors),
+            "embedding_model": embedding_provider.model_name,
+        },
+    )
 
     # Step 5: Store embeddings
     embeddings: list[SnippetEmbeddingRow] = []
@@ -290,6 +357,7 @@ def ingest_source(
     authors: list[str] | None = None,
     year: int | None = None,
     url: str | None = None,
+    pdf_url: str | None = None,
     content_type: str | None = None,
     blob_ref: str | None = None,
     metadata: dict | None = None,
@@ -312,6 +380,7 @@ def ingest_source(
         authors: Author names
         year: Publication year
         url: Source URL
+        pdf_url: Optional PDF URL (stored in metadata if provided)
         content_type: Content MIME type
         blob_ref: Blob storage reference (if None, uses inline reference)
         metadata: Additional metadata
@@ -336,6 +405,14 @@ def ingest_source(
         >>> result.snippet_count > 0
         True
     """
+    logger.info(
+        "ingest_source_start",
+        extra={
+            "tenant_id": str(tenant_id),
+            "canonical_id": canonical_id,
+            "content_len": len(raw_content),
+        },
+    )
     # Step 1: Create or get source
     source = create_or_get_source(
         session=session,
@@ -346,6 +423,7 @@ def ingest_source(
         authors=authors,
         year=year,
         url=url,
+        pdf_url=pdf_url,
         metadata=metadata,
     )
 
@@ -365,7 +443,7 @@ def ingest_source(
     )
 
     # Step 3: Ingest snapshot (sanitize, chunk, embed)
-    return ingest_snapshot(
+    result = ingest_snapshot(
         session=session,
         tenant_id=tenant_id,
         snapshot=snapshot,
@@ -374,3 +452,14 @@ def ingest_source(
         max_chunk_chars=max_chunk_chars,
         overlap_chars=overlap_chars,
     )
+    logger.info(
+        "ingest_source_complete",
+        extra={
+            "tenant_id": str(tenant_id),
+            "canonical_id": canonical_id,
+            "source_id": str(result.source_id),
+            "snapshot_id": str(result.snapshot_id),
+            "snippet_count": result.snippet_count,
+        },
+    )
+    return result

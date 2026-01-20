@@ -15,8 +15,8 @@ from db.models.jobs import JobStatusDb
 from db.models.runs import RunStatusDb
 from db.session import create_db_engine, create_sessionmaker, session_scope
 from researchops_core import SERVICE_WORKER, get_settings
-from researchops_observability import configure_logging
-from researchops_orchestrator import process_hello_run
+from researchops_observability import bind_log_context, configure_logging
+from researchops_orchestrator import HELLO_JOB_TYPE, RESEARCH_JOB_TYPE, process_hello_run, process_research_run
 
 logger = logging.getLogger(__name__)
 
@@ -94,23 +94,50 @@ def run_once(*, SessionLocal) -> bool:
         if job is None:
             return False
 
+        job_id = job.id
+        run_id = job.run_id
+        tenant_id = job.tenant_id
+        job_type = job.job_type
+        bind_log_context(tenant_id_value=str(tenant_id), run_id_value=str(run_id))
         logger.info(
             "job_claimed",
-            extra={"job_id": str(job.id), "job_type": job.job_type, "run_id": str(job.run_id)},
+            extra={"job_id": str(job_id), "job_type": job_type, "run_id": str(run_id)},
         )
 
+        print(f"\n{'─'*60}")
+        print(f"  WORKER: Job claimed")
+        print(f"  Job ID:   {job_id}")
+        print(f"  Run ID:   {run_id}")
+        print(f"  Type:     {job_type}")
+        print(f"{'─'*60}")
+
         try:
-            if job.job_type == "hello.run":
-                process_hello_run(session=session, run_id=job.run_id, tenant_id=job.tenant_id)
+            if job_type == HELLO_JOB_TYPE:
+                logger.info("run_processing_start", extra={"run_id": str(run_id), "job_type": job_type})
+                print(f"  ▶ Starting HELLO run...")
+                process_hello_run(session=session, run_id=run_id, tenant_id=tenant_id)
+                logger.info("run_processing_complete", extra={"run_id": str(run_id), "job_type": job_type})
+            elif job_type == RESEARCH_JOB_TYPE:
+                logger.info("run_processing_start", extra={"run_id": str(run_id), "job_type": job_type})
+                print(f"  ▶ Starting RESEARCH run...")
+                process_research_run(session=session, run_id=run_id, tenant_id=tenant_id)
+                logger.info("run_processing_complete", extra={"run_id": str(run_id), "job_type": job_type})
             else:
-                raise RuntimeError(f"Unknown job_type: {job.job_type}")
-            _mark_job_done(session, job.id)
-            logger.info("job_succeeded", extra={"job_id": str(job.id)})
+                raise RuntimeError(f"Unknown job_type: {job_type}")
+            _mark_job_done(session, job_id)
+            logger.info("job_succeeded", extra={"job_id": str(job_id)})
+            print(f"  ✓ Run completed successfully!")
+            print(f"{'─'*60}\n")
         except Exception as e:
             err = str(e)
-            _mark_job_failed(session, job.id, err)
-            _mark_run_failed(session, run_id=job.run_id, tenant_id=job.tenant_id, error=err)
-            logger.exception("job_failed", extra={"job_id": str(job.id)})
+            session.rollback()
+            _mark_job_failed(session, job_id, err)
+            _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
+            logger.exception("job_failed", extra={"job_id": str(job_id)})
+            print(f"  ✗ Run FAILED: {err[:100]}")
+            print(f"{'─'*60}\n")
+        finally:
+            bind_log_context(tenant_id_value=None, run_id_value=None)
         return True
 
 

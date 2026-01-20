@@ -6,6 +6,7 @@ Defines the StateGraph with all nodes and conditional edges.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -25,6 +26,21 @@ from researchops_orchestrator.nodes import (
     source_vetter_node,
     writer_node,
 )
+
+# Node display names for logging
+NODE_DISPLAY_NAMES = {
+    "question_generator": "Question Generator",
+    "retriever": "Retriever",
+    "source_vetter": "Source Vetter",
+    "outliner": "Outliner",
+    "writer": "Writer",
+    "claim_extractor": "Claim Extractor",
+    "citation_validator": "Citation Validator",
+    "fact_checker": "Fact Checker",
+    "evaluator": "Evaluator",
+    "repair_agent": "Repair Agent",
+    "exporter": "Exporter",
+}
 
 
 def create_orchestrator_graph(session: Session) -> StateGraph:
@@ -54,14 +70,19 @@ def create_orchestrator_graph(session: Session) -> StateGraph:
     # Create graph
     workflow = StateGraph(OrchestratorState)
 
-    # Wrap nodes to inject session
+    # Wrap nodes to inject session and add logging
     def wrap_node(node_func):
-        """Wrapper to inject session into node."""
+        """Wrapper to inject session into node and log execution."""
+        node_name = node_func.__name__.replace("_node", "")
+        display_name = NODE_DISPLAY_NAMES.get(node_name, node_name)
 
         def wrapped(state: OrchestratorState) -> dict[str, Any]:
             """Wrapped node function."""
+            print(f"    → {display_name}...", end="", flush=True)
+            start = time.time()
             result_state = node_func(state, session)
-            # Increment iteration count after each cycle
+            elapsed = time.time() - start
+            print(f" done ({elapsed:.1f}s)")
             return result_state.dict()
 
         return wrapped
