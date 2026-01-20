@@ -120,7 +120,7 @@ def _generate_queries_with_llm(state: OrchestratorState) -> list[str]:
     )
     system = "You generate concise scholarly search queries."
     try:
-        response = client.generate(prompt, system=system, max_tokens=256, temperature=0.4)
+        response = client.generate(prompt, system=system, max_tokens=5000, temperature=0.4)
     except LLMError as exc:
         logger.warning("llm_query_generation_failed", extra={"error": str(exc)})
         return []

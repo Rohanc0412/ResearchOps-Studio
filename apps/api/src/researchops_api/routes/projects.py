@@ -158,7 +158,7 @@ def post_run_for_project(
     with session_scope(SessionLocal) as session:
         try:
             budgets = body.budget_override or {}
-            llm_provider = body.llm_provider or "local"
+            llm_provider = body.llm_provider or os.getenv("LLM_PROVIDER", "local")
             llm_model = body.llm_model
             if llm_provider == "local" and not llm_model:
                 llm_model = os.getenv("LLM_LOCAL_MODEL", "llama3.1:8b")

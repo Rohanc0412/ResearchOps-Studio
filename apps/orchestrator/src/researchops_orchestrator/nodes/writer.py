@@ -8,6 +8,7 @@ Uses a simple template-based approach (can be enhanced with LLM later).
 from __future__ import annotations
 
 import logging
+import os
 import random
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,12 @@ from researchops_core.orchestrator.state import OrchestratorState
 from researchops_llm import LLMError, get_llm_client
 
 logger = logging.getLogger(__name__)
+
+
+def _print_llm_exchange(label: str, section_id: str, content: str) -> None:
+    if not content:
+        return
+    print(f"\n[draft llm {label} | section {section_id}]\n{content}\n", flush=True)
 
 
 @instrument_node("draft")
@@ -37,6 +44,7 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
     Returns:
         Updated state with draft_text
     """
+    print(f"\n[draft node start] run_id={state.run_id}\n", flush=True)
     outline = state.outline
     if not outline:
         raise ValueError("Outline not found in state")
@@ -44,10 +52,13 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
     evidence_snippets = state.evidence_snippets
     vetted_sources = state.vetted_sources
     llm_client = None
+    require_llm = os.getenv("LLM_DRAFT_REQUIRED", "true").strip().lower() in {"1", "true", "yes", "on"}
     try:
         llm_client = get_llm_client(state.llm_provider, state.llm_model)
     except LLMError as exc:
         logger.warning("llm_unavailable", extra={"error": str(exc)})
+        if require_llm:
+            raise ValueError("LLM drafting is required but the LLM client is unavailable.") from exc
     if llm_client:
         logger.info(
             "writer_llm_enabled",
@@ -64,6 +75,9 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
     # Title
     draft_lines.append(f"# Research Report: {state.user_query}")
     draft_lines.append("")
+
+    if require_llm and not llm_client:
+        raise ValueError("LLM drafting is required but no LLM client is configured.")
 
     # Process each section
     for i, section in enumerate(outline.sections):
@@ -107,6 +121,10 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
                     draft_lines.append("")
                     draft_lines.append("")
                     continue
+                if require_llm:
+                    raise ValueError(
+                        f"LLM drafting failed for section {section.section_id}: {section.title}"
+                    )
 
             # Introduction sentence
             draft_lines.append(section.description + ".")
@@ -177,26 +195,32 @@ def _generate_section_with_llm(
         )
 
     prompt = (
-        f"Write a concise paragraph for the section titled '{section.title}'.\n"
+        f"Write 1-2 concise paragraphs for the section titled '{section.title}'.\n"
         f"Section description: {section.description}\n\n"
         "IMPORTANT RULES:\n"
         "1. Use ONLY the evidence snippets provided below\n"
         "2. Cite sources inline using the exact [CITE:...] tokens shown\n"
-        "3. Do NOT repeat phrases or use filler text\n"
-        "4. Do NOT invent facts or add information not in the evidence\n"
-        "5. Write clear, direct sentences without repetition\n\n"
+        "3. Paraphrase and synthesize; do NOT copy or quote the snippets verbatim\n"
+        "4. Do NOT repeat phrases or use filler text\n"
+        "5. Do NOT invent facts or add information not in the evidence\n"
+        "6. Write clear, direct sentences without repetition\n\n"
         "Evidence:\n"
         + "\n".join(context_lines)
-        + "\n\nWrite one focused paragraph using this evidence:"
+        + "\n\nWrite the section now using this evidence:"
     )
-    system = "You are a technical writer who creates clear, concise research summaries from evidence snippets. Never repeat yourself or use filler phrases."
+    system = (
+        "You are a technical writer who creates clear, concise research prose from evidence snippets. "
+        "You paraphrase and synthesize and never copy the snippets verbatim."
+    )
+    _print_llm_exchange("request", section.section_id, prompt)
     try:
-        response = llm_client.generate(prompt, system=system, max_tokens=320, temperature=0.7)
+        response = llm_client.generate(prompt, system=system, max_tokens=5000, temperature=0.7)
     except LLMError as exc:
         logger.warning("llm_section_generation_failed", extra={"error": str(exc)})
         return None
 
     text = response.strip()
+    _print_llm_exchange("response", section.section_id, text)
     return text or None
 
 

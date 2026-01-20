@@ -20,6 +20,7 @@ class LLMProvider(Protocol):
         system: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.2,
+        response_format: str | None = None,
     ) -> str: ...
 
 
@@ -40,6 +41,7 @@ class OllamaClient:
         system: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.2,
+        response_format: str | None = None,
     ) -> str:
         url = f"{self.base_url.rstrip('/')}/api/generate"
         logger.info(
@@ -55,6 +57,8 @@ class OllamaClient:
                 "num_predict": max_tokens,
             },
         }
+        if response_format:
+            payload["format"] = response_format
         if system:
             payload["system"] = system
         try:
@@ -88,6 +92,7 @@ class OpenAICompatibleClient:
         system: str | None = None,
         max_tokens: int = 512,
         temperature: float = 0.2,
+        response_format: str | None = None,
     ) -> str:
         url = f"{self.base_url.rstrip('/')}/v1/chat/completions"
         headers = {
@@ -108,6 +113,8 @@ class OpenAICompatibleClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
         try:
             response = httpx.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
             response.raise_for_status()

@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AuthConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     auth_required: bool = Field(default=True, validation_alias="AUTH_REQUIRED")
     dev_bypass_auth: bool = Field(default=False, validation_alias="DEV_BYPASS_AUTH")

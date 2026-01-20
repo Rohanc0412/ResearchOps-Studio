@@ -20,6 +20,8 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/api.Dockerfile
+    env_file:
+      - ../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
       LOG_LEVEL: INFO
@@ -46,10 +48,20 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/worker.Dockerfile
+    env_file:
+      - ../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
       LOG_LEVEL: INFO
       WORKER_POLL_SECONDS: "1.0"
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      HOSTED_LLM_BASE_URL: ${HOSTED_LLM_BASE_URL:-https://openrouter.ai/api}
+      HOSTED_LLM_MODEL: ${HOSTED_LLM_MODEL:-xiaomi/mimo-v2-flash:free}
+      LLM_DRAFT_REQUIRED: "true"
+      LLM_OUTLINE_REQUIRED: "true"
+      LLM_CLAIM_REQUIRED: "true"
+      LLM_EVALUATOR_REQUIRED: "true"
+      LLM_REPAIR_REQUIRED: "true"
     depends_on:
       postgres:
         condition: service_healthy

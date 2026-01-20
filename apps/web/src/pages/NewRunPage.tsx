@@ -12,6 +12,7 @@ type OutputType = "report" | "litmap" | "experiment_plan";
 type LlmProvider = "local" | "hosted";
 
 const DEFAULT_LOCAL_MODEL = "llama3.1:8b";
+const DEFAULT_HOSTED_MODEL = "xiaomi/mimo-v2-flash:free";
 
 export function NewRunPage() {
   const { projectId } = useParams();
@@ -21,8 +22,8 @@ export function NewRunPage() {
 
   const [prompt, setPrompt] = useState("");
   const [outputType, setOutputType] = useState<OutputType>("report");
-  const [llmProvider, setLlmProvider] = useState<LlmProvider>("local");
-  const [llmModel, setLlmModel] = useState(DEFAULT_LOCAL_MODEL);
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("hosted");
+  const [llmModel, setLlmModel] = useState(DEFAULT_HOSTED_MODEL);
   const [tokenLimit, setTokenLimit] = useState("");
   const [timeLimit, setTimeLimit] = useState("");
   const [connectorCallsLimit, setConnectorCallsLimit] = useState("");
@@ -81,11 +82,11 @@ export function NewRunPage() {
                 onChange={(e) => {
                   const next = e.target.value as LlmProvider;
                   setLlmProvider(next);
-                  if (next === "local" && !llmModel.trim()) {
+                  if (next === "local" && (!llmModel.trim() || llmModel === DEFAULT_HOSTED_MODEL)) {
                     setLlmModel(DEFAULT_LOCAL_MODEL);
                   }
-                  if (next === "hosted" && llmModel === DEFAULT_LOCAL_MODEL) {
-                    setLlmModel("");
+                  if (next === "hosted" && (!llmModel.trim() || llmModel === DEFAULT_LOCAL_MODEL)) {
+                    setLlmModel(DEFAULT_HOSTED_MODEL);
                   }
                 }}
               >
@@ -100,7 +101,7 @@ export function NewRunPage() {
             <Input
               value={llmModel}
               onChange={(e) => setLlmModel(e.target.value)}
-              placeholder={llmProvider === "local" ? DEFAULT_LOCAL_MODEL : "e.g. gpt-4o-mini"}
+              placeholder={llmProvider === "local" ? DEFAULT_LOCAL_MODEL : DEFAULT_HOSTED_MODEL}
             />
           </div>
 

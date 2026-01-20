@@ -7,13 +7,16 @@ Extracts citations associated with each claim.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 
 from sqlalchemy.orm import Session
 
 from researchops_core.observability import instrument_node
 from researchops_core.orchestrator.state import Claim, OrchestratorState
+from researchops_llm import LLMError, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +43,47 @@ def claim_extractor_node(state: OrchestratorState, session: Session) -> Orchestr
     if not draft_text:
         raise ValueError("Draft text not found in state")
 
-    # Extract claims
+    llm_client = None
+    require_llm = os.getenv("LLM_CLAIM_REQUIRED", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    try:
+        llm_client = get_llm_client(state.llm_provider, state.llm_model)
+    except LLMError as exc:
+        logger.warning("llm_unavailable", extra={"error": str(exc)})
+        if require_llm:
+            raise ValueError("LLM claim extraction is required but unavailable.") from exc
+
+    if llm_client:
+        claims = _extract_claims_with_llm(draft_text, llm_client)
+        if claims:
+            state.extracted_claims = claims
+            logger.info(
+                "claim_extraction_llm_complete",
+                extra={"run_id": str(state.run_id), "claims": len(claims)},
+            )
+            return state
+        if require_llm:
+            raise ValueError("LLM claim extraction failed.")
+
+    if require_llm and not llm_client:
+        raise ValueError("LLM claim extraction is required but no LLM client is configured.")
+
+    claims = _extract_claims_rule_based(draft_text)
+
+    state.extracted_claims = claims
+    logger.info(
+        "claim_extraction_complete",
+        extra={"run_id": str(state.run_id), "claims": len(claims)},
+    )
+
+    return state
+
+
+def _extract_claims_rule_based(draft_text: str) -> list[Claim]:
     claims = []
     claim_counter = 0
 
@@ -59,35 +102,95 @@ def claim_extractor_node(state: OrchestratorState, session: Session) -> Orchestr
         sentences = _split_into_sentences(section_text)
 
         for sentence in sentences:
-            # Check if sentence contains citations
             citations = _extract_citations(sentence)
-
-            # Skip if no content (e.g., headers)
             if len(sentence.strip()) < 20:
                 continue
 
-            # Determine if requires evidence
             requires_evidence = _requires_evidence(sentence)
-
-            # Create claim
             claim_counter += 1
-            claim = Claim(
-                claim_id=f"claim_{claim_counter}",
-                text=sentence.strip(),
+            claims.append(
+                Claim(
+                    claim_id=f"claim_{claim_counter}",
+                    text=sentence.strip(),
+                    section_id=section_id,
+                    citation_ids=citations,
+                    requires_evidence=requires_evidence,
+                )
+            )
+
+    return claims
+
+
+def _extract_json_list(text: str) -> list[dict] | None:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    json_text = text[start : end + 1]
+    try:
+        data = json.loads(json_text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _extract_claims_with_llm(draft_text: str, llm_client) -> list[Claim] | None:
+    prompt = (
+        "Extract atomic factual claims from the draft below.\n"
+        "Return ONLY a JSON array. Each item must contain:\n"
+        '- "text": the full claim sentence (keep any [CITE:...] tokens)\n'
+        '- "section_id": section number like "2.1" or null\n'
+        '- "requires_evidence": true/false\n\n'
+        "Draft:\n"
+        + draft_text
+    )
+    system = "You extract claims from research drafts and return strict JSON."
+    try:
+        response = llm_client.generate(
+            prompt,
+            system=system,
+            max_tokens=5000,
+            temperature=0.2,
+            response_format="json",
+        )
+    except LLMError as exc:
+        logger.warning("llm_claim_extraction_failed", extra={"error": str(exc)})
+        return None
+
+    items = _extract_json_list(response)
+    if not items:
+        logger.warning(
+            "llm_claim_extraction_parse_failed",
+            extra={"reason": "no_json", "response_preview": response[:1200]},
+        )
+        return None
+
+    claims: list[Claim] = []
+    for item in items:
+        text = str(item.get("text", "")).strip()
+        if len(text) < 20:
+            continue
+        section_id = item.get("section_id")
+        if not isinstance(section_id, str) or not section_id.strip():
+            section_id = None
+        citation_ids = _extract_citations(text)
+        requires_evidence = bool(item.get("requires_evidence", False)) or bool(citation_ids)
+        claims.append(
+            Claim(
+                claim_id=f"claim_{len(claims) + 1}",
+                text=text,
                 section_id=section_id,
-                citation_ids=citations,
+                citation_ids=citation_ids,
                 requires_evidence=requires_evidence,
             )
-            claims.append(claim)
+        )
 
-    # Update state
-    state.extracted_claims = claims
-    logger.info(
-        "claim_extraction_complete",
-        extra={"run_id": str(state.run_id), "claims": len(claims)},
-    )
-
-    return state
+    return claims or None
 
 
 def _split_into_sentences(text: str) -> list[str]:

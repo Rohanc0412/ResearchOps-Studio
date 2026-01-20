@@ -63,6 +63,7 @@ const EMPTY_REPORT: Report = {
 };
 
 const DEFAULT_LOCAL_MODEL = "llama3.1:8b";
+const DEFAULT_HOSTED_MODEL = "xiaomi/mimo-v2-flash:free";
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -425,8 +426,8 @@ export function ChatViewPage() {
   const [draft, setDraft] = useState("");
   const [autorunHandled, setAutorunHandled] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [llmProvider, setLlmProvider] = useState<LlmProvider>("local");
-  const [llmModel, setLlmModel] = useState(DEFAULT_LOCAL_MODEL);
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("hosted");
+  const [llmModel, setLlmModel] = useState(DEFAULT_HOSTED_MODEL);
 
   const [report, setReport] = useState<Report>(EMPTY_REPORT);
   const [highlightedSection, setHighlightedSection] = useState<string | null>(null);
@@ -822,11 +823,11 @@ export function ChatViewPage() {
                 onChange={(e) => {
                   const next = e.target.value as LlmProvider;
                   setLlmProvider(next);
-                  if (next === "local" && !llmModel.trim()) {
+                  if (next === "local" && (!llmModel.trim() || llmModel === DEFAULT_HOSTED_MODEL)) {
                     setLlmModel(DEFAULT_LOCAL_MODEL);
                   }
-                  if (next === "hosted" && llmModel === DEFAULT_LOCAL_MODEL) {
-                    setLlmModel("");
+                  if (next === "hosted" && (!llmModel.trim() || llmModel === DEFAULT_LOCAL_MODEL)) {
+                    setLlmModel(DEFAULT_HOSTED_MODEL);
                   }
                 }}
               >
@@ -837,7 +838,7 @@ export function ChatViewPage() {
             <input
               value={llmModel}
               onChange={(e) => setLlmModel(e.target.value)}
-              placeholder={llmProvider === "local" ? DEFAULT_LOCAL_MODEL : "hosted model"}
+              placeholder={llmProvider === "local" ? DEFAULT_LOCAL_MODEL : DEFAULT_HOSTED_MODEL}
               className="min-w-[200px] flex-1 rounded-md border border-slate-700 bg-slate-900/50 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
             />
           </div>

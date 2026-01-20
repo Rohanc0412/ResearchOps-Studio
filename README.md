@@ -146,6 +146,12 @@ LLM configuration (optional):
 - `OLLAMA_BASE_URL` (default `http://localhost:11434`)
 - `HOSTED_LLM_BASE_URL`, `HOSTED_LLM_API_KEY`, `HOSTED_LLM_MODEL` (for hosted)
 
+OpenRouter example:
+- `LLM_PROVIDER=hosted`
+- `HOSTED_LLM_BASE_URL=https://openrouter.ai/api`
+- `HOSTED_LLM_MODEL=xiaomi/mimo-v2-flash:free`
+- `HOSTED_LLM_API_KEY=...`
+
 ## Auth Overview (OIDC + JWT)
 
 Flow:

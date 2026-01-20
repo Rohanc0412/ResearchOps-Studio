@@ -31,6 +31,27 @@ from researchops_ingestion import get_embedding_provider, ingest_source
 logger = logging.getLogger(__name__)
 
 
+def _env_int(name: str, default: int, min_value: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = default
+    if min_value is not None:
+        return max(min_value, value)
+    return value
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @instrument_node("retrieve")
 def retriever_node(
     state: OrchestratorState, session: Session, max_sources: int = 20
@@ -52,12 +73,27 @@ def retriever_node(
     Returns:
         Updated state with retrieved_sources and evidence_snippets
     """
+    max_sources = _env_int("RETRIEVER_MAX_SOURCES", max_sources, min_value=1)
+    max_queries = _env_int("RETRIEVER_MAX_QUERIES", 5, min_value=1)
+    min_queries = _env_int("RETRIEVER_MIN_QUERIES", 2, min_value=1)
+    per_query_max = _env_int("RETRIEVER_MAX_PER_QUERY", 6, min_value=1)
+    max_keyword_results = _env_int("RETRIEVER_MAX_KEYWORD_RESULTS", per_query_max * 4, min_value=1)
+    max_vector_results = _env_int("RETRIEVER_MAX_VECTOR_RESULTS", min(5, per_query_max), min_value=0)
+    include_embeddings = _env_bool("RETRIEVER_INCLUDE_EMBEDDINGS", False)
+    vector_search_enabled = _env_bool("RETRIEVER_VECTOR_SEARCH", False)
+    max_snippets_per_source = _env_int("RETRIEVER_MAX_SNIPPETS_PER_SOURCE", 40, min_value=1)
+
     logger.info(
         "retriever_start",
         extra={
             "run_id": str(state.run_id),
             "query_count": len(state.generated_queries),
             "max_sources": max_sources,
+            "max_queries": max_queries,
+            "per_query_max": per_query_max,
+            "vector_search_enabled": vector_search_enabled,
+            "include_embeddings": include_embeddings,
+            "max_snippets_per_source": max_snippets_per_source,
         },
     )
     # Initialize connectors (OpenAlex + arXiv only)
@@ -65,7 +101,22 @@ def retriever_node(
     arxiv = ArXivConnector()
     connectors = [openalex, arxiv]
     embedding_provider = get_embedding_provider()
-    total_queries = min(len(state.generated_queries), 10)
+    total_queries = min(len(state.generated_queries), max_queries)
+    min_queries = min(min_queries, total_queries) if total_queries else 0
+    if vector_search_enabled:
+        has_embeddings = (
+            session.query(SnippetEmbeddingRow.id)
+            .filter(SnippetEmbeddingRow.tenant_id == state.tenant_id)
+            .limit(1)
+            .first()
+            is not None
+        )
+        if not has_embeddings:
+            vector_search_enabled = False
+            logger.info(
+                "retriever_vector_search_disabled",
+                extra={"run_id": str(state.run_id), "reason": "no_embeddings"},
+            )
     logger.info(
         "retriever_init",
         extra={
@@ -83,6 +134,7 @@ def retriever_node(
     total_vector = 0
     total_candidates = 0
     connectors_used = set()
+    seen_canonical: set[str] = set()
     for i, query in enumerate(state.generated_queries[:total_queries]):  # Limit to top 10 queries
         query_start = time.monotonic()
         logger.info(
@@ -114,8 +166,10 @@ def retriever_node(
             query=query,
             session=session,
             tenant_id=state.tenant_id,
-            embedding_provider=embedding_provider,
-            max_final_results=max_sources // 2,  # Get fewer per query to diversify
+            embedding_provider=embedding_provider if vector_search_enabled else None,
+            max_keyword_results=max_keyword_results,
+            max_vector_results=max_vector_results,
+            max_final_results=per_query_max,  # Get fewer per query to diversify
         )
 
         query_duration_ms = int((time.monotonic() - query_start) * 1000)
@@ -140,6 +194,20 @@ def retriever_node(
         total_vector += result.vector_count
         total_candidates += result.total_candidates
         connectors_used.update(result.connectors_used)
+        for source in result.sources:
+            seen_canonical.add(source.to_canonical_string())
+        if len(seen_canonical) >= max_sources and (i + 1) >= min_queries:
+            logger.info(
+                "retriever_early_stop",
+                extra={
+                    "run_id": str(state.run_id),
+                    "query_index": i + 1,
+                    "total_queries": total_queries,
+                    "source_count": len(all_sources),
+                    "unique_sources": len(seen_canonical),
+                },
+            )
+            break
 
     # Deduplicate across all queries
     from researchops_connectors import deduplicate_sources
@@ -309,6 +377,8 @@ def retriever_node(
             )
             .all()
         )
+        if max_snippets_per_source and len(snippets) > max_snippets_per_source:
+            snippets = snippets[:max_snippets_per_source]
         logger.info(
             "retriever_snippets_loaded",
             extra={
@@ -317,22 +387,24 @@ def retriever_node(
                 "snippet_count": len(snippets),
             },
         )
+        embeddings_by_id = {}
+        if include_embeddings and snippets:
+            snippet_ids = [snippet.id for snippet in snippets]
+            rows = (
+                session.query(SnippetEmbeddingRow)
+                .filter(
+                    SnippetEmbeddingRow.tenant_id == state.tenant_id,
+                    SnippetEmbeddingRow.snippet_id.in_(snippet_ids),
+                )
+                .all()
+            )
+            embeddings_by_id = {row.snippet_id: row.embedding for row in rows}
 
         missing_embeddings = 0
         for snippet in snippets:
-            # Get embedding
-            embedding_record = (
-                session.query(SnippetEmbeddingRow)
-                .filter(SnippetEmbeddingRow.snippet_id == snippet.id)
-                .first()
-            )
-
-            embedding_vector = None
-            if embedding_record:
-                embedding_vector = embedding_record.embedding
-            else:
+            embedding_vector = embeddings_by_id.get(snippet.id)
+            if include_embeddings and embedding_vector is None:
                 missing_embeddings += 1
-
             evidence_ref = EvidenceSnippetRef(
                 snippet_id=snippet.id,
                 source_id=source_id,

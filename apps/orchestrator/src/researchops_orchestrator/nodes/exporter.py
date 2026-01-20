@@ -37,6 +37,7 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     Returns:
         Updated state with artifacts
     """
+    print("[exporter start] Generating final artifacts...", flush=True)
     # Artifact 1: Literature Map
     literature_map = _generate_literature_map(state)
 
@@ -52,6 +53,7 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
         "report.md": final_report,
         "experiment_plan.md": experiment_plan,
     }
+    print(f"[exporter complete] Generated {len(state.artifacts)} artifacts", flush=True)
     logger.info(
         "export_complete",
         extra={"run_id": str(state.run_id), "artifacts": len(state.artifacts)},
