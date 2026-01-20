@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download, Edit3, Send, Share2, Sparkles, Trash2 } from "lucide-react";
+import jsPDF from "jspdf";
+import { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, Packer } from "docx";
+import { saveAs } from "file-saver";
 
 import { useProjectQuery } from "../api/projects";
 import { useCreateRunMutation, useCancelRunMutation, useRetryRunMutation } from "../api/runs";
@@ -705,13 +708,288 @@ export function ChatViewPage() {
     }
   }
 
-  function handleExport(format: string) {
+  async function handleExport(format: string) {
     setShowExportModal(false);
     setExportNotification(`Exporting as ${format.toUpperCase()}...`);
-    setTimeout(() => {
+
+    try {
+      const filename = `${report.title || 'report'}`;
+
+      if (format === 'md') {
+        // Markdown export
+        const content = generateMarkdown(report);
+        downloadText(content, `${filename}.md`, 'text/markdown');
+      } else if (format === 'html') {
+        // HTML export
+        const content = generateHTML(report);
+        downloadText(content, `${filename}.html`, 'text/html');
+      } else if (format === 'pdf') {
+        // PDF export
+        await generatePDF(report, filename);
+      } else if (format === 'docx') {
+        // Word export
+        await generateWord(report, filename);
+      }
+
       setExportNotification(`Report downloaded as ${format.toUpperCase()}`);
       setTimeout(() => setExportNotification(null), 2000);
-    }, 1500);
+    } catch (error) {
+      setExportNotification(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setTimeout(() => setExportNotification(null), 3000);
+    }
+  }
+
+  function downloadText(content: string, filename: string, mimeType: string) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function generatePDF(report: Report, filename: string) {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 20;
+    const maxWidth = pageWidth - 2 * margin;
+    let yPosition = margin;
+
+    // Title
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(report.title, margin, yPosition);
+    yPosition += 15;
+
+    // Sections
+    doc.setFontSize(11);
+    report.sections.forEach((section) => {
+      // Check if we need a new page
+      if (yPosition > pageHeight - 30) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      // Section heading
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.text(section.heading, margin, yPosition);
+      yPosition += 10;
+
+      // Section content
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(11);
+
+      section.content.forEach((item) => {
+        let text = item.text;
+
+        // Add citations
+        if (item.citations && item.citations.length > 0) {
+          text += ` ${item.citations.map(c => `[${c}]`).join('')}`;
+        }
+
+        // Add bullet point if needed
+        if (item.isBullet) {
+          text = `• ${text}`;
+        }
+
+        // Split text into lines
+        const lines = doc.splitTextToSize(text, maxWidth);
+
+        // Check if we need a new page for this content
+        const lineHeight = 7;
+        const totalHeight = lines.length * lineHeight;
+
+        if (yPosition + totalHeight > pageHeight - margin) {
+          doc.addPage();
+          yPosition = margin;
+        }
+
+        // Add the text
+        lines.forEach((line: string) => {
+          doc.text(line, margin + (item.isBullet ? 0 : 0), yPosition);
+          yPosition += lineHeight;
+        });
+
+        yPosition += 3; // Extra spacing between paragraphs
+      });
+
+      yPosition += 5; // Extra spacing between sections
+    });
+
+    doc.save(`${filename}.pdf`);
+  }
+
+  async function generateWord(report: Report, filename: string) {
+    const children: (Paragraph)[] = [];
+
+    // Title
+    children.push(
+      new Paragraph({
+        text: report.title,
+        heading: HeadingLevel.HEADING_1,
+        spacing: { after: 200 },
+      })
+    );
+
+    // Sections
+    report.sections.forEach((section) => {
+      // Section heading
+      children.push(
+        new Paragraph({
+          text: section.heading,
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 200, after: 100 },
+        })
+      );
+
+      // Section content
+      section.content.forEach((item) => {
+        const runs: TextRun[] = [new TextRun(item.text)];
+
+        // Add citations
+        if (item.citations && item.citations.length > 0) {
+          runs.push(
+            new TextRun({
+              text: ` ${item.citations.map(c => `[${c}]`).join('')}`,
+              superScript: true,
+              color: "10b981",
+            })
+          );
+        }
+
+        children.push(
+          new Paragraph({
+            children: runs,
+            bullet: item.isBullet ? { level: 0 } : undefined,
+            spacing: { after: 120 },
+          })
+        );
+      });
+    });
+
+    const doc = new Document({
+      sections: [
+        {
+          properties: {},
+          children,
+        },
+      ],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    saveAs(blob, `${filename}.docx`);
+  }
+
+  function generateMarkdown(report: Report): string {
+    let md = `# ${report.title}\n\n`;
+
+    report.sections.forEach((section) => {
+      md += `## ${section.heading}\n\n`;
+      section.content.forEach((item) => {
+        const prefix = item.isBullet ? '- ' : '';
+        let text = item.text;
+
+        // Replace citation markers with superscript numbers
+        if (item.citations && item.citations.length > 0) {
+          const citationStr = item.citations.map(c => `[${c}]`).join('');
+          text += citationStr;
+        }
+
+        md += `${prefix}${text}\n\n`;
+      });
+    });
+
+    return md;
+  }
+
+  function generateHTML(report: Report): string {
+    let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${report.title}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem;
+      line-height: 1.6;
+      color: #1e293b;
+    }
+    h1 {
+      color: #0f172a;
+      border-bottom: 2px solid #10b981;
+      padding-bottom: 0.5rem;
+    }
+    h2 {
+      color: #334155;
+      margin-top: 2rem;
+    }
+    p {
+      margin: 1rem 0;
+    }
+    ul {
+      margin: 1rem 0;
+    }
+    li {
+      margin: 0.5rem 0;
+    }
+    sup {
+      color: #10b981;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <h1>${report.title}</h1>
+`;
+
+    report.sections.forEach((section) => {
+      html += `  <h2>${section.heading}</h2>\n`;
+
+      const hasBullets = section.content.some(item => item.isBullet);
+      if (hasBullets) {
+        html += '  <ul>\n';
+      }
+
+      section.content.forEach((item) => {
+        let text = item.text;
+
+        // Add citation superscripts
+        if (item.citations && item.citations.length > 0) {
+          const citationStr = item.citations.map(c => `<sup>${c}</sup>`).join('');
+          text += citationStr;
+        }
+
+        if (item.isBullet) {
+          html += `    <li>${text}</li>\n`;
+        } else {
+          if (hasBullets) {
+            html += '  </ul>\n';
+          }
+          html += `  <p>${text}</p>\n`;
+          if (hasBullets) {
+            html += '  <ul>\n';
+          }
+        }
+      });
+
+      if (hasBullets) {
+        html += '  </ul>\n';
+      }
+    });
+
+    html += `</body>
+</html>`;
+
+    return html;
   }
 
   if (project.isLoading) {

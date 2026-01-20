@@ -283,25 +283,22 @@ print()
 # Test 8: Part 7 - Canonical ID priority
 print('[8/10] Testing canonical ID priority...')
 try:
-    # Test priority: DOI > PubMed > arXiv > OpenAlex > URL
+    # Test priority: DOI > arXiv > OpenAlex > URL
 
     id1 = CanonicalIdentifier(url='https://example.com')
     assert id1.get_primary() == ('url', 'https://example.com')
 
-    id2 = CanonicalIdentifier(arxiv_id='2401.12345', url='https://example.com')
-    assert id2.get_primary() == ('arxiv', '2401.12345')
+    id2 = CanonicalIdentifier(openalex_id='W123456', url='https://example.com')
+    assert id2.get_primary() == ('openalex', 'W123456')
 
-    id3 = CanonicalIdentifier(doi='10.1234/test', arxiv_id='2401.12345')
-    assert id3.get_primary() == ('doi', '10.1234/test')
+    id3 = CanonicalIdentifier(arxiv_id='2401.12345', openalex_id='W123456')
+    assert id3.get_primary() == ('arxiv', '2401.12345')
 
-    id4 = CanonicalIdentifier(pubmed_id='12345', arxiv_id='2401.12345')
-    assert id4.get_primary() == ('pubmed', '12345')
+    id4 = CanonicalIdentifier(doi='10.1234/test', arxiv_id='2401.12345')
+    assert id4.get_primary() == ('doi', '10.1234/test')
 
-    id5 = CanonicalIdentifier(doi='10.1234/test', pubmed_id='12345')
-    assert id5.get_primary() == ('doi', '10.1234/test')
-
-    print('   [PASS] Priority order correct: DOI > PubMed > arXiv > URL')
-    print('   [PASS] All 5 priority tests passed')
+    print('   [PASS] Priority order correct: DOI > arXiv > OpenAlex > URL')
+    print('   [PASS] All 4 priority tests passed')
 except Exception as e:
     print(f'   [FAIL] Priority error: {e}')
     sys.exit(1)
@@ -373,7 +370,7 @@ print('  [OK] Sanitization (HTML + security)')
 print('  [OK] Chunking (deterministic with offsets)')
 print('  [OK] Connectors (OpenAlex + arXiv)')
 print('  [OK] Deduplication (3 -> 2 unique)')
-print('  [OK] Canonical ID priority (DOI > PubMed > arXiv)')
+print('  [OK] Canonical ID priority (DOI > arXiv > OpenAlex)')
 print('  [OK] Run lifecycle (functions available)')
 print('  [OK] API endpoints (Evidence + Runs)')
 print()

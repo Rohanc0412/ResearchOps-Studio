@@ -113,7 +113,7 @@ The ResearchOps Studio application has been fully verified across all implemente
 - ✅ **Base Connector** - Rate limiting + retry logic + timeout
 - ✅ **OpenAlex** - 9 req/s (with email), comprehensive metadata
 - ✅ **arXiv** - 0.3 req/s, preprints, XML parsing
-- ✅ **Deduplication** - Canonical ID priority (DOI > PubMed > arXiv)
+- ✅ **Deduplication** - Canonical ID priority (DOI > arXiv > OpenAlex)
 - ✅ **Hybrid Retrieval** - Keyword + vector + reranking
 - ✅ **Statistics** - Comprehensive metrics for frontend
 
@@ -125,8 +125,8 @@ The ResearchOps Studio application has been fully verified across all implemente
 [PASS] Deduplication: 3 sources -> 2 unique
 [PASS] 1 duplicate removed
 [PASS] Metadata merged (arXiv ID + PDF URL preserved)
-[PASS] Canonical ID priority: DOI > PubMed > arXiv > URL
-[PASS] All 5 priority tests passed
+[PASS] Canonical ID priority: DOI > arXiv > OpenAlex > URL
+[PASS] All 4 priority tests passed
 ```
 
 ### Verification Details
@@ -144,10 +144,9 @@ The ResearchOps Studio application has been fully verified across all implemente
 **Canonical ID Priority:**
 ```
 URL only           → ("url", "https://...")
-arXiv + URL        → ("arxiv", "2401.12345")    # arXiv wins
+OpenAlex + URL     → ("openalex", "W123456")    # OpenAlex wins
+arXiv + OpenAlex   → ("arxiv", "2401.12345")    # arXiv wins
 DOI + arXiv        → ("doi", "10.1234/test")    # DOI wins
-PubMed + arXiv     → ("pubmed", "12345")        # PubMed wins
-DOI + PubMed       → ("doi", "10.1234/test")    # DOI wins
 ```
 
 ### Files Implemented

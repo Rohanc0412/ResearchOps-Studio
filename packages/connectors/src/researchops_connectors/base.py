@@ -42,7 +42,6 @@ class CanonicalIdentifier:
     """Canonical identifier with priority for deduplication."""
 
     doi: str | None = None
-    pubmed_id: str | None = None
     arxiv_id: str | None = None
     openalex_id: str | None = None
     url: str | None = None
@@ -51,15 +50,13 @@ class CanonicalIdentifier:
         """
         Get primary identifier based on priority.
 
-        Priority: DOI > PubMed > arXiv > OpenAlex > URL
+        Priority: DOI > arXiv > OpenAlex > URL
 
         Returns:
             (id_type, id_value) or None
         """
         if self.doi:
             return ("doi", self.doi)
-        if self.pubmed_id:
-            return ("pubmed", self.pubmed_id)
         if self.arxiv_id:
             return ("arxiv", self.arxiv_id)
         if self.openalex_id:

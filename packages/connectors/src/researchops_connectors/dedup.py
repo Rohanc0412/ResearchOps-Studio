@@ -2,7 +2,7 @@
 Deduplication logic for retrieved sources.
 
 Implements canonical ID priority:
-DOI > PubMed > arXiv > OpenAlex > URL
+DOI > arXiv > OpenAlex > URL
 
 This prevents:
 - Duplicate papers from different connectors
@@ -47,7 +47,7 @@ def deduplicate_sources(
     """
     Deduplicate sources using canonical ID priority.
 
-    Priority: DOI > PubMed > arXiv > OpenAlex > URL > Title hash
+    Priority: DOI > arXiv > OpenAlex > URL > Title hash
 
     When duplicates are found:
     1. Use highest priority identifier
@@ -145,8 +145,8 @@ def _merge_sources(
         # Prefer sources with more complete data
         completeness = sum([
             bool(s.canonical_id.doi),
-            bool(s.canonical_id.pubmed_id),
             bool(s.canonical_id.arxiv_id),
+            bool(s.canonical_id.openalex_id),
             bool(s.abstract),
             bool(s.full_text),
             bool(s.pdf_url),
@@ -164,8 +164,6 @@ def _merge_sources(
     for source in sources_sorted[1:]:
         if not merged_id.doi and source.canonical_id.doi:
             merged_id.doi = source.canonical_id.doi
-        if not merged_id.pubmed_id and source.canonical_id.pubmed_id:
-            merged_id.pubmed_id = source.canonical_id.pubmed_id
         if not merged_id.arxiv_id and source.canonical_id.arxiv_id:
             merged_id.arxiv_id = source.canonical_id.arxiv_id
         if not merged_id.openalex_id and source.canonical_id.openalex_id:

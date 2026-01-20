@@ -5,10 +5,6 @@ Provides:
 - Base connector interface with rate limiting
 - OpenAlex connector (free, comprehensive)
 - arXiv connector (preprints)
-- Crossref connector
-- PubMed connector
-- GitHub connector
-- Hugging Face connector
 - Deduplication with canonical ID priority
 - Hybrid retrieval (keyword + vector + rerank)
 """
@@ -27,13 +23,11 @@ from researchops_connectors.base import (
     SourceType,
     TimeoutError,
 )
-from researchops_connectors.crossref import CrossrefConnector
 from researchops_connectors.dedup import (
     DeduplicationStats,
     deduplicate_sources,
     filter_by_existing_ids,
 )
-from researchops_connectors.github import GitHubConnector
 from researchops_connectors.hybrid import (
     HybridRetrievalResult,
     hybrid_retrieve,
@@ -41,9 +35,7 @@ from researchops_connectors.hybrid import (
     rerank_sources,
     vector_search_existing,
 )
-from researchops_connectors.huggingface import HuggingFaceConnector
 from researchops_connectors.openalex import OpenAlexConnector
-from researchops_connectors.pubmed import PubMedConnector
 
 __all__ = [
     # Base classes
@@ -60,10 +52,6 @@ __all__ = [
     # Connectors
     "OpenAlexConnector",
     "ArXivConnector",
-    "CrossrefConnector",
-    "PubMedConnector",
-    "GitHubConnector",
-    "HuggingFaceConnector",
     # Deduplication
     "deduplicate_sources",
     "filter_by_existing_ids",

@@ -141,25 +141,22 @@ print()
 # Test 5: Canonical ID priority
 print('[5/5] Testing canonical ID priority...')
 try:
-    # Priority: DOI > PubMed > arXiv > OpenAlex > URL
+    # Priority: DOI > arXiv > OpenAlex > URL
 
     id1 = CanonicalIdentifier(url="https://example.com")
     assert id1.get_primary() == ("url", "https://example.com")
 
-    id2 = CanonicalIdentifier(arxiv_id="2401.12345", url="https://example.com")
-    assert id2.get_primary() == ("arxiv", "2401.12345")  # arXiv > URL
+    id2 = CanonicalIdentifier(openalex_id="W123456", url="https://example.com")
+    assert id2.get_primary() == ("openalex", "W123456")  # OpenAlex > URL
 
-    id3 = CanonicalIdentifier(doi="10.1234/test", arxiv_id="2401.12345")
-    assert id3.get_primary() == ("doi", "10.1234/test")  # DOI > arXiv
+    id3 = CanonicalIdentifier(arxiv_id="2401.12345", openalex_id="W123456")
+    assert id3.get_primary() == ("arxiv", "2401.12345")  # arXiv > OpenAlex
 
-    id4 = CanonicalIdentifier(pubmed_id="12345678", arxiv_id="2401.12345")
-    assert id4.get_primary() == ("pubmed", "12345678")  # PubMed > arXiv
-
-    id5 = CanonicalIdentifier(doi="10.1234/test", pubmed_id="12345678")
-    assert id5.get_primary() == ("doi", "10.1234/test")  # DOI > PubMed
+    id4 = CanonicalIdentifier(doi="10.1234/test", arxiv_id="2401.12345")
+    assert id4.get_primary() == ("doi", "10.1234/test")  # DOI > arXiv
 
     print('   [PASS] Canonical ID priority correct')
-    print('   [PASS] Priority order: DOI > PubMed > arXiv > OpenAlex > URL')
+    print('   [PASS] Priority order: DOI > arXiv > OpenAlex > URL')
 except Exception as e:
     print(f'   [FAIL] Canonical ID priority error: {e}')
     sys.exit(1)
@@ -174,7 +171,7 @@ print('  [OK] Connector imports (OpenAlex, arXiv)')
 print('  [OK] Rate limiting (9.0 req/s OpenAlex, 0.3 req/s arXiv)')
 print('  [OK] Deduplication (3 sources -> 2, 1 duplicate removed)')
 print('  [OK] Metadata merging (arXiv ID + PDF URL preserved)')
-print('  [OK] Canonical ID priority (DOI > PubMed > arXiv > URL)')
+print('  [OK] Canonical ID priority (DOI > arXiv > OpenAlex > URL)')
 print()
 print('Note: Network API calls skipped (would require live connectors)')
 print('      Run with actual network to test full search functionality')

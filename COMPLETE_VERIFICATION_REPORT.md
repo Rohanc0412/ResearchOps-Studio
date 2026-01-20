@@ -129,12 +129,11 @@ GET    /evidence/snippets/{id}  Get snippet with context
 **Canonical ID Priority:**
 ```
 Test 1: URL only           → ("url", "https://...")         ✅
-Test 2: arXiv + URL        → ("arxiv", "2401.12345")       ✅
-Test 3: DOI + arXiv        → ("doi", "10.1234/test")       ✅
-Test 4: PubMed + arXiv     → ("pubmed", "12345")           ✅
-Test 5: DOI + PubMed       → ("doi", "10.1234/test")       ✅
+Test 2: OpenAlex + URL     → ("openalex", "W123456")       ✅
+Test 3: arXiv + OpenAlex   → ("arxiv", "2401.12345")       ✅
+Test 4: DOI + arXiv        → ("doi", "10.1234/test")       ✅
 
-Priority Order: DOI > PubMed > arXiv > OpenAlex > URL
+Priority Order: DOI > arXiv > OpenAlex > URL
 ```
 
 ---

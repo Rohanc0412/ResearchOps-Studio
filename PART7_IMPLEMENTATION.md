@@ -28,7 +28,7 @@ Part 7 implements a production-grade retrieval system that determines the **qual
    - PDF URL support
 
 4. **Deduplication with canonical ID priority** ✅
-   - Priority: DOI > PubMed > arXiv > OpenAlex > URL
+   - Priority: DOI > arXiv > OpenAlex > URL
    - Intelligent metadata merging
    - Statistics tracking
    - Existing source filtering
@@ -77,15 +77,13 @@ class ConnectorProtocol(Protocol):
 @dataclass
 class CanonicalIdentifier:
     doi: str | None = None          # Priority 1
-    pubmed_id: str | None = None    # Priority 2
-    arxiv_id: str | None = None     # Priority 3
-    openalex_id: str | None = None  # Priority 4
-    url: str | None = None          # Priority 5
+    arxiv_id: str | None = None     # Priority 2
+    openalex_id: str | None = None  # Priority 3
+    url: str | None = None          # Priority 4
 ```
 
 **Priority Rules:**
 - DOI is authoritative (if present)
-- PubMed for biomedical literature
 - arXiv for preprints
 - OpenAlex for coverage
 - URL as fallback
@@ -588,7 +586,7 @@ Run `python test_connectors.py`:
 - ✅ Rate limiting (9.0 req/s OpenAlex, 0.3 req/s arXiv)
 - ✅ Deduplication (3 sources → 2, 1 duplicate removed)
 - ✅ Metadata merging (arXiv ID + PDF URL preserved)
-- ✅ Canonical ID priority (DOI > PubMed > arXiv > URL)
+- ✅ Canonical ID priority (DOI > arXiv > OpenAlex > URL)
 
 ### Network Tests (Requires Live API)
 
@@ -659,12 +657,10 @@ assert all(r.abstract for r in results)
 |-----------|------------|------------|-------|
 | OpenAlex | 1 req/s | 10 req/s | Email for polite pool |
 | arXiv | 0.3 req/s | - | 1 request per 3 seconds |
-| Crossref | 50 req/s | - | No auth required |
-| PubMed | 3 req/s | 10 req/s | API key recommended |
 
 ### Search Performance
 
-**Typical Query (5 connectors, 10 results each):**
+**Typical Query (2 connectors, 10 results each):**
 - Keyword search: ~2-5 seconds
 - Deduplication: <100ms
 - Reranking: <50ms

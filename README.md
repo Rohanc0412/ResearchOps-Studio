@@ -51,10 +51,6 @@ Issuer:
 
 - OpenAlex
 - arXiv
-- Crossref
-- PubMed
-- GitHub
-- Hugging Face
 
 ## Prerequisites
 

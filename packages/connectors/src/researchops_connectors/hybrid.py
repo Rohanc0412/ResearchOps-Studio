@@ -438,8 +438,6 @@ def _canonical_identifier_from_string(canonical_id: str | None) -> CanonicalIden
     id_value = id_value.strip()
     if id_type == "doi":
         return CanonicalIdentifier(doi=id_value)
-    if id_type == "pubmed":
-        return CanonicalIdentifier(pubmed_id=id_value)
     if id_type == "arxiv":
         return CanonicalIdentifier(arxiv_id=id_value)
     if id_type == "openalex":
