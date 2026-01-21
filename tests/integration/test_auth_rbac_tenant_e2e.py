@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import os
-import time
 from datetime import UTC, datetime, timedelta
-from threading import Event, Thread
 
 import httpx
 import jwt
@@ -12,8 +10,6 @@ from fastapi.testclient import TestClient
 from researchops_api import create_app
 from researchops_core.auth.config import get_auth_config
 from researchops_core.settings import get_settings
-from researchops_observability import configure_logging
-from researchops_workers.main import run_forever
 
 
 def _rsa_keypair():
@@ -113,33 +109,18 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
         assert me["tenant_id"] == "00000000-0000-0000-0000-0000000000aa"
         assert "researcher" in me["roles"]
 
-        stop = Event()
+        project = client.post("/projects", headers=headers_a, json={"name": "RBAC Project"}).json()
+        project_id = project["id"]
+        run = client.post(
+            f"/projects/{project_id}/runs",
+            headers=headers_a,
+            json={"prompt": "Summarize LLMs", "output_type": "report"},
+        ).json()
+        run_id = run.get("id") or run.get("run_id")
+        assert run_id is not None
 
-        def _worker() -> None:
-            configure_logging("researchops-worker", level="INFO")
-            run_forever(poll_seconds=0.01, stop_event=stop)
-
-        t = Thread(target=_worker, daemon=True)
-        t.start()
-
-        run_id = client.post("/runs/hello", headers=headers_a).json()["run_id"]
-
-        deadline = time.time() + 5.0
-        last = None
-        while time.time() < deadline:
-            last = client.get(f"/runs/{run_id}", headers=headers_a).json()
-            if last["status"] == "succeeded":
-                break
-            time.sleep(0.05)
-
-        stop.set()
-        t.join(timeout=1.0)
-
-        assert last is not None
-        assert last["status"] == "succeeded"
-        artifacts = client.get(f"/runs/{run_id}/artifacts", headers=headers_a).json()
-        assert len(artifacts) == 1
-        assert artifacts[0]["type"] == "hello"
+        run_state = client.get(f"/runs/{run_id}", headers=headers_a).json()
+        assert run_state["status"] in {"created", "queued", "running"}
 
         # Cross-tenant access is blocked (404, because tenant-scoped query)
         token_b = _mint_token(

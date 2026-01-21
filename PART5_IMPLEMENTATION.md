@@ -175,70 +175,41 @@ ALLOWED_TRANSITIONS = {
 
 ## Orchestrator Changes
 
-### Updated: `apps/orchestrator/src/researchops_orchestrator/hello.py`
+### Updated: `apps/orchestrator/src/researchops_orchestrator/runner.py`
 
 **Integration with Lifecycle Service:**
 
-All LangGraph nodes now:
-1. Check for cancellation at the start
-2. Emit stage_start before work
-3. Execute stage logic with error handling
-4. Emit stage_finish on success
-5. Emit error event on failure
+The orchestrator runner transitions runs to `running` before graph execution, persists artifacts on completion,
+and marks runs `succeeded` or `failed` based on outcomes.
 
-**Example from `_create_run` node:**
+**Example from `run_orchestrator`:**
 
 ```python
-def _create_run(state: HelloState, *, session: Session) -> HelloState:
-    # Check cancellation
-    if check_cancel_requested(session=session, tenant_id=state["tenant_id"], run_id=state["run_id"]):
-        transition_run_status(
-            session=session,
-            tenant_id=state["tenant_id"],
-            run_id=state["run_id"],
-            to_status=RunStatusDb.canceled,
-            finished_at=_now_utc(),
-        )
-        raise RuntimeError("Run was canceled")
-
-    # Transition to running
-    transition_run_status(
-        session=session,
-        tenant_id=state["tenant_id"],
-        run_id=state["run_id"],
-        to_status=RunStatusDb.running,
-        started_at=_now_utc(),
-    )
-
-    # Emit stage_start
-    emit_stage_start(
-        session=session,
-        tenant_id=state["tenant_id"],
-        run_id=state["run_id"],
-        stage="retrieve",
-        payload={"step": "create_run"},
-    )
-
-    return state
+transition_run_status(
+    session=session,
+    tenant_id=tenant_id,
+    run_id=run_id,
+    to_status=RunStatusDb.running,
+    current_stage="retrieve",
+)
+session.commit()
 ```
 
 **Error Handling:**
 
-Added try/catch in `process_hello_run` to emit error events on unexpected failures:
+`run_orchestrator` catches unexpected failures, rolls back, and marks the run failed:
 
 ```python
 except Exception as e:
-    if "canceled" in str(e).lower():
-        # Already handled
-        pass
-    else:
-        emit_error_event(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            error_code="workflow_error",
-            reason=str(e),
-        )
+    session.rollback()
+    transition_run_status(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        to_status=RunStatusDb.failed,
+        failure_reason=str(e),
+    )
+    session.commit()
     raise
 ```
 
@@ -348,7 +319,7 @@ curl -X POST http://localhost:8000/runs/<RUN_ID>/retry
 ### Modified Files
 - `README.md` - Added SSE documentation
 - `apps/api/src/researchops_api/routes/runs.py` - SSE streaming + lifecycle integration
-- `apps/orchestrator/src/researchops_orchestrator/hello.py` - Event emission + cancellation checks
+- `apps/orchestrator/src/researchops_orchestrator/runner.py` - Orchestrator runner + lifecycle transitions
 - `db/models/runs.py` - Added cancel_requested_at, retry_count, blocked state
 - `db/models/run_events.py` - Added event_number, event_type
 - `db/services/truth.py` - Enhanced list_run_events, append_run_event
@@ -374,9 +345,17 @@ docker compose -f infra/compose.yaml up --build
 ### 3. Test Run Lifecycle
 
 ```powershell
+# Create project
+$project = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects" `
+  -ContentType "application/json" `
+  -Body '{"name":"Demo Project"}'
+$projectId = $project.id
+
 # Create run
-$r = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/hello"
-$runId = $r.run_id
+$run = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects/$projectId/runs" `
+  -ContentType "application/json" `
+  -Body '{"prompt":"Summarize recent work on retrieval-augmented generation","output_type":"report"}'
+$runId = $run.run_id
 
 # Check status
 Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
@@ -387,6 +366,7 @@ curl.exe -N -H "Accept: text/event-stream" "http://localhost:8000/runs/$runId/ev
 # Cancel
 Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/$runId/cancel"
 ```
+
 
 ### 4. Run Integration Tests
 

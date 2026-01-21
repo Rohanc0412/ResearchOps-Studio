@@ -1,22 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { FolderKanban, FolderPlus, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
+import { FolderKanban, FolderPlus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
+import { useChatConversationsQuery } from "../../api/chat";
 import { cx } from "../../utils/format";
 import { useProjectsQuery } from "../../api/projects";
-
-type ChatThreadSummary = {
-  id: string;
-  title: string;
-  createdAt: string;
-  messages?: unknown[];
-};
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const projects = useProjectsQuery();
   const projectItems = useMemo(() => projects.data ?? [], [projects.data]);
-  const [chatMap, setChatMap] = useState<Record<string, ChatThreadSummary[]>>({});
   const nav = useNavigate();
   const location = useLocation();
 
@@ -25,83 +18,8 @@ export function Sidebar() {
     return match ? decodeURIComponent(match[1]) : null;
   }, [location.pathname]);
 
-  // Also detect active chat from URL
-  const activeChatId = useMemo(() => {
-    const match = location.pathname.match(/^\/projects\/[^/]+\/chats\/([^/]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
-  }, [location.pathname]);
-
-  useEffect(() => {
-    const next: Record<string, ChatThreadSummary[]> = {};
-    for (const p of projectItems) {
-      const key = `researchops.chats.${p.id}`;
-      const raw = window.localStorage.getItem(key);
-      if (!raw) {
-        next[p.id] = [];
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(raw) as ChatThreadSummary[];
-        next[p.id] = Array.isArray(parsed) ? parsed : [];
-      } catch {
-        next[p.id] = [];
-      }
-    }
-    setChatMap(next);
-  }, [projectItems]);
-
-  useEffect(() => {
-    function handleUpdate() {
-      const next: Record<string, ChatThreadSummary[]> = {};
-      for (const p of projectItems) {
-        const key = `researchops.chats.${p.id}`;
-        const raw = window.localStorage.getItem(key);
-        if (!raw) {
-          next[p.id] = [];
-          continue;
-        }
-        try {
-          const parsed = JSON.parse(raw) as ChatThreadSummary[];
-          next[p.id] = Array.isArray(parsed) ? parsed : [];
-        } catch {
-          next[p.id] = [];
-        }
-      }
-      setChatMap(next);
-    }
-
-    window.addEventListener("researchops-chats-updated", handleUpdate);
-    window.addEventListener("storage", handleUpdate);
-    return () => {
-      window.removeEventListener("researchops-chats-updated", handleUpdate);
-      window.removeEventListener("storage", handleUpdate);
-    };
-  }, [projectItems]);
-
-  function createChat(projectId: string) {
-    const key = `researchops.chats.${projectId}`;
-    const raw = window.localStorage.getItem(key);
-    let existing: ChatThreadSummary[] = [];
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as ChatThreadSummary[];
-        if (Array.isArray(parsed)) existing = parsed;
-      } catch {
-        existing = [];
-      }
-    }
-    const now = new Date().toISOString();
-    const chat = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      title: `Chat ${existing.length + 1}`,
-      createdAt: now,
-      messages: []
-    };
-    const next = [chat, ...existing];
-    window.localStorage.setItem(key, JSON.stringify(next));
-    window.dispatchEvent(new Event("researchops-chats-updated"));
-    nav(`/projects/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chat.id)}`);
-  }
+  const activeChatsQuery = useChatConversationsQuery(activeProjectId ?? "", 20);
+  const activeChats = activeChatsQuery.data?.items ?? [];
 
   return (
     <aside
@@ -180,7 +98,6 @@ export function Sidebar() {
           ) : (
             projectItems.map((p) => {
               const isActive = p.id === activeProjectId;
-              const chats = chatMap[p.id] ?? [];
               return (
                 <div key={p.id} className="flex flex-col gap-1">
                   <NavLink
@@ -202,14 +119,14 @@ export function Sidebar() {
 
                   {!collapsed ? (
                     <div className="ml-6 flex flex-col gap-1">
-                      {isActive && chats.length > 0 ? (
+                      {isActive && activeChats.length > 0 ? (
                         <>
                           <div className="px-2 text-xs font-semibold uppercase text-slate-500">Recent</div>
-                          {chats.slice(0, 3).map((chat) => (
+                          {activeChats.slice(0, 3).map((chat) => (
                             <SidebarLink
                               key={chat.id}
                               to={`/projects/${encodeURIComponent(p.id)}/chats/${encodeURIComponent(chat.id)}`}
-                              label={chat.title}
+                              label={chat.title ?? "Untitled chat"}
                               collapsed={collapsed}
                             />
                           ))}
@@ -245,4 +162,3 @@ function SidebarLink({ to, label, collapsed }: { to: string; label: string; coll
     </NavLink>
   );
 }
-

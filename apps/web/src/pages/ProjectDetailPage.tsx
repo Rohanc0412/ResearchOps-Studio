@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Folder, MessageSquare, Plus } from "lucide-react";
 
+import { useChatConversationsQuery, useCreateConversationMutation } from "../api/chat";
 import { useProjectQuery } from "../api/projects";
 import { Card } from "../components/ui/Card";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
@@ -9,114 +10,33 @@ import { Spinner } from "../components/ui/Spinner";
 import { Textarea } from "../components/ui/Textarea";
 import { formatTs } from "../utils/format";
 
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  ts: string;
-  runId?: string;
-};
-
-type Chat = {
-  id: string;
-  title: string;
-  createdAt: string;
-  messages: ChatMessage[];
-};
-
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 export function ProjectDetailPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
   const id = projectId ?? "";
   const project = useProjectQuery(id);
-
-  const storageKey = useMemo(() => (id ? `researchops.chats.${id}` : ""), [id]);
-  const [chats, setChats] = useState<Chat[]>(() => {
-    // Initialize from localStorage synchronously
-    if (!id) return [];
-    const key = `researchops.chats.${id}`;
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw) as Chat[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
+  const conversations = useChatConversationsQuery(id);
+  const createConversation = useCreateConversationMutation();
   const [draft, setDraft] = useState("");
 
-  // Reload chats when project changes
-  useEffect(() => {
-    if (!storageKey) return;
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) {
-      setChats([]);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as Chat[];
-      setChats(Array.isArray(parsed) ? parsed : []);
-    } catch {
-      setChats([]);
-    }
-  }, [storageKey]);
-
-  // Save chats to localStorage (only when chats actually change, not on initial load)
-  const isInitialMount = useRef(true);
-  useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
-    if (!storageKey) return;
-    window.localStorage.setItem(storageKey, JSON.stringify(chats));
-  }, [storageKey, chats]);
-
   const recentChats = useMemo(() => {
-    return chats
-      .map((chat) => {
-        const last = chat.messages[chat.messages.length - 1];
-        return {
-          id: chat.id,
-          title: chat.title,
-          preview: last ? last.content.slice(0, 60) : "",
-          ts: last ? last.ts : chat.createdAt
-        };
-      })
-      .slice(0, 10);
-  }, [chats]);
+    const items = conversations.data?.items ?? [];
+    return items.slice(0, 10).map((chat) => ({
+      id: chat.id,
+      title: chat.title ?? "Untitled chat",
+      ts: chat.last_message_at ?? chat.created_at
+    }));
+  }, [conversations.data]);
 
-  function createNewChat(initialMessage?: string) {
-    const now = new Date().toISOString();
-    const chatId = generateId();
-    const chat: Chat = {
-      id: chatId,
-      title: initialMessage ? initialMessage.slice(0, 30) + (initialMessage.length > 30 ? "..." : "") : `Chat ${chats.length + 1}`,
-      createdAt: now,
-      messages: initialMessage
-        ? [
-            {
-              id: generateId(),
-              role: "user" as const,
-              content: initialMessage,
-              ts: now
-            }
-          ]
-        : []
-    };
-    const updatedChats = [chat, ...chats];
-    setChats(updatedChats);
-    // Save immediately to localStorage before navigating
-    window.localStorage.setItem(storageKey, JSON.stringify(updatedChats));
-    // Notify sidebar of chat update
-    window.dispatchEvent(new Event("researchops-chats-updated"));
-    // Navigate to the new chat
-    navigate(`/projects/${id}/chats/${chatId}${initialMessage ? "?autorun=true" : ""}`);
+  async function createNewChat(initialMessage?: string) {
+    if (!id) return;
+    const title = initialMessage
+      ? initialMessage.slice(0, 30) + (initialMessage.length > 30 ? "..." : "")
+      : undefined;
+    const chat = await createConversation.mutateAsync({ project_id: id, title });
+    navigate(`/projects/${id}/chats/${chat.id}`, {
+      state: initialMessage ? { initialMessage } : undefined
+    });
   }
 
   function openChat(chatId: string) {
@@ -195,7 +115,9 @@ export function ProjectDetailPage() {
         </div>
 
         {/* Chats list */}
-        {recentChats.length > 0 && (
+        {conversations.isLoading ? (
+          <div className="py-8 text-center text-slate-500">Loading conversations...</div>
+        ) : recentChats.length > 0 ? (
           <div>
             <div className="mb-3 text-xs font-medium uppercase text-slate-500">Recent chats</div>
             <div className="flex flex-col gap-2">
@@ -211,18 +133,13 @@ export function ProjectDetailPage() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="font-medium text-slate-200">{chat.title}</div>
-                    {chat.preview && (
-                      <div className="truncate text-sm text-slate-500">{chat.preview}</div>
-                    )}
                   </div>
                   <div className="text-xs text-slate-500">{formatTs(chat.ts)}</div>
                 </button>
               ))}
             </div>
           </div>
-        )}
-
-        {recentChats.length === 0 && (
+        ) : (
           <div className="py-8 text-center text-slate-500">
             No chats yet. Start a conversation above or click "New chat".
           </div>

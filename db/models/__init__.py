@@ -2,6 +2,8 @@ __all__ = [
     "ArtifactRow",
     "AuditLogRow",
     "Base",
+    "ChatConversationRow",
+    "ChatMessageRow",
     "ClaimMapRow",
     "JobRow",
     "ProjectRow",
@@ -16,6 +18,8 @@ __all__ = [
 from db.models.artifacts import ArtifactRow
 from db.models.audit_logs import AuditLogRow
 from db.models.base import Base
+from db.models.chat_conversations import ChatConversationRow
+from db.models.chat_messages import ChatMessageRow
 from db.models.claim_map import ClaimMapRow
 from db.models.jobs import JobRow
 from db.models.projects import ProjectRow

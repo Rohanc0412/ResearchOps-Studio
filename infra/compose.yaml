@@ -54,7 +54,6 @@ services:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
       LOG_LEVEL: INFO
       WORKER_POLL_SECONDS: "1.0"
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       HOSTED_LLM_BASE_URL: ${HOSTED_LLM_BASE_URL:-https://openrouter.ai/api}
       HOSTED_LLM_MODEL: ${HOSTED_LLM_MODEL:-xiaomi/mimo-v2-flash:free}
       LLM_DRAFT_REQUIRED: "true"

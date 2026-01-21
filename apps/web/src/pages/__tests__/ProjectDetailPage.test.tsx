@@ -1,32 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { ProjectDetailPage } from "../ProjectDetailPage";
 
 const mockUseProjectQuery = vi.fn();
-const mockUseCreateRunMutation = vi.fn();
-const mockUseCancelRunMutation = vi.fn();
-const mockUseRetryRunMutation = vi.fn();
-const mockUseSSE = vi.fn();
-const mockApiFetchJson = vi.fn();
+const mockUseChatConversationsQuery = vi.fn();
+const mockUseCreateConversationMutation = vi.fn();
 
 vi.mock("../../api/projects", () => ({
   useProjectQuery: (...args: unknown[]) => mockUseProjectQuery(...args)
 }));
 
-vi.mock("../../api/runs", () => ({
-  useCreateRunMutation: (...args: unknown[]) => mockUseCreateRunMutation(...args),
-  useCancelRunMutation: (...args: unknown[]) => mockUseCancelRunMutation(...args),
-  useRetryRunMutation: (...args: unknown[]) => mockUseRetryRunMutation(...args)
-}));
-
-vi.mock("../../hooks/useSSE", () => ({
-  useSSE: (...args: unknown[]) => mockUseSSE(...args)
-}));
-
-vi.mock("../../api/client", () => ({
-  apiFetchJson: (...args: unknown[]) => mockApiFetchJson(...args)
+vi.mock("../../api/chat", () => ({
+  useChatConversationsQuery: (...args: unknown[]) => mockUseChatConversationsQuery(...args),
+  useCreateConversationMutation: () => mockUseCreateConversationMutation()
 }));
 
 function renderPage() {
@@ -39,88 +27,59 @@ function renderPage() {
   );
 }
 
-describe("ProjectDetailPage run banner", () => {
-  it("does not add run event messages to the chat", async () => {
+describe("ProjectDetailPage conversations", () => {
+  it("renders recent chats list", () => {
     mockUseProjectQuery.mockReturnValue({
       isLoading: false,
       isError: false,
       data: { id: "proj-1", name: "Test Project", created_at: new Date().toISOString() }
     });
-    mockUseCreateRunMutation.mockReturnValue({
-      isPending: false,
-      mutateAsync: vi.fn().mockResolvedValue({ id: "run-1" })
+    mockUseChatConversationsQuery.mockReturnValue({
+      isLoading: false,
+      data: {
+        items: [
+          {
+            id: "chat-1",
+            title: "Chat One",
+            created_at: new Date().toISOString(),
+            last_message_at: new Date().toISOString()
+          }
+        ]
+      }
     });
-    mockUseCancelRunMutation.mockReturnValue({ mutateAsync: vi.fn() });
-    mockUseRetryRunMutation.mockReturnValue({ mutateAsync: vi.fn() });
-    mockUseSSE.mockReturnValue({
-      events: [
-        {
-          id: 1,
-          ts: new Date().toISOString(),
-          level: "info",
-          stage: "retrieve",
-          message: "Starting stage: retrieve",
-          payload: { step: "create_run" }
-        }
-      ],
-      state: "open",
-      lastError: null,
-      latestStage: null,
-      reset: vi.fn()
-    });
+    mockUseCreateConversationMutation.mockReturnValue({ mutateAsync: vi.fn() });
 
     renderPage();
 
-    fireEvent.change(screen.getByPlaceholderText("Ask about this project..."), {
-      target: { value: "What is LLM?" }
-    });
-    fireEvent.click(screen.getByText("Send"));
-
-    await waitFor(() => {
-      expect(screen.queryByText(/Starting stage: retrieve/i)).toBeNull();
-    });
+    expect(screen.getByText("Recent chats")).toBeTruthy();
+    expect(screen.getByText("Chat One")).toBeTruthy();
   });
 
-  it("renders a banner and clears it on success", async () => {
+  it("creates a new chat from quick start", async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({ id: "chat-2" });
     mockUseProjectQuery.mockReturnValue({
       isLoading: false,
       isError: false,
       data: { id: "proj-1", name: "Test Project", created_at: new Date().toISOString() }
     });
-    mockUseCreateRunMutation.mockReturnValue({
-      isPending: false,
-      mutateAsync: vi.fn().mockResolvedValue({ id: "run-2" })
+    mockUseChatConversationsQuery.mockReturnValue({
+      isLoading: false,
+      data: { items: [] }
     });
-    mockUseCancelRunMutation.mockReturnValue({ mutateAsync: vi.fn() });
-    mockUseRetryRunMutation.mockReturnValue({ mutateAsync: vi.fn() });
-    mockApiFetchJson.mockResolvedValueOnce([]);
-    mockUseSSE.mockReturnValue({
-      events: [
-        {
-          id: 2,
-          ts: new Date().toISOString(),
-          level: "info",
-          stage: "export",
-          message: "Finished stage: export",
-          payload: { status: "succeeded" }
-        }
-      ],
-      state: "open",
-      lastError: null,
-      latestStage: null,
-      reset: vi.fn()
-    });
+    mockUseCreateConversationMutation.mockReturnValue({ mutateAsync });
 
     renderPage();
 
-    fireEvent.change(screen.getByPlaceholderText("Ask about this project..."), {
-      target: { value: "Summarize LLMs" }
+    fireEvent.change(screen.getByPlaceholderText("Start a new chat in Test Project..."), {
+      target: { value: "Hello chat" }
     });
-    fireEvent.click(screen.getByText("Send"));
+    fireEvent.click(screen.getByText("Start chat"));
 
     await waitFor(() => {
-      expect(screen.queryByText(/Answer now/i)).toBeNull();
-      expect(screen.getByText(/Run completed/i)).toBeTruthy();
+      expect(mutateAsync).toHaveBeenCalledWith({
+        project_id: "proj-1",
+        title: "Hello chat"
+      });
     });
   });
 });

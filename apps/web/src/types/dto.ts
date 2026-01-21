@@ -136,6 +136,68 @@ export const RunEventSchema = z
 
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
+export const ChatMessageTypeSchema = z.enum([
+  "chat",
+  "pipeline_offer",
+  "action",
+  "run_started",
+  "error"
+]);
+export type ChatMessageType = z.infer<typeof ChatMessageTypeSchema>;
+
+export const ChatRoleSchema = z.enum(["user", "assistant", "system"]);
+export type ChatRole = z.infer<typeof ChatRoleSchema>;
+
+export type ChatMessage = {
+  id: string;
+  role: ChatRole;
+  type: ChatMessageType;
+  content_text: string;
+  content_json?: Record<string, unknown> | null;
+  created_at: string;
+  [k: string]: unknown;
+};
+
+const ChatMessageWireSchema = z
+  .object({
+    id: z.string().min(1),
+    role: ChatRoleSchema,
+    type: ChatMessageTypeSchema,
+    content_text: z.string(),
+    content_json: z.record(z.unknown()).nullable().optional(),
+    created_at: z.string()
+  })
+  .passthrough();
+
+export const ChatMessageSchema: z.ZodType<ChatMessage, z.ZodTypeDef, unknown> = ChatMessageWireSchema.transform(
+  (m): ChatMessage => ({ ...m })
+);
+
+export type ChatConversation = {
+  id: string;
+  title?: string | null;
+  created_at: string;
+  last_message_at?: string | null;
+  [k: string]: unknown;
+};
+
+const ChatConversationWireSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    conversation_id: z.string().min(1).optional(),
+    title: z.string().nullable().optional(),
+    created_at: z.string(),
+    last_message_at: z.string().nullable().optional()
+  })
+  .passthrough();
+
+export const ChatConversationSchema: z.ZodType<ChatConversation, z.ZodTypeDef, unknown> =
+  ChatConversationWireSchema.transform((c): ChatConversation => {
+    const id = c.id ?? c.conversation_id;
+    if (!id) throw new Error("Conversation is missing id");
+    return { ...c, id };
+  });
+
 export type Snippet = {
   id: string;
   source_id?: string | null;

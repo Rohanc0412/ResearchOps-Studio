@@ -104,7 +104,7 @@ The ResearchOps Studio application has been fully verified with comprehensive wo
 **Files Modified/Created:**
 - `packages/core/src/researchops_core/runs/lifecycle.py` (NEW, 500+ lines)
 - `apps/api/src/researchops_api/routes/runs.py` (REWRITTEN, 400+ lines)
-- `apps/orchestrator/src/researchops_orchestrator/hello.py` (MODIFIED)
+- `apps/orchestrator/src/researchops_orchestrator/runner.py` (MODIFIED)
 - `db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py` (NEW)
 - `tests/integration/test_run_lifecycle_and_sse.py` (NEW, 15+ tests)
 

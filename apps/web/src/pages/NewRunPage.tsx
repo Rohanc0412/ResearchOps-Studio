@@ -9,9 +9,7 @@ import { Input } from "../components/ui/Input";
 import { Textarea } from "../components/ui/Textarea";
 
 type OutputType = "report" | "litmap" | "experiment_plan";
-type LlmProvider = "local" | "hosted";
 
-const DEFAULT_LOCAL_MODEL = "llama3.1:8b";
 const DEFAULT_HOSTED_MODEL = "xiaomi/mimo-v2-flash:free";
 
 export function NewRunPage() {
@@ -22,7 +20,6 @@ export function NewRunPage() {
 
   const [prompt, setPrompt] = useState("");
   const [outputType, setOutputType] = useState<OutputType>("report");
-  const [llmProvider, setLlmProvider] = useState<LlmProvider>("hosted");
   const [llmModel, setLlmModel] = useState(DEFAULT_HOSTED_MODEL);
   const [tokenLimit, setTokenLimit] = useState("");
   const [timeLimit, setTimeLimit] = useState("");
@@ -41,7 +38,7 @@ export function NewRunPage() {
       prompt: prompt.trim(),
       output_type: outputType,
       budget_override: budgetOverride,
-      llm_provider: llmProvider,
+      llm_provider: "hosted",
       llm_model: llmModel.trim() ? llmModel.trim() : undefined
     });
     nav(`/runs/${encodeURIComponent(run.id)}`, { replace: true });
@@ -75,34 +72,13 @@ export function NewRunPage() {
               </select>
             </div>
             <div>
-              <div className="mb-1 text-xs font-medium text-slate-400">LLM Provider</div>
-              <select
-                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
-                value={llmProvider}
-                onChange={(e) => {
-                  const next = e.target.value as LlmProvider;
-                  setLlmProvider(next);
-                  if (next === "local" && (!llmModel.trim() || llmModel === DEFAULT_HOSTED_MODEL)) {
-                    setLlmModel(DEFAULT_LOCAL_MODEL);
-                  }
-                  if (next === "hosted" && (!llmModel.trim() || llmModel === DEFAULT_LOCAL_MODEL)) {
-                    setLlmModel(DEFAULT_HOSTED_MODEL);
-                  }
-                }}
-              >
-                <option value="local">local (Ollama)</option>
-                <option value="hosted">hosted</option>
-              </select>
+              <div className="mb-1 text-xs font-medium text-slate-400">LLM Model</div>
+              <Input
+                value={llmModel}
+                onChange={(e) => setLlmModel(e.target.value)}
+                placeholder={DEFAULT_HOSTED_MODEL}
+              />
             </div>
-          </div>
-
-          <div>
-            <div className="mb-1 text-xs font-medium text-slate-400">Model</div>
-            <Input
-              value={llmModel}
-              onChange={(e) => setLlmModel(e.target.value)}
-              placeholder={llmProvider === "local" ? DEFAULT_LOCAL_MODEL : DEFAULT_HOSTED_MODEL}
-            />
           </div>
 
           <div>

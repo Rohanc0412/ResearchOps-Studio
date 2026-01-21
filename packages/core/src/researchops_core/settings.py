@@ -20,8 +20,6 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000)
     worker_poll_seconds: float = Field(default=1.0, gt=0.0)
     llm_provider: str | None = Field(default=None)
-    llm_local_model: str | None = Field(default=None)
-    ollama_base_url: str | None = Field(default=None)
     hosted_llm_base_url: str | None = Field(default=None)
     hosted_llm_api_key: str | None = Field(default=None)
     hosted_llm_model: str | None = Field(default=None)

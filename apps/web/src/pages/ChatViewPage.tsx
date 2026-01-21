@@ -1,34 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Download, Edit3, Send, Share2, Sparkles, Trash2 } from "lucide-react";
 import jsPDF from "jspdf";
-import { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, Packer } from "docx";
+import { Document, Paragraph, TextRun, HeadingLevel, Packer } from "docx";
 import { saveAs } from "file-saver";
 
+import { useChatConversationsQuery, useChatMessagesQuery, useSendChatMessageMutation } from "../api/chat";
 import { useProjectQuery } from "../api/projects";
-import { useCreateRunMutation, useCancelRunMutation, useRetryRunMutation } from "../api/runs";
+import { useCancelRunMutation, useRetryRunMutation } from "../api/runs";
 import { apiFetchJson } from "../api/client";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
 import { useSSE } from "../hooks/useSSE";
-import { ArtifactSchema, type Artifact } from "../types/dto";
+import { ArtifactSchema, type Artifact, type ChatMessage } from "../types/dto";
 import { RunThinkingBanner } from "../components/run/RunThinkingBanner";
 import { z } from "zod";
-
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  ts: string;
-  runId?: string;
-};
-
-type Chat = {
-  id: string;
-  title: string;
-  createdAt: string;
-  messages: ChatMessage[];
-};
 
 type ReportSection = {
   id: string;
@@ -56,8 +42,6 @@ type ActiveRun = {
   error?: string;
 };
 
-type LlmProvider = "local" | "hosted";
-
 const ArtifactsSchema = z.array(ArtifactSchema);
 
 const EMPTY_REPORT: Report = {
@@ -65,11 +49,17 @@ const EMPTY_REPORT: Report = {
   sections: []
 };
 
-const DEFAULT_LOCAL_MODEL = "llama3.1:8b";
 const DEFAULT_HOSTED_MODEL = "xiaomi/mimo-v2-flash:free";
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function generateClientMessageId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function titleCase(value: string): string {
@@ -87,83 +77,231 @@ function buildFinalResponse(artifacts: Artifact[]): string {
   return "Run completed. Output is available in artifacts.";
 }
 
+/**
+ * ✅ Upgraded markdown parsing
+ * Supports:
+ * - Headers (##, ###)
+ * - Paragraphs (multi-line)
+ * - Bullets (-, *, +)
+ * - Numbered lists (1. 2. ...)
+ * - Inline citations [1] [2] and footnote refs [^3]
+ * - References with footnotes [^1]: ...
+ * - Multi-line footnotes (indented continuations)
+ */
+function extractInlineCitations(input: string): { text: string; citations: number[] } {
+  const citations: number[] = [];
+
+  // Matches [1], [12], [^3], [^42]
+  const citationRegex = /\[(\d+)\]|\[\^(\d+)\]/g;
+
+  const textWithoutCitations = input.replace(citationRegex, (_match, g1, g2) => {
+    const numRaw = g1 ?? g2;
+    const num = Number(numRaw);
+    if (!Number.isNaN(num)) citations.push(num);
+    return "";
+  });
+
+  const cleaned = textWithoutCitations
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .trim();
+
+  const seen = new Set<number>();
+  const uniq = citations.filter((n) => {
+    if (seen.has(n)) return false;
+    seen.add(n);
+    return true;
+  });
+
+  return { text: cleaned, citations: uniq };
+}
+
+function isReferencesHeading(line: string): boolean {
+  const normalized = line.trim().toLowerCase();
+  return (
+    normalized === "## references" ||
+    normalized === "## reference" ||
+    normalized === "## bibliography" ||
+    normalized === "## citations"
+  );
+}
+
 function parseMarkdownToSections(markdown: string): ReportSection[] {
   const sections: ReportSection[] = [];
-  const lines = markdown.split("\n");
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
 
   let currentSection: ReportSection | null = null;
-  let currentParagraph: string[] = [];
+  let paragraphBuffer: string[] = [];
 
-  const flushParagraph = () => {
-    if (currentParagraph.length > 0 && currentSection) {
-      const text = currentParagraph.join(" ").trim();
-      if (text && currentSection) {
-        currentSection.content.push({ text });
-      }
-      currentParagraph = [];
+  // For multi-line footnotes
+  let lastFootnoteIndex: number | null = null;
+
+  const ensureSection = (heading: string) => {
+    if (!currentSection) {
+      currentSection = {
+        id: generateId(),
+        heading,
+        content: []
+      };
     }
   };
 
-  for (const line of lines) {
-    // Check for headers (## or ###)
+  const pushSectionIfAny = () => {
+    if (currentSection) {
+      sections.push(currentSection);
+      currentSection = null;
+    }
+  };
+
+  const flushParagraph = () => {
+    if (!currentSection) return;
+    if (paragraphBuffer.length === 0) return;
+
+    const rawText = paragraphBuffer.join(" ").trim();
+    paragraphBuffer = [];
+    lastFootnoteIndex = null;
+
+    if (!rawText) return;
+
+    const { text, citations } = extractInlineCitations(rawText);
+    const finalText = text || rawText;
+
+    if (!finalText) return;
+
+    currentSection.content.push({
+      text: finalText,
+      citations: citations.length > 0 ? citations : undefined,
+      isBullet: false
+    });
+  };
+
+  const pushBullet = (raw: string) => {
+    ensureSection("Live Report");
+    flushParagraph();
+
+    const { text, citations } = extractInlineCitations(raw);
+    const finalText = text || raw;
+
+    currentSection!.content.push({
+      text: finalText,
+      citations: citations.length > 0 ? citations : undefined,
+      isBullet: true
+    });
+
+    lastFootnoteIndex = null;
+  };
+
+  const pushReferenceFootnote = (num: number, content: string) => {
+    ensureSection("References");
+    flushParagraph();
+
+    const formatted = `[${num}] ${content}`.trim();
+    currentSection!.content.push({
+      text: formatted,
+      isBullet: true
+    });
+
+    lastFootnoteIndex = currentSection!.content.length - 1;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+
+    // Headers: ## or ###
     const headerMatch = line.match(/^(#{2,3})\s+(.+)$/);
     if (headerMatch) {
       flushParagraph();
-      if (currentSection) {
-        sections.push(currentSection);
-      }
+      pushSectionIfAny();
+
       currentSection = {
         id: generateId(),
         heading: headerMatch[2].trim(),
         content: []
       };
+
+      lastFootnoteIndex = null;
       continue;
     }
 
-    // Skip title (single #)
-    if (line.match(/^#\s+/)) {
+    // Ignore title line (# ...)
+    if (/^#\s+/.test(line)) {
       continue;
     }
 
-    // Empty line - paragraph break
-    if (line.trim() === "") {
+    // References heading
+    if (isReferencesHeading(line)) {
       flushParagraph();
-      continue;
-    }
-
-    // References section
-    if (line.trim() === "---" || line.trim() === "## References") {
-      flushParagraph();
-      if (currentSection) {
-        sections.push(currentSection);
-      }
+      pushSectionIfAny();
       currentSection = {
         id: generateId(),
         heading: "References",
         content: []
       };
+      lastFootnoteIndex = null;
       continue;
     }
 
-    // Footnote reference
-    if (line.match(/^\[\^\d+\]:/)) {
-      if (currentSection && currentSection.heading === "References") {
-        const text = line.replace(/^\[\^(\d+)\]:\s*/, "[$1] ");
-        currentSection.content.push({ text });
+    // Horizontal rule treated as references separator
+    if (line.trim() === "---") {
+      flushParagraph();
+      pushSectionIfAny();
+      currentSection = {
+        id: generateId(),
+        heading: "References",
+        content: []
+      };
+      lastFootnoteIndex = null;
+      continue;
+    }
+
+    // Empty line breaks paragraphs
+    if (line.trim() === "") {
+      flushParagraph();
+      continue;
+    }
+
+    // Footnote definition: [^1]: ...
+    const footnoteMatch = line.match(/^\[\^(\d+)\]:\s*(.*)$/);
+    if (footnoteMatch) {
+      const num = Number(footnoteMatch[1]);
+      const body = footnoteMatch[2] ?? "";
+      pushReferenceFootnote(num, body);
+      continue;
+    }
+
+    // Footnote continuation lines (indented)
+    if (lastFootnoteIndex !== null && /^\s{2,}\S+/.test(line)) {
+      const extra = line.trim();
+      const item = currentSection?.content[lastFootnoteIndex];
+      if (item) {
+        item.text = `${item.text} ${extra}`.trim();
       }
       continue;
     }
 
-    // Regular content line
-    currentParagraph.push(line);
+    // Bullets: - * +
+    const bulletMatch = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (bulletMatch) {
+      pushBullet(bulletMatch[1] ?? "");
+      continue;
+    }
+
+    // Numbered lists: 1. item
+    const numberedMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (numberedMatch) {
+      pushBullet(numberedMatch[1] ?? "");
+      continue;
+    }
+
+    // Normal text line
+    ensureSection("Live Report");
+    paragraphBuffer.push(line.trim());
   }
 
   flushParagraph();
-  if (currentSection) {
-    sections.push(currentSection);
-  }
+  pushSectionIfAny();
 
-  return sections;
+  return sections.filter((s) => s.content.length > 0);
 }
 
 function deriveRunUpdate(event: { stage?: string; message?: string; payload?: Record<string, unknown> }) {
@@ -197,20 +335,21 @@ function deriveRunUpdate(event: { stage?: string; message?: string; payload?: Re
   return { status, primaryText, secondaryText };
 }
 
-function loadChats(projectId: string): Chat[] {
-  const raw = window.localStorage.getItem(`researchops.chats.${projectId}`);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as Chat[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+function formatActionLabel(actionId: string | null) {
+  if (!actionId) return "Action";
+  if (actionId === "run_pipeline") return "Run research report";
+  if (actionId === "quick_answer") return "Quick answer";
+  return actionId.replace(/_/g, " ");
 }
 
-function saveChats(projectId: string, chats: Chat[]) {
-  window.localStorage.setItem(`researchops.chats.${projectId}`, JSON.stringify(chats));
-  window.dispatchEvent(new Event("researchops-chats-updated"));
+function displayMessageText(message: ChatMessage) {
+  if (message.type === "action") {
+    const actionId =
+      (message.content_json?.["action_id"] as string | undefined) ??
+      message.content_text.replace("__ACTION__:", "").trim();
+    return formatActionLabel(actionId || null);
+  }
+  return message.content_text;
 }
 
 // Citation badge component
@@ -301,7 +440,6 @@ function ReportSectionView({
               <p className="flex-1 text-sm leading-relaxed text-slate-300">
                 {item.text}
                 {item.citations?.map((num) => <CitationBadge key={num} number={num} />)}
-                {!item.isBullet && item.citations && "."}
               </p>
             </div>
           ))}
@@ -415,21 +553,19 @@ function ShareModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void 
 
 export function ChatViewPage() {
   const { projectId, chatId } = useParams();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const id = projectId ?? "";
   const project = useProjectQuery(id);
-  const createRun = useCreateRunMutation(id);
+  const conversations = useChatConversationsQuery(id, 200);
+  const messagesQuery = useChatMessagesQuery(chatId ?? "", 200);
+  const sendChat = useSendChatMessageMutation(chatId ?? "");
   const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
   const cancelRun = useCancelRunMutation(activeRun?.runId ?? "");
   const retryRun = useRetryRunMutation(activeRun?.runId ?? "");
 
-  const [chat, setChat] = useState<Chat | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [autorunHandled, setAutorunHandled] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [llmProvider, setLlmProvider] = useState<LlmProvider>("hosted");
   const [llmModel, setLlmModel] = useState(DEFAULT_HOSTED_MODEL);
 
   const [report, setReport] = useState<Report>(EMPTY_REPORT);
@@ -441,76 +577,32 @@ export function ChatViewPage() {
   const lastEventIdRef = useRef<number>(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const initialMessage = useMemo(() => {
+    if (!location.state || typeof location.state !== "object") return null;
+    const state = location.state as { initialMessage?: string };
+    return state.initialMessage ?? null;
+  }, [location.state]);
+  const [initialMessageSent, setInitialMessageSent] = useState(false);
 
-  // Load chat from localStorage
-  useEffect(() => {
-    if (!id || !chatId) return;
-    const chats = loadChats(id);
-    const found = chats.find((c) => c.id === chatId);
-    if (found) {
-      setChat(found);
-      setMessages(found.messages);
-    }
-  }, [id, chatId]);
+  const chat = useMemo(() => {
+    const items = conversations.data?.items ?? [];
+    return items.find((item) => item.id === chatId) ?? null;
+  }, [conversations.data, chatId]);
 
-  // Handle autorun parameter
-  const createRunRef = useRef(createRun);
-  createRunRef.current = createRun;
+  const messages = messagesQuery.data?.items ?? [];
 
   useEffect(() => {
-    if (autorunHandled) return;
-    if (!chat || !id || activeRun) return;
-    const autorun = searchParams.get("autorun");
-    if (autorun !== "true") return;
-
-    const firstUserMsg = messages.find((m) => m.role === "user");
-    if (!firstUserMsg) return;
-
-    setAutorunHandled(true);
-    setSearchParams({}, { replace: true });
-
-    void (async () => {
-      setIsTyping(true);
-      try {
-        const run = await createRunRef.current.mutateAsync({
-          prompt: firstUserMsg.content,
-          llm_provider: llmProvider,
-          llm_model: llmModel.trim() ? llmModel.trim() : undefined
-        });
-        setActiveRun({
-          runId: run.id,
-          status: "running",
-          primaryText: "Starting run...",
-          startedAt: new Date().toISOString()
-        });
-        lastEventIdRef.current = 0;
-      } catch (e) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: generateId(),
-            role: "assistant",
-            content: e instanceof Error ? `Failed to start run: ${e.message}` : "Failed to start run.",
-            ts: new Date().toISOString()
-          }
-        ]);
-      } finally {
-        setIsTyping(false);
-      }
-    })();
-  }, [chat, id, messages, activeRun, autorunHandled, searchParams, setSearchParams, llmProvider, llmModel]);
-
-  // Save messages back to localStorage
-  useEffect(() => {
-    if (!id || !chatId || !chat) return;
-    const chats = loadChats(id);
-    const updated = chats.map((c) => (c.id === chatId ? { ...c, messages } : c));
-    saveChats(id, updated);
-  }, [id, chatId, chat, messages]);
+    if (!initialMessage || initialMessageSent || !chatId) return;
+    setInitialMessageSent(true);
+    void sendMessage(initialMessage).catch(() => {});
+  }, [initialMessage, initialMessageSent, chatId]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const node = messagesEndRef.current;
+    if (node && typeof node.scrollIntoView === "function") {
+      node.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages.length]);
 
   const sse = useSSE(
@@ -597,16 +689,6 @@ export function ChatViewPage() {
         schema: ArtifactsSchema
       }).catch(() => [] as Artifact[]);
       const response = buildFinalResponse(artifacts);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: generateId(),
-          role: "assistant",
-          content: response,
-          ts: new Date().toISOString(),
-          runId
-        }
-      ]);
 
       // Add sections to the report based on the response
       if (response && response !== "Run completed. Output is available in artifacts.") {
@@ -629,47 +711,45 @@ export function ChatViewPage() {
     lastEventIdRef.current = 0;
   }
 
+  async function sendMessage(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || !chatId) return;
+    setIsTyping(true);
+    try {
+      const response = await sendChat.mutateAsync({
+        conversation_id: chatId,
+        project_id: id || undefined,
+        message: trimmed,
+        client_message_id: generateClientMessageId(),
+        llm_provider: "hosted",
+        llm_model: llmModel.trim() ? llmModel.trim() : undefined
+      });
+      const assistant = response.assistant_message;
+      if (assistant?.type === "run_started") {
+        const runId = assistant.content_json?.["run_id"];
+        if (typeof runId === "string") {
+          setActiveRun({
+            runId,
+            status: "running",
+            primaryText: "Starting run...",
+            startedAt: new Date().toISOString()
+          });
+          lastEventIdRef.current = 0;
+        }
+      }
+    } finally {
+      setIsTyping(false);
+    }
+  }
+
   async function onSend() {
     const text = draft.trim();
     if (!text) return;
-
-    const userMsg: ChatMessage = {
-      id: generateId(),
-      role: "user",
-      content: text,
-      ts: new Date().toISOString()
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    setDraft("");
-    setIsTyping(true);
-
-    if (!id) return;
-
     try {
-      const run = await createRun.mutateAsync({
-        prompt: text,
-        llm_provider: llmProvider,
-        llm_model: llmModel.trim() ? llmModel.trim() : undefined
-      });
-      setActiveRun({
-        runId: run.id,
-        status: "running",
-        primaryText: "Starting run...",
-        startedAt: new Date().toISOString()
-      });
-      lastEventIdRef.current = 0;
-    } catch (e) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: generateId(),
-          role: "assistant",
-          content: e instanceof Error ? `Failed to start run: ${e.message}` : "Failed to start run.",
-          ts: new Date().toISOString()
-        }
-      ]);
-    } finally {
-      setIsTyping(false);
+      await sendMessage(text);
+      setDraft("");
+    } catch {
+      // Keep the draft so the user can retry.
     }
   }
 
@@ -713,28 +793,24 @@ export function ChatViewPage() {
     setExportNotification(`Exporting as ${format.toUpperCase()}...`);
 
     try {
-      const filename = `${report.title || 'report'}`;
+      const filename = `${report.title || "report"}`;
 
-      if (format === 'md') {
-        // Markdown export
+      if (format === "md") {
         const content = generateMarkdown(report);
-        downloadText(content, `${filename}.md`, 'text/markdown');
-      } else if (format === 'html') {
-        // HTML export
+        downloadText(content, `${filename}.md`, "text/markdown");
+      } else if (format === "html") {
         const content = generateHTML(report);
-        downloadText(content, `${filename}.html`, 'text/html');
-      } else if (format === 'pdf') {
-        // PDF export
+        downloadText(content, `${filename}.html`, "text/html");
+      } else if (format === "pdf") {
         await generatePDF(report, filename);
-      } else if (format === 'docx') {
-        // Word export
+      } else if (format === "docx") {
         await generateWord(report, filename);
       }
 
       setExportNotification(`Report downloaded as ${format.toUpperCase()}`);
       setTimeout(() => setExportNotification(null), 2000);
     } catch (error) {
-      setExportNotification(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setExportNotification(`Export failed: ${error instanceof Error ? error.message : "Unknown error"}`);
       setTimeout(() => setExportNotification(null), 3000);
     }
   }
@@ -742,7 +818,7 @@ export function ChatViewPage() {
   function downloadText(content: string, filename: string, mimeType: string) {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
@@ -761,46 +837,39 @@ export function ChatViewPage() {
 
     // Title
     doc.setFontSize(20);
-    doc.setFont('helvetica', 'bold');
+    doc.setFont("helvetica", "bold");
     doc.text(report.title, margin, yPosition);
     yPosition += 15;
 
     // Sections
     doc.setFontSize(11);
     report.sections.forEach((section) => {
-      // Check if we need a new page
       if (yPosition > pageHeight - 30) {
         doc.addPage();
         yPosition = margin;
       }
 
-      // Section heading
-      doc.setFont('helvetica', 'bold');
+      doc.setFont("helvetica", "bold");
       doc.setFontSize(14);
       doc.text(section.heading, margin, yPosition);
       yPosition += 10;
 
-      // Section content
-      doc.setFont('helvetica', 'normal');
+      doc.setFont("helvetica", "normal");
       doc.setFontSize(11);
 
       section.content.forEach((item) => {
         let text = item.text;
 
-        // Add citations
         if (item.citations && item.citations.length > 0) {
-          text += ` ${item.citations.map(c => `[${c}]`).join('')}`;
+          text += ` ${item.citations.map((c) => `[${c}]`).join("")}`;
         }
 
-        // Add bullet point if needed
         if (item.isBullet) {
           text = `• ${text}`;
         }
 
-        // Split text into lines
         const lines = doc.splitTextToSize(text, maxWidth);
 
-        // Check if we need a new page for this content
         const lineHeight = 7;
         const totalHeight = lines.length * lineHeight;
 
@@ -809,55 +878,49 @@ export function ChatViewPage() {
           yPosition = margin;
         }
 
-        // Add the text
         lines.forEach((line: string) => {
-          doc.text(line, margin + (item.isBullet ? 0 : 0), yPosition);
+          doc.text(line, margin, yPosition);
           yPosition += lineHeight;
         });
 
-        yPosition += 3; // Extra spacing between paragraphs
+        yPosition += 3;
       });
 
-      yPosition += 5; // Extra spacing between sections
+      yPosition += 5;
     });
 
     doc.save(`${filename}.pdf`);
   }
 
   async function generateWord(report: Report, filename: string) {
-    const children: (Paragraph)[] = [];
+    const children: Paragraph[] = [];
 
-    // Title
     children.push(
       new Paragraph({
         text: report.title,
         heading: HeadingLevel.HEADING_1,
-        spacing: { after: 200 },
+        spacing: { after: 200 }
       })
     );
 
-    // Sections
     report.sections.forEach((section) => {
-      // Section heading
       children.push(
         new Paragraph({
           text: section.heading,
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 200, after: 100 },
+          spacing: { before: 200, after: 100 }
         })
       );
 
-      // Section content
       section.content.forEach((item) => {
         const runs: TextRun[] = [new TextRun(item.text)];
 
-        // Add citations
         if (item.citations && item.citations.length > 0) {
           runs.push(
             new TextRun({
-              text: ` ${item.citations.map(c => `[${c}]`).join('')}`,
+              text: ` ${item.citations.map((c) => `[${c}]`).join("")}`,
               superScript: true,
-              color: "10b981",
+              color: "10b981"
             })
           );
         }
@@ -866,7 +929,7 @@ export function ChatViewPage() {
           new Paragraph({
             children: runs,
             bullet: item.isBullet ? { level: 0 } : undefined,
-            spacing: { after: 120 },
+            spacing: { after: 120 }
           })
         );
       });
@@ -876,9 +939,9 @@ export function ChatViewPage() {
       sections: [
         {
           properties: {},
-          children,
-        },
-      ],
+          children
+        }
+      ]
     });
 
     const blob = await Packer.toBlob(doc);
@@ -891,12 +954,11 @@ export function ChatViewPage() {
     report.sections.forEach((section) => {
       md += `## ${section.heading}\n\n`;
       section.content.forEach((item) => {
-        const prefix = item.isBullet ? '- ' : '';
+        const prefix = item.isBullet ? "- " : "";
         let text = item.text;
 
-        // Replace citation markers with superscript numbers
         if (item.citations && item.citations.length > 0) {
-          const citationStr = item.citations.map(c => `[${c}]`).join('');
+          const citationStr = item.citations.map((c) => `[${c}]`).join("");
           text += citationStr;
         }
 
@@ -954,17 +1016,16 @@ export function ChatViewPage() {
     report.sections.forEach((section) => {
       html += `  <h2>${section.heading}</h2>\n`;
 
-      const hasBullets = section.content.some(item => item.isBullet);
+      const hasBullets = section.content.some((item) => item.isBullet);
       if (hasBullets) {
-        html += '  <ul>\n';
+        html += "  <ul>\n";
       }
 
       section.content.forEach((item) => {
         let text = item.text;
 
-        // Add citation superscripts
         if (item.citations && item.citations.length > 0) {
-          const citationStr = item.citations.map(c => `<sup>${c}</sup>`).join('');
+          const citationStr = item.citations.map((c) => `<sup>${c}</sup>`).join("");
           text += citationStr;
         }
 
@@ -972,17 +1033,17 @@ export function ChatViewPage() {
           html += `    <li>${text}</li>\n`;
         } else {
           if (hasBullets) {
-            html += '  </ul>\n';
+            html += "  </ul>\n";
           }
           html += `  <p>${text}</p>\n`;
           if (hasBullets) {
-            html += '  <ul>\n';
+            html += "  <ul>\n";
           }
         }
       });
 
       if (hasBullets) {
-        html += '  </ul>\n';
+        html += "  </ul>\n";
       }
     });
 
@@ -1001,13 +1062,19 @@ export function ChatViewPage() {
   }
 
   if (project.isError) {
-    return (
-      <ErrorBanner message={project.error instanceof Error ? project.error.message : "Failed to load project"} />
-    );
+    return <ErrorBanner message={project.error instanceof Error ? project.error.message : "Failed to load project"} />;
   }
 
   const p = project.data;
   if (!p) return null;
+
+  if (conversations.isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Spinner label="Loading conversation..." />
+      </div>
+    );
+  }
 
   if (!chat) {
     return (
@@ -1042,22 +1109,67 @@ export function ChatViewPage() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-6">
-          {messages.map((message) => (
-            <div key={message.id} className={`mb-4 flex flex-col ${message.role === "user" ? "items-end" : "items-start"}`}>
-              <div
-                className={`max-w-[90%] whitespace-pre-wrap rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
-                  message.role === "user"
-                    ? "rounded-br-sm border border-emerald-500/30 bg-emerald-500/15 text-slate-200"
-                    : "rounded-bl-sm border border-slate-700/50 bg-slate-800/80 text-slate-200"
-                }`}
-              >
-                {message.content}
+          {messages.map((message) => {
+            const isUser = message.role === "user";
+            const isOffer = message.type === "pipeline_offer";
+            const isRunStarted = message.type === "run_started";
+            const isError = message.type === "error";
+            const runId = isRunStarted ? (message.content_json?.["run_id"] as string | undefined) : undefined;
+            const offer = message.content_json?.["offer"];
+            const actions = Array.isArray((offer as { actions?: unknown[] } | undefined)?.actions)
+              ? ((offer as { actions: Array<{ id?: string; label?: string }> }).actions ?? [])
+              : [];
+            return (
+              <div key={message.id} className={`mb-4 flex flex-col ${isUser ? "items-end" : "items-start"}`}>
+                <div
+                  className={`max-w-[90%] whitespace-pre-wrap rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
+                    isUser
+                      ? "rounded-br-sm border border-emerald-500/30 bg-emerald-500/15 text-slate-200"
+                      : isError
+                        ? "rounded-bl-sm border border-rose-500/40 bg-rose-500/10 text-rose-100"
+                        : "rounded-bl-sm border border-slate-700/50 bg-slate-800/80 text-slate-200"
+                  }`}
+                >
+                  {displayMessageText(message)}
+                  {isRunStarted && runId ? (
+                    <div className="mt-2">
+                      <Link
+                        to={`/runs/${encodeURIComponent(runId)}`}
+                        className="inline-flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-200 hover:bg-emerald-500/20"
+                      >
+                        Open run viewer
+                      </Link>
+                    </div>
+                  ) : null}
+                </div>
+                {isOffer && actions.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {actions.map((action) => (
+                      <button
+                        key={action.id ?? action.label}
+                        onClick={() => {
+                          if (!action.id) return;
+                          void sendMessage(`__ACTION__:${action.id}`);
+                        }}
+                        disabled={isTyping || sendChat.isPending}
+                        className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200 transition-colors hover:border-emerald-500/60 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {action.label ?? formatActionLabel(action.id ?? null)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="mt-1.5 font-mono text-xs text-slate-500">
+                  {new Date(message.created_at).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false
+                  })}
+                </div>
               </div>
-              <div className="mt-1.5 font-mono text-xs text-slate-500">
-                {new Date(message.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {isTyping && (
             <div className="inline-block rounded-2xl rounded-bl-sm border border-slate-700/50 bg-slate-800/80 px-4 py-3.5">
               <TypingIndicator />
@@ -1093,30 +1205,11 @@ export function ChatViewPage() {
         {/* Input */}
         <div className="border-t border-slate-800 px-6 py-4">
           <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
-            <div className="flex items-center gap-2">
-              <span>LLM</span>
-              <select
-                className="rounded-md border border-slate-700 bg-slate-900/50 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
-                value={llmProvider}
-                onChange={(e) => {
-                  const next = e.target.value as LlmProvider;
-                  setLlmProvider(next);
-                  if (next === "local" && (!llmModel.trim() || llmModel === DEFAULT_HOSTED_MODEL)) {
-                    setLlmModel(DEFAULT_LOCAL_MODEL);
-                  }
-                  if (next === "hosted" && (!llmModel.trim() || llmModel === DEFAULT_LOCAL_MODEL)) {
-                    setLlmModel(DEFAULT_HOSTED_MODEL);
-                  }
-                }}
-              >
-                <option value="local">local</option>
-                <option value="hosted">hosted</option>
-              </select>
-            </div>
+            <span>LLM model</span>
             <input
               value={llmModel}
               onChange={(e) => setLlmModel(e.target.value)}
-              placeholder={llmProvider === "local" ? DEFAULT_LOCAL_MODEL : DEFAULT_HOSTED_MODEL}
+              placeholder={DEFAULT_HOSTED_MODEL}
               className="min-w-[200px] flex-1 rounded-md border border-slate-700 bg-slate-900/50 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
             />
           </div>
@@ -1130,15 +1223,15 @@ export function ChatViewPage() {
                   void onSend();
                 }
               }}
-              placeholder="Ask to modify the report..."
+              placeholder="Ask a question or request a report..."
               rows={1}
               className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3.5 text-sm text-slate-200 outline-none transition-colors focus:border-emerald-500/50"
             />
             <button
               onClick={() => void onSend()}
-              disabled={!draft.trim() || isTyping || createRun.isPending}
+              disabled={!draft.trim() || isTyping || sendChat.isPending}
               className={`flex h-12 w-12 items-center justify-center rounded-xl transition-colors ${
-                draft.trim() && !isTyping && !createRun.isPending
+                draft.trim() && !isTyping && !sendChat.isPending
                   ? "bg-emerald-500 text-slate-900 hover:bg-emerald-400"
                   : "cursor-not-allowed bg-emerald-500/30 text-slate-500"
               }`}

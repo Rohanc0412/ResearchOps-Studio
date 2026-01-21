@@ -54,7 +54,7 @@ class WebRunCreate(BaseModel):
     prompt: str = Field(min_length=1)
     output_type: str = Field(min_length=1)
     budget_override: dict | None = None
-    llm_provider: str | None = Field(default=None, pattern="^(local|hosted)$")
+    llm_provider: str | None = Field(default=None, pattern="^(hosted)$")
     llm_model: str | None = Field(default=None, min_length=1)
 
 
@@ -158,12 +158,10 @@ def post_run_for_project(
     with session_scope(SessionLocal) as session:
         try:
             budgets = body.budget_override or {}
-            llm_provider = body.llm_provider or os.getenv("LLM_PROVIDER", "local")
-            llm_model = body.llm_model
-            if llm_provider == "local" and not llm_model:
-                llm_model = os.getenv("LLM_LOCAL_MODEL", "llama3.1:8b")
-            if llm_provider == "hosted" and not llm_model:
-                llm_model = os.getenv("HOSTED_LLM_MODEL")
+            llm_provider = body.llm_provider or os.getenv("LLM_PROVIDER", "hosted")
+            if llm_provider != "hosted":
+                raise HTTPException(status_code=400, detail="Only hosted LLM provider is supported.")
+            llm_model = body.llm_model or os.getenv("HOSTED_LLM_MODEL")
             run = create_run(
                 session=session,
                 tenant_id=_tenant_uuid(identity),

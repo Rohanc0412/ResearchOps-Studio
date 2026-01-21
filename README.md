@@ -42,9 +42,9 @@ Issuer:
 
 ## What This Repo Does (Today)
 
-- Exposes a small FastAPI service with run management endpoints.
-- Enqueues a background job (`hello.run`) into Postgres.
-- Runs a minimal LangGraph pipeline that writes a dummy artifact and marks the run succeeded.
+- Exposes a small FastAPI service with run management and chat endpoints.
+- Enqueues background jobs (`research.run`) into Postgres.
+- Runs the research pipeline that produces report artifacts (OpenAlex + arXiv).
 - Project runs (`POST /projects/{project_id}/runs`) execute the full research pipeline.
 
 ## Retrieval Connectors (Part 7)
@@ -71,21 +71,33 @@ Stop and wipe local DB volume:
 docker compose -f infra/compose.yaml down -v
 ```
 
-## How To Trigger The Hello Run (Windows PowerShell)
+## How To Trigger A Research Run (Windows PowerShell)
 
-PowerShell’s `curl` is an alias for `Invoke-WebRequest`, so use `Invoke-RestMethod`:
+PowerShell's `curl` is an alias for `Invoke-WebRequest`, so use `Invoke-RestMethod`:
 
 ```powershell
 Invoke-RestMethod -Method Get -Uri "http://localhost:8000/healthz"
 Invoke-RestMethod -Method Get -Uri "http://localhost:8000/version"
-$r = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/hello"
-$runId = $r.run_id
+
+# Create a project (one-time)
+$project = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects" `
+  -ContentType "application/json" `
+  -Body '{"name":"Demo Project"}'
+$projectId = $project.id
+
+# Create a research run
+$run = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects/$projectId/runs" `
+  -ContentType "application/json" `
+  -Body '{"prompt":"Summarize recent work on retrieval-augmented generation","output_type":"report"}'
+$runId = $run.run_id
+
+# Check status
 Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
 ```
 
 Expected `GET /runs/{run_id}` fields:
 - `status` should become `succeeded`
-- `artifacts[0].artifact_type` should be `hello`
+- `artifacts` should include the report output
 
 ## API Endpoints
 
@@ -94,14 +106,13 @@ Expected `GET /runs/{run_id}` fields:
 - `GET /version` → `{ "name": "...", "git_sha": "...", "build_time": "..." }`
 
 ### Run Management
-- `POST /runs/hello` → `{ "run_id": "<uuid>" }` - Enqueue a hello test run
 - `POST /projects/{project_id}/runs` - Enqueue a research run (prompt + output_type)
-- `GET /runs/{run_id}` → Run status + metadata (status, current_stage, timestamps, error info)
-- `GET /runs/{run_id}/events` → List events as JSON or stream via SSE (see below)
-- `POST /runs/{run_id}/cancel` → Request cancellation (cooperative)
-- `POST /runs/{run_id}/retry` → Retry a failed or blocked run
-- `GET /runs/{run_id}/artifacts` → List artifacts for run
-- `GET /runs/{run_id}/claims` → List claim map entries for run
+- `GET /runs/{run_id}` - Run status + metadata (status, current_stage, timestamps, error info)
+- `GET /runs/{run_id}/events` - List events as JSON or stream via SSE (see below)
+- `POST /runs/{run_id}/cancel` - Request cancellation (cooperative)
+- `POST /runs/{run_id}/retry` - Retry a failed or blocked run
+- `GET /runs/{run_id}/artifacts` - List artifacts for run
+- `GET /runs/{run_id}/claims` - List claim map entries for run
 
 ## Architecture (Text Diagram)
 
@@ -137,10 +148,8 @@ Important env vars:
 - `WORKER_POLL_SECONDS`
 
 LLM configuration (optional):
-- `LLM_PROVIDER` = `local` or `hosted` (default `local`)
-- `LLM_LOCAL_MODEL` (default `llama3.1:8b`)
-- `OLLAMA_BASE_URL` (default `http://localhost:11434`)
-- `HOSTED_LLM_BASE_URL`, `HOSTED_LLM_API_KEY`, `HOSTED_LLM_MODEL` (for hosted)
+- `LLM_PROVIDER` = `hosted` (default `hosted`)
+- `HOSTED_LLM_BASE_URL`, `HOSTED_LLM_API_KEY`, `HOSTED_LLM_MODEL`
 
 OpenRouter example:
 - `LLM_PROVIDER=hosted`
@@ -200,7 +209,7 @@ Enforced server-side in code (never trust the client).
 
 ### Protected Endpoints
 
-- Protected: `GET /me`, `GET /tenants/current`, `POST /runs/hello`, `GET /runs/{run_id}`, `GET /auth/jwks-status`
+- Protected: `GET /me`, `GET /tenants/current`, `POST /projects/{project_id}/runs`, `GET /runs/{run_id}`, `GET /auth/jwks-status`
 - Public: `GET /health`, `GET /healthz`, `GET /version`
 
 ## Audit Logs
@@ -271,7 +280,7 @@ Notes:
 ## Repo Layout
 
 - `apps/api/src/researchops_api` FastAPI service
-- `apps/orchestrator/src/researchops_orchestrator` LangGraph hello pipeline
+- `apps/orchestrator/src/researchops_orchestrator` LangGraph research pipeline
 - `apps/workers/src/researchops_workers` job worker loop
 - `packages/core/src/researchops_core` shared models/constants/settings
 - `packages/observability/src/researchops_observability` logging + middleware
@@ -279,7 +288,7 @@ Notes:
 - `db/` database models + init
 - `infra/` Docker compose + Dockerfiles
 - `tests/unit` unit tests
-- `tests/integration` end-to-end “hello run” test (in-process)
+- `tests/integration` end-to-end run test (in-process)
 - `tests/golden` golden JSON fixtures for Part 1
 
 ## Dev Commands
@@ -448,20 +457,28 @@ curl -X POST http://localhost:8000/runs/<RUN_ID>/retry
 ### Complete Example: Create, Monitor, Cancel
 
 ```powershell
-# 1. Create a run
-$r = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/hello"
-$runId = $r.run_id
+# 1. Create a project
+$project = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects" `
+  -ContentType "application/json" `
+  -Body '{"name":"Demo Project"}'
+$projectId = $project.id
 
-# 2. Get run status
+# 2. Create a run
+$run = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects/$projectId/runs" `
+  -ContentType "application/json" `
+  -Body '{"prompt":"Summarize recent work on retrieval-augmented generation","output_type":"report"}'
+$runId = $run.run_id
+
+# 3. Get run status
 Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
 
-# 3. Stream events in real-time (use a separate terminal)
+# 4. Stream events in real-time (use a separate terminal)
 curl.exe -N -H "Accept: text/event-stream" "http://localhost:8000/runs/$runId/events"
 
-# 4. Cancel the run (from main terminal)
+# 5. Cancel the run (from main terminal)
 Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/$runId/cancel"
 
-# 5. Check final status
+# 6. Check final status
 Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
 ```
 

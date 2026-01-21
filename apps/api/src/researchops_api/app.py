@@ -18,6 +18,7 @@ from db.session import create_db_engine, create_sessionmaker
 from researchops_api.middlewares.auth import init_auth_runtime
 from researchops_api.routes.auth import router as auth_router
 from researchops_api.routes.artifacts import router as artifacts_router
+from researchops_api.routes.chat import router as chat_router
 from researchops_api.routes.evidence import router as evidence_router
 from researchops_api.routes.health import router as health_router
 from researchops_api.routes.projects import router as projects_router
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(tenants_router)
     app.include_router(runs_router)
     app.include_router(projects_router)
+    app.include_router(chat_router)
     app.include_router(evidence_router)
     app.include_router(artifacts_router)
 
@@ -98,6 +100,7 @@ def create_app() -> FastAPI:
     api.include_router(tenants_router)
     api.include_router(runs_router)
     api.include_router(projects_router)
+    api.include_router(chat_router)
     api.include_router(evidence_router)
     api.include_router(artifacts_router)
     app.include_router(api)

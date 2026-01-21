@@ -29,56 +29,6 @@ class LLMError(RuntimeError):
 
 
 @dataclass
-class OllamaClient:
-    base_url: str
-    model_name: str
-    timeout_seconds: float = 60.0
-
-    def generate(
-        self,
-        prompt: str,
-        *,
-        system: str | None = None,
-        max_tokens: int = 512,
-        temperature: float = 0.2,
-        response_format: str | None = None,
-    ) -> str:
-        url = f"{self.base_url.rstrip('/')}/api/generate"
-        logger.info(
-            "llm_request",
-            extra={"provider": "ollama", "model": self.model_name, "url": url},
-        )
-        payload: dict = {
-            "model": self.model_name,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
-        }
-        if response_format:
-            payload["format"] = response_format
-        if system:
-            payload["system"] = system
-        try:
-            response = httpx.post(url, json=payload, timeout=self.timeout_seconds)
-            response.raise_for_status()
-        except Exception as exc:
-            raise LLMError(f"Ollama request failed: {exc}") from exc
-
-        data = response.json()
-        content = data.get("response")
-        if not isinstance(content, str):
-            raise LLMError("Ollama response missing content")
-        logger.info(
-            "llm_response",
-            extra={"provider": "ollama", "model": self.model_name, "chars": len(content)},
-        )
-        return content.strip()
-
-
-@dataclass
 class OpenAICompatibleClient:
     base_url: str
     api_key: str
@@ -144,22 +94,15 @@ def get_llm_client(
     Resolve an LLM client based on provider/model overrides and environment defaults.
 
     Providers:
-      - local: Ollama (default)
       - hosted: OpenAI-compatible API
     """
-    provider_name = (provider or os.getenv("LLM_PROVIDER", "local")).strip().lower()
+    provider_name = (provider or os.getenv("LLM_PROVIDER", "hosted")).strip().lower()
     if provider_name in {"", "none", "disabled"}:
         logger.info("llm_disabled")
         return None
 
     if provider_name == "local":
-        model_name = model or os.getenv("LLM_LOCAL_MODEL", "llama3.1:8b")
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        logger.info(
-            "llm_client_selected",
-            extra={"provider": "local", "model": model_name, "base_url": base_url},
-        )
-        return OllamaClient(base_url=base_url, model_name=model_name)
+        raise LLMError("Local LLM provider is no longer supported.")
 
     if provider_name == "hosted":
         base_url = os.getenv("HOSTED_LLM_BASE_URL")

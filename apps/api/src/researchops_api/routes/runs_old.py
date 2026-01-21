@@ -22,8 +22,6 @@ from researchops_core.audit.logger import write_audit_log
 from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
 from researchops_core.tenancy import tenant_uuid
-from researchops_observability.logging import bind_log_context
-from researchops_orchestrator import enqueue_hello_run
 
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
@@ -98,30 +96,6 @@ def _event_to_sse(event) -> str:
         "payload": payload,
     }
     return f"event: message\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
-
-
-@router.post("/hello")
-def hello_run(request: Request, identity: Identity = IdentityDep) -> dict[str, str]:
-    try:
-        require_roles("researcher", "admin", "owner")(identity)
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
-
-    SessionLocal = request.app.state.SessionLocal
-    bind_log_context(tenant_id_value=identity.tenant_id, run_id_value=None)
-
-    with session_scope(SessionLocal) as session:
-        run_id = enqueue_hello_run(session=session, tenant_id=_tenant_uuid(identity))
-        write_audit_log(
-            db=session,
-            identity=identity,
-            action="run.enqueue",
-            target_type="run",
-            target_id=str(run_id),
-            metadata={"job_type": "hello.run"},
-            request=request,
-        )
-    return {"run_id": str(run_id)}
 
 
 @router.get("/{run_id}")

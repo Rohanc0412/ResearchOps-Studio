@@ -33,8 +33,7 @@ from researchops_core.audit.logger import write_audit_log
 from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
 from researchops_core.tenancy import tenant_uuid
-from researchops_observability.logging import bind_log_context
-from researchops_orchestrator import HELLO_JOB_TYPE, enqueue_hello_run, enqueue_run_job
+from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
@@ -142,34 +141,6 @@ def _event_to_sse(event) -> str:
     # data: <json>
     # <blank line>
     return f"id: {event.event_number}\nevent: run_event\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
-
-
-@router.post("/hello")
-def hello_run(request: Request, identity: Identity = IdentityDep) -> dict[str, str]:
-    try:
-        require_roles("researcher", "admin", "owner")(identity)
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
-
-    SessionLocal = request.app.state.SessionLocal
-    bind_log_context(tenant_id_value=identity.tenant_id, run_id_value=None)
-
-    with session_scope(SessionLocal) as session:
-        run_id = enqueue_hello_run(session=session, tenant_id=_tenant_uuid(identity))
-        logger.info(
-            "hello_run_enqueued",
-            extra={"run_id": str(run_id), "tenant_id": str(_tenant_uuid(identity))},
-        )
-        write_audit_log(
-            db=session,
-            identity=identity,
-            action="run.enqueue",
-            target_type="run",
-            target_id=str(run_id),
-            metadata={"job_type": "hello.run"},
-            request=request,
-        )
-    return {"run_id": str(run_id)}
 
 
 @router.get("/{run_id}")
@@ -426,7 +397,7 @@ def retry_run_endpoint(
             if isinstance(run.usage_json, dict):
                 job_type = run.usage_json.get("job_type")
             if not isinstance(job_type, str) or not job_type:
-                job_type = HELLO_JOB_TYPE
+                job_type = RESEARCH_JOB_TYPE
             enqueue_run_job(
                 session=session,
                 tenant_id=_tenant_uuid(identity),

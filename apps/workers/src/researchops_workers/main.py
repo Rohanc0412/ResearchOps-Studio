@@ -16,7 +16,7 @@ from db.models.runs import RunStatusDb
 from db.session import create_db_engine, create_sessionmaker, session_scope
 from researchops_core import SERVICE_WORKER, get_settings
 from researchops_observability import bind_log_context, configure_logging
-from researchops_orchestrator import HELLO_JOB_TYPE, RESEARCH_JOB_TYPE, process_hello_run, process_research_run
+from researchops_orchestrator import RESEARCH_JOB_TYPE, process_research_run
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +112,7 @@ def run_once(*, SessionLocal) -> bool:
         print(f"{'─'*60}")
 
         try:
-            if job_type == HELLO_JOB_TYPE:
-                logger.info("run_processing_start", extra={"run_id": str(run_id), "job_type": job_type})
-                print(f"  ▶ Starting HELLO run...")
-                process_hello_run(session=session, run_id=run_id, tenant_id=tenant_id)
-                logger.info("run_processing_complete", extra={"run_id": str(run_id), "job_type": job_type})
-            elif job_type == RESEARCH_JOB_TYPE:
+            if job_type == RESEARCH_JOB_TYPE:
                 logger.info("run_processing_start", extra={"run_id": str(run_id), "job_type": job_type})
                 print(f"  ▶ Starting RESEARCH run...")
                 process_research_run(session=session, run_id=run_id, tenant_id=tenant_id)
