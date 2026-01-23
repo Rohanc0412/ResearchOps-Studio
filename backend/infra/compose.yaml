@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: researchops
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d researchops"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/docker/api.Dockerfile
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      AUTH_REQUIRED: "true"
+      DEV_BYPASS_AUTH: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\"",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/docker/worker.Dockerfile
+    runtime: nvidia
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
+      WORKER_POLL_SECONDS: "1.0"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      HOSTED_LLM_BASE_URL: ${HOSTED_LLM_BASE_URL:-https://openrouter.ai/api}
+      HOSTED_LLM_MODEL: ${HOSTED_LLM_MODEL:-xiaomi/mimo-v2-flash:free}
+      LLM_DRAFT_REQUIRED: "true"
+      LLM_OUTLINE_REQUIRED: "true"
+      LLM_CLAIM_REQUIRED: "true"
+      LLM_EVALUATOR_REQUIRED: "true"
+      LLM_REPAIR_REQUIRED: "true"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data: {}

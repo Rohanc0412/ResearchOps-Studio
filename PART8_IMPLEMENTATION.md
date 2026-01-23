@@ -24,7 +24,7 @@ Part 8 implements a deterministic, replayable multi-agent orchestration workflow
 
 ### State Container
 
-**File:** [packages/core/src/researchops_core/orchestrator/state.py](packages/core/src/researchops_core/orchestrator/state.py)
+**File:** [backend/packages/core/src/researchops_core/orchestrator/state.py](backend/packages/core/src/researchops_core/orchestrator/state.py)
 
 The `OrchestratorState` is the central Pydantic model passed through all nodes:
 
@@ -70,7 +70,7 @@ class OrchestratorState(BaseModel):
 
 ## Event Emission Infrastructure
 
-**File:** [packages/core/src/researchops_core/observability/events.py](packages/core/src/researchops_core/observability/events.py)
+**File:** [backend/packages/core/src/researchops_core/observability/events.py](backend/packages/core/src/researchops_core/observability/events.py)
 
 ### Automatic Instrumentation
 
@@ -97,7 +97,7 @@ All events are written to `run_events` table with sequential `event_number` for 
 
 ### 1. QuestionGenerator
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/question_generator.py](apps/orchestrator/src/researchops_orchestrator/nodes/question_generator.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/question_generator.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/question_generator.py)
 
 Generates 5-20 diverse research queries from user input.
 
@@ -117,7 +117,7 @@ Generates 5-20 diverse research queries from user input.
 
 ### 2. Retriever
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/retriever.py](apps/orchestrator/src/researchops_orchestrator/nodes/retriever.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/retriever.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/retriever.py)
 
 Retrieves sources using Part 7 connectors and ingests them.
 
@@ -140,7 +140,7 @@ Retrieves sources using Part 7 connectors and ingests them.
 
 ### 3. SourceVetter
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/source_vetter.py](apps/orchestrator/src/researchops_orchestrator/nodes/source_vetter.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/source_vetter.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/source_vetter.py)
 
 Filters low-quality sources and ranks by quality score.
 
@@ -161,7 +161,7 @@ Filters low-quality sources and ranks by quality score.
 
 ### 4. Outliner
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/outliner.py](apps/orchestrator/src/researchops_orchestrator/nodes/outliner.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/outliner.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/outliner.py)
 
 Creates hierarchical report outline.
 
@@ -184,7 +184,7 @@ Each section includes `required_evidence` queries for content generation.
 
 ### 5. Writer
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/writer.py](apps/orchestrator/src/researchops_orchestrator/nodes/writer.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/writer.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/writer.py)
 
 Drafts markdown report with inline citations.
 
@@ -209,7 +209,7 @@ Drafts markdown report with inline citations.
 
 ### 6. ClaimExtractor
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/claim_extractor.py](apps/orchestrator/src/researchops_orchestrator/nodes/claim_extractor.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/claim_extractor.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/claim_extractor.py)
 
 Extracts atomic claims from draft.
 
@@ -230,7 +230,7 @@ Extracts atomic claims from draft.
 
 ### 7. CitationValidator
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/citation_validator.py](apps/orchestrator/src/researchops_orchestrator/nodes/citation_validator.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/citation_validator.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/citation_validator.py)
 
 Validates citations using FAIL CLOSED strategy.
 
@@ -249,7 +249,7 @@ Validates citations using FAIL CLOSED strategy.
 
 ### 8. FactChecker
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/fact_checker.py](apps/orchestrator/src/researchops_orchestrator/nodes/fact_checker.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/fact_checker.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/fact_checker.py)
 
 Verifies claims match cited evidence.
 
@@ -276,7 +276,7 @@ Verifies claims match cited evidence.
 
 ### 9. RepairAgent
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/repair_agent.py](apps/orchestrator/src/researchops_orchestrator/nodes/repair_agent.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/repair_agent.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/repair_agent.py)
 
 Applies TARGETED repairs to draft (not full rewrites).
 
@@ -303,7 +303,7 @@ Applies TARGETED repairs to draft (not full rewrites).
 
 ### 10. Exporter
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/exporter.py](apps/orchestrator/src/researchops_orchestrator/nodes/exporter.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/exporter.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/exporter.py)
 
 Generates 3 final artifacts.
 
@@ -342,7 +342,7 @@ Generates 3 final artifacts.
 
 ### 11. Evaluator
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/nodes/evaluator.py](apps/orchestrator/src/researchops_orchestrator/nodes/evaluator.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/nodes/evaluator.py](backend/apps/orchestrator/src/researchops_orchestrator/nodes/evaluator.py)
 
 Decides whether to continue or stop.
 
@@ -382,7 +382,7 @@ return STOP_SUCCESS  # Minor issues acceptable
 
 ## Graph Structure
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/graph.py](apps/orchestrator/src/researchops_orchestrator/graph.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/graph.py](backend/apps/orchestrator/src/researchops_orchestrator/graph.py)
 
 ### Linear Flow
 
@@ -418,7 +418,7 @@ Evaluator ──→ [STOP_SUCCESS] ──→ Exporter ──→ END
 
 ## Checkpointing
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/checkpoints.py](apps/orchestrator/src/researchops_orchestrator/checkpoints.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/checkpoints.py](backend/apps/orchestrator/src/researchops_orchestrator/checkpoints.py)
 
 ### Database Schema
 
@@ -460,7 +460,7 @@ Continues execution from last saved step.
 
 ## Runner Integration
 
-**File:** [apps/orchestrator/src/researchops_orchestrator/runner.py](apps/orchestrator/src/researchops_orchestrator/runner.py)
+**File:** [backend/apps/orchestrator/src/researchops_orchestrator/runner.py](backend/apps/orchestrator/src/researchops_orchestrator/runner.py)
 
 ### Main Entry Point
 
@@ -498,7 +498,7 @@ async def run_orchestrator(
 
 ## Testing
 
-**File:** [tests/integration/test_orchestrator_graph.py](tests/integration/test_orchestrator_graph.py)
+**File:** [backend/tests/integration/test_orchestrator_graph.py](backend/tests/integration/test_orchestrator_graph.py)
 
 ### Test Coverage
 
@@ -518,7 +518,7 @@ async def run_orchestrator(
 ### Running Tests
 
 ```powershell
-pytest tests/integration/test_orchestrator_graph.py -v
+pytest backend/tests/integration/test_orchestrator_graph.py -v
 ```
 
 **Expected Output:** 10/10 tests passed
@@ -618,23 +618,23 @@ plan = state.artifacts["experiment_plan.md"]
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `packages/core/src/researchops_core/orchestrator/state.py` | 180 | State definitions |
-| `packages/core/src/researchops_core/observability/events.py` | 130 | Event emission |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/question_generator.py` | 130 | Query generation |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/retriever.py` | 200 | Source retrieval |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/source_vetter.py` | 100 | Quality scoring |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/outliner.py` | 150 | Outline creation |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/writer.py` | 200 | Draft generation |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/claim_extractor.py` | 150 | Claim parsing |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/citation_validator.py` | 80 | FAIL CLOSED validation |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/fact_checker.py` | 200 | Evidence verification |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/repair_agent.py` | 180 | Targeted repair |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/exporter.py` | 200 | Artifact generation |
-| `apps/orchestrator/src/researchops_orchestrator/nodes/evaluator.py` | 120 | Routing decisions |
-| `apps/orchestrator/src/researchops_orchestrator/graph.py` | 150 | LangGraph wiring |
-| `apps/orchestrator/src/researchops_orchestrator/checkpoints.py` | 180 | PostgreSQL checkpointing |
-| `apps/orchestrator/src/researchops_orchestrator/runner.py` | 170 | Execution runner |
-| `tests/integration/test_orchestrator_graph.py` | 350 | Integration tests |
+| `backend/packages/core/src/researchops_core/orchestrator/state.py` | 180 | State definitions |
+| `backend/packages/core/src/researchops_core/observability/events.py` | 130 | Event emission |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/question_generator.py` | 130 | Query generation |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/retriever.py` | 200 | Source retrieval |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/source_vetter.py` | 100 | Quality scoring |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/outliner.py` | 150 | Outline creation |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/writer.py` | 200 | Draft generation |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/claim_extractor.py` | 150 | Claim parsing |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/citation_validator.py` | 80 | FAIL CLOSED validation |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/fact_checker.py` | 200 | Evidence verification |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/repair_agent.py` | 180 | Targeted repair |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/exporter.py` | 200 | Artifact generation |
+| `backend/apps/orchestrator/src/researchops_orchestrator/nodes/evaluator.py` | 120 | Routing decisions |
+| `backend/apps/orchestrator/src/researchops_orchestrator/graph.py` | 150 | LangGraph wiring |
+| `backend/apps/orchestrator/src/researchops_orchestrator/checkpoints.py` | 180 | PostgreSQL checkpointing |
+| `backend/apps/orchestrator/src/researchops_orchestrator/runner.py` | 170 | Execution runner |
+| `backend/tests/integration/test_orchestrator_graph.py` | 350 | Integration tests |
 | **Total** | **2,850 lines** | **Part 8 Complete** |
 
 ---

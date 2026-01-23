@@ -384,7 +384,7 @@ All tables have:
 **Result:** 5/5 PASSED
 
 ### Test Suite 3: Part 8 Orchestrator
-**File:** `tests/integration/test_orchestrator_graph.py`
+**File:** `backend/tests/integration/test_orchestrator_graph.py`
 **Result:** 10/10 PASSED
 
 ### Test Suite 4: Complete System
@@ -401,40 +401,40 @@ All tables have:
 ## Files Implemented
 
 ### Part 5 (Run Lifecycle)
-- `packages/core/src/researchops_core/runs/lifecycle.py` (500+ lines)
-- `apps/api/src/researchops_api/routes/runs.py` (400+ lines)
-- `db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py`
-- `tests/integration/test_run_lifecycle_and_sse.py` (15+ tests)
+- `backend/packages/core/src/researchops_core/runs/lifecycle.py` (500+ lines)
+- `backend/apps/api/src/researchops_api/routes/runs.py` (400+ lines)
+- `backend/db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py`
+- `backend/tests/integration/test_run_lifecycle_and_sse.py` (15+ tests)
 
 ### Part 6 (Evidence Ingestion)
-- `packages/ingestion/src/researchops_ingestion/sanitize.py` (150 lines)
-- `packages/ingestion/src/researchops_ingestion/chunking.py` (200 lines)
-- `packages/ingestion/src/researchops_ingestion/embeddings.py` (120 lines)
-- `packages/ingestion/src/researchops_ingestion/pipeline.py` (400 lines)
-- `packages/retrieval/src/researchops_retrieval/search.py` (250 lines)
-- `apps/api/src/researchops_api/routes/evidence.py` (enhanced)
-- `tests/unit/test_sanitize.py` (16 tests)
-- `tests/unit/test_chunking.py` (14 tests)
-- `tests/integration/test_evidence_ingestion.py` (13 tests)
-- `tests/integration/test_retrieval.py` (12 tests)
+- `backend/packages/ingestion/src/researchops_ingestion/sanitize.py` (150 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/chunking.py` (200 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/embeddings.py` (120 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/pipeline.py` (400 lines)
+- `backend/packages/retrieval/src/researchops_retrieval/search.py` (250 lines)
+- `backend/apps/api/src/researchops_api/routes/evidence.py` (enhanced)
+- `backend/tests/unit/test_sanitize.py` (16 tests)
+- `backend/tests/unit/test_chunking.py` (14 tests)
+- `backend/tests/integration/test_evidence_ingestion.py` (13 tests)
+- `backend/tests/integration/test_retrieval.py` (12 tests)
 
 ### Part 7 (Retrieval System)
-- `packages/connectors/src/researchops_connectors/base.py` (300 lines)
-- `packages/connectors/src/researchops_connectors/openalex.py` (250 lines)
-- `packages/connectors/src/researchops_connectors/arxiv.py` (200 lines)
-- `packages/connectors/src/researchops_connectors/dedup.py` (250 lines)
-- `packages/connectors/src/researchops_connectors/hybrid.py` (350 lines)
+- `backend/packages/connectors/src/researchops_connectors/base.py` (300 lines)
+- `backend/packages/connectors/src/researchops_connectors/openalex.py` (250 lines)
+- `backend/packages/connectors/src/researchops_connectors/arxiv.py` (200 lines)
+- `backend/packages/connectors/src/researchops_connectors/dedup.py` (250 lines)
+- `backend/packages/connectors/src/researchops_connectors/hybrid.py` (350 lines)
 - `test_connectors.py` (180 lines)
 - `PART7_IMPLEMENTATION.md` (comprehensive documentation)
 
 ### Part 8 (Orchestration Graph)
-- `packages/core/src/researchops_core/orchestrator/state.py` (180 lines)
-- `packages/core/src/researchops_core/observability/events.py` (130 lines)
-- `apps/orchestrator/src/researchops_orchestrator/nodes/` (11 node files, 1850+ lines)
-- `apps/orchestrator/src/researchops_orchestrator/graph.py` (150 lines)
-- `apps/orchestrator/src/researchops_orchestrator/checkpoints.py` (180 lines)
-- `apps/orchestrator/src/researchops_orchestrator/runner.py` (170 lines)
-- `tests/integration/test_orchestrator_graph.py` (350 lines)
+- `backend/packages/core/src/researchops_core/orchestrator/state.py` (180 lines)
+- `backend/packages/core/src/researchops_core/observability/events.py` (130 lines)
+- `backend/apps/orchestrator/src/researchops_orchestrator/nodes/` (11 node files, 1850+ lines)
+- `backend/apps/orchestrator/src/researchops_orchestrator/graph.py` (150 lines)
+- `backend/apps/orchestrator/src/researchops_orchestrator/checkpoints.py` (180 lines)
+- `backend/apps/orchestrator/src/researchops_orchestrator/runner.py` (170 lines)
+- `backend/tests/integration/test_orchestrator_graph.py` (350 lines)
 - `PART8_IMPLEMENTATION.md` (comprehensive documentation)
 
 **Total Lines of Code:** ~7,000+ lines

@@ -53,19 +53,19 @@ Added to `run_status` enum:
 
 ### Models Updated
 
-**`db/models/runs.py`:**
+**`backend/db/models/runs.py`:**
 - Added `RunStatusDb.blocked` enum value
 - Added `cancel_requested_at: Mapped[datetime | None]`
 - Added `retry_count: Mapped[int]` with default 0
 
-**`db/models/run_events.py`:**
+**`backend/db/models/run_events.py`:**
 - Added `event_number: Mapped[int]` (BigInteger)
 - Added `event_type: Mapped[str]` (String, default "log")
 - Added index for `(tenant_id, run_id, event_number)`
 
 ## Core Lifecycle Service
 
-### New Module: `packages/core/src/researchops_core/runs/lifecycle.py`
+### New Module: `backend/packages/core/src/researchops_core/runs/lifecycle.py`
 
 Provides centralized run lifecycle management shared by API and orchestrator.
 
@@ -131,7 +131,7 @@ ALLOWED_TRANSITIONS = {
 
 ## API Changes
 
-### Updated: `apps/api/src/researchops_api/routes/runs.py`
+### Updated: `backend/apps/api/src/researchops_api/routes/runs.py`
 
 **Enhanced Endpoints:**
 
@@ -175,7 +175,7 @@ ALLOWED_TRANSITIONS = {
 
 ## Orchestrator Changes
 
-### Updated: `apps/orchestrator/src/researchops_orchestrator/runner.py`
+### Updated: `backend/apps/orchestrator/src/researchops_orchestrator/runner.py`
 
 **Integration with Lifecycle Service:**
 
@@ -215,7 +215,7 @@ except Exception as e:
 
 ## Database Service Updates
 
-### Updated: `db/services/truth.py`
+### Updated: `backend/db/services/truth.py`
 
 **Enhanced Functions:**
 
@@ -231,7 +231,7 @@ except Exception as e:
 
 ## Testing
 
-### New: `tests/integration/test_run_lifecycle_and_sse.py`
+### New: `backend/tests/integration/test_run_lifecycle_and_sse.py`
 
 Comprehensive integration tests covering:
 
@@ -310,22 +310,19 @@ curl -X POST http://localhost:8000/runs/<RUN_ID>/retry
 ## Files Changed
 
 ### New Files
-- `db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py` - Migration
-- `packages/core/src/researchops_core/runs/__init__.py` - Package exports
-- `packages/core/src/researchops_core/runs/lifecycle.py` - Lifecycle service
-- `tests/integration/test_run_lifecycle_and_sse.py` - Integration tests
+- `backend/db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py` - Migration
+- `backend/packages/core/src/researchops_core/runs/__init__.py` - Package exports
+- `backend/packages/core/src/researchops_core/runs/lifecycle.py` - Lifecycle service
+- `backend/tests/integration/test_run_lifecycle_and_sse.py` - Integration tests
 - `PART5_IMPLEMENTATION.md` - This document
 
 ### Modified Files
 - `README.md` - Added SSE documentation
-- `apps/api/src/researchops_api/routes/runs.py` - SSE streaming + lifecycle integration
-- `apps/orchestrator/src/researchops_orchestrator/runner.py` - Orchestrator runner + lifecycle transitions
-- `db/models/runs.py` - Added cancel_requested_at, retry_count, blocked state
-- `db/models/run_events.py` - Added event_number, event_type
-- `db/services/truth.py` - Enhanced list_run_events, append_run_event
-
-### Backup Files
-- `apps/api/src/researchops_api/routes/runs_old.py` - Original runs.py (for reference)
+- `backend/apps/api/src/researchops_api/routes/runs.py` - SSE streaming + lifecycle integration
+- `backend/apps/orchestrator/src/researchops_orchestrator/runner.py` - Orchestrator runner + lifecycle transitions
+- `backend/db/models/runs.py` - Added cancel_requested_at, retry_count, blocked state
+- `backend/db/models/run_events.py` - Added event_number, event_type
+- `backend/db/services/truth.py` - Enhanced list_run_events, append_run_event
 
 ## How to Test
 
@@ -339,7 +336,7 @@ python -m alembic -c alembic.ini upgrade head
 ### 2. Start Services
 
 ```bash
-docker compose -f infra/compose.yaml up --build
+docker compose -f backend/infra/compose.yaml up --build
 ```
 
 ### 3. Test Run Lifecycle
@@ -372,7 +369,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8000/runs/$runId/cancel"
 
 ```bash
 cd /c/projects/ResearchOps-Studio
-python -m pytest tests/integration/test_run_lifecycle_and_sse.py -v
+python -m pytest backend/tests/integration/test_run_lifecycle_and_sse.py -v
 ```
 
 Expected output:

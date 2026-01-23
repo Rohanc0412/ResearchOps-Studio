@@ -44,7 +44,7 @@
 
 ### API Endpoints Registered
 
-Confirmed in `apps/api/src/researchops_api/routes/evidence.py`:
+Confirmed in `backend/apps/api/src/researchops_api/routes/evidence.py`:
 
 ```
 Line 252: @router.post("/ingest", response_model=IngestSourceResponse)
@@ -57,22 +57,22 @@ Line 309: def search_evidence(...)
 ### Files Verified
 
 **New Modules Created:**
-- ✅ `packages/ingestion/src/researchops_ingestion/sanitize.py`
-- ✅ `packages/ingestion/src/researchops_ingestion/chunking.py`
-- ✅ `packages/ingestion/src/researchops_ingestion/embeddings.py`
-- ✅ `packages/ingestion/src/researchops_ingestion/pipeline.py`
-- ✅ `packages/retrieval/src/researchops_retrieval/search.py`
+- ✅ `backend/packages/ingestion/src/researchops_ingestion/sanitize.py`
+- ✅ `backend/packages/ingestion/src/researchops_ingestion/chunking.py`
+- ✅ `backend/packages/ingestion/src/researchops_ingestion/embeddings.py`
+- ✅ `backend/packages/ingestion/src/researchops_ingestion/pipeline.py`
+- ✅ `backend/packages/retrieval/src/researchops_retrieval/search.py`
 
 **Test Files Created:**
-- ✅ `tests/unit/test_sanitize.py` (16 tests)
-- ✅ `tests/unit/test_chunking.py` (14 tests)
-- ✅ `tests/integration/test_evidence_ingestion.py` (13 tests)
-- ✅ `tests/integration/test_retrieval.py` (12 tests)
+- ✅ `backend/tests/unit/test_sanitize.py` (16 tests)
+- ✅ `backend/tests/unit/test_chunking.py` (14 tests)
+- ✅ `backend/tests/integration/test_evidence_ingestion.py` (13 tests)
+- ✅ `backend/tests/integration/test_retrieval.py` (12 tests)
 
 **Modified Files:**
-- ✅ `packages/ingestion/src/researchops_ingestion/__init__.py` - Exports added
-- ✅ `packages/retrieval/src/researchops_retrieval/__init__.py` - Exports added
-- ✅ `apps/api/src/researchops_api/routes/evidence.py` - Endpoints added
+- ✅ `backend/packages/ingestion/src/researchops_ingestion/__init__.py` - Exports added
+- ✅ `backend/packages/retrieval/src/researchops_retrieval/__init__.py` - Exports added
+- ✅ `backend/apps/api/src/researchops_api/routes/evidence.py` - Endpoints added
 - ✅ `requirements.txt` - beautifulsoup4 added
 
 ### Known Limitations
@@ -99,11 +99,11 @@ To test with PostgreSQL and pgvector:
 
 ```powershell
 # Start services
-docker compose -f infra/compose.yaml up --build
+docker compose -f backend/infra/compose.yaml up --build
 
 # Run integration tests
-python -m pytest tests/integration/test_evidence_ingestion.py -v
-python -m pytest tests/integration/test_retrieval.py -v
+python -m pytest backend/tests/integration/test_evidence_ingestion.py -v
+python -m pytest backend/tests/integration/test_retrieval.py -v
 
 # Test API endpoints
 $body = @{

@@ -124,7 +124,7 @@ Semantic Search
 
 ## Core Modules
 
-### 1. Sanitization (`packages/ingestion/src/researchops_ingestion/sanitize.py`)
+### 1. Sanitization (`backend/packages/ingestion/src/researchops_ingestion/sanitize.py`)
 
 **Purpose:** Clean raw text and detect security risks.
 
@@ -151,7 +151,7 @@ result = sanitize_text("<p>Hello world!</p>\\x00\\x01")
 # result["risk_flags"]["prompt_injection"] == False
 ```
 
-### 2. Chunking (`packages/ingestion/src/researchops_ingestion/chunking.py`)
+### 2. Chunking (`backend/packages/ingestion/src/researchops_ingestion/chunking.py`)
 
 **Purpose:** Split text into overlapping chunks with stable offsets.
 
@@ -172,7 +172,7 @@ chunks = chunk_text("Long text...", max_chars=500, overlap_chars=50)
 # chunks[1]["char_start"] < chunks[0]["char_end"]  # Overlap
 ```
 
-### 3. Embeddings (`packages/ingestion/src/researchops_ingestion/embeddings.py`)
+### 3. Embeddings (`backend/packages/ingestion/src/researchops_ingestion/embeddings.py`)
 
 **Purpose:** Generate vector embeddings for semantic search.
 
@@ -195,7 +195,7 @@ vectors = provider.embed_texts(["hello", "world"])
 # len(vectors[0]) == 1536
 ```
 
-### 4. Ingestion Pipeline (`packages/ingestion/src/researchops_ingestion/pipeline.py`)
+### 4. Ingestion Pipeline (`backend/packages/ingestion/src/researchops_ingestion/pipeline.py`)
 
 **Purpose:** Orchestrate full ingestion flow.
 
@@ -231,7 +231,7 @@ result = ingest_source(
 # result.source_id, result.snapshot_id, result.snippet_count
 ```
 
-### 5. Retrieval (`packages/retrieval/src/researchops_retrieval/search.py`)
+### 5. Retrieval (`backend/packages/retrieval/src/researchops_retrieval/search.py`)
 
 **Purpose:** Semantic search using pgvector.
 
@@ -261,7 +261,7 @@ results = search_snippets(
 # results[0]["snippet_text"], results[0]["similarity"], results[0]["source_title"]
 ```
 
-### 6. FastAPI Endpoints (`apps/api/src/researchops_api/routes/evidence.py`)
+### 6. FastAPI Endpoints (`backend/apps/api/src/researchops_api/routes/evidence.py`)
 
 **New Endpoints Added:**
 
@@ -285,7 +285,7 @@ results = search_snippets(
 
 ### Unit Tests
 
-**`tests/unit/test_sanitize.py` (16 test cases)**
+**`backend/tests/unit/test_sanitize.py` (16 test cases)**
 - HTML removal
 - Control character filtering
 - Whitespace normalization
@@ -294,7 +294,7 @@ results = search_snippets(
 - Unicode normalization
 - No false positives on normal text
 
-**`tests/unit/test_chunking.py` (14 test cases)**
+**`backend/tests/unit/test_chunking.py` (14 test cases)**
 - Empty string handling
 - Single vs. multiple chunks
 - Sequential offsets
@@ -308,7 +308,7 @@ results = search_snippets(
 
 ### Integration Tests
 
-**`tests/integration/test_evidence_ingestion.py` (13 test cases)**
+**`backend/tests/integration/test_evidence_ingestion.py` (13 test cases)**
 - Full ingestion pipeline
 - HTML sanitization
 - Prompt injection flagging
@@ -319,7 +319,7 @@ results = search_snippets(
 - SHA256 hashing
 - Metadata preservation
 
-**`tests/integration/test_retrieval.py` (12 test cases)**
+**`backend/tests/integration/test_retrieval.py` (12 test cases)**
 - Search returns results
 - Limit enforcement
 - Result metadata inclusion
@@ -341,10 +341,10 @@ pip install -r requirements.txt
 pytest
 
 # Run specific test files
-pytest tests/unit/test_sanitize.py -v
-pytest tests/unit/test_chunking.py -v
-pytest tests/integration/test_evidence_ingestion.py -v
-pytest tests/integration/test_retrieval.py -v
+pytest backend/tests/unit/test_sanitize.py -v
+pytest backend/tests/unit/test_chunking.py -v
+pytest backend/tests/integration/test_evidence_ingestion.py -v
+pytest backend/tests/integration/test_retrieval.py -v
 ```
 
 Expected output: **55+ tests passing**
@@ -459,36 +459,36 @@ Response:
 ### New Files Created
 
 **Ingestion Package:**
-- `packages/ingestion/src/researchops_ingestion/sanitize.py` (150 lines)
-- `packages/ingestion/src/researchops_ingestion/chunking.py` (200 lines)
-- `packages/ingestion/src/researchops_ingestion/embeddings.py` (120 lines)
-- `packages/ingestion/src/researchops_ingestion/pipeline.py` (400 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/sanitize.py` (150 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/chunking.py` (200 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/embeddings.py` (120 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/pipeline.py` (400 lines)
 
 **Retrieval Package:**
-- `packages/retrieval/src/researchops_retrieval/search.py` (250 lines)
+- `backend/packages/retrieval/src/researchops_retrieval/search.py` (250 lines)
 
 **Tests:**
-- `tests/unit/test_sanitize.py` (120 lines, 16 tests)
-- `tests/unit/test_chunking.py` (150 lines, 14 tests)
-- `tests/integration/test_evidence_ingestion.py` (250 lines, 13 tests)
-- `tests/integration/test_retrieval.py` (300 lines, 12 tests)
+- `backend/tests/unit/test_sanitize.py` (120 lines, 16 tests)
+- `backend/tests/unit/test_chunking.py` (150 lines, 14 tests)
+- `backend/tests/integration/test_evidence_ingestion.py` (250 lines, 13 tests)
+- `backend/tests/integration/test_retrieval.py` (300 lines, 12 tests)
 
 **Documentation:**
 - `PART6_IMPLEMENTATION.md` (this file)
 
 ### Modified Files
 
-- `packages/ingestion/src/researchops_ingestion/__init__.py` - Added exports
-- `packages/retrieval/src/researchops_retrieval/__init__.py` - Added exports
-- `apps/api/src/researchops_api/routes/evidence.py` - Added ingest and search endpoints
+- `backend/packages/ingestion/src/researchops_ingestion/__init__.py` - Added exports
+- `backend/packages/retrieval/src/researchops_retrieval/__init__.py` - Added exports
+- `backend/apps/api/src/researchops_api/routes/evidence.py` - Added ingest and search endpoints
 - `requirements.txt` - Added beautifulsoup4>=4.12
 
 ### Database Models (Reused from Part 4)
 
-- `db/models/sources.py` - Already existed
-- `db/models/snapshots.py` - Already existed
-- `db/models/snippets.py` - Already existed
-- `db/models/snippet_embeddings.py` - Already existed
+- `backend/db/models/sources.py` - Already existed
+- `backend/db/models/snapshots.py` - Already existed
+- `backend/db/models/snippets.py` - Already existed
+- `backend/db/models/snippet_embeddings.py` - Already existed
 
 ## Production Readiness
 

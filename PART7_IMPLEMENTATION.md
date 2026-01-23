@@ -125,7 +125,7 @@ class RetrievedSource:
 
 ## Core Modules
 
-### 1. Base Connector (`packages/connectors/src/researchops_connectors/base.py`)
+### 1. Base Connector (`backend/packages/connectors/src/researchops_connectors/base.py`)
 
 **Purpose:** Shared functionality for all connectors.
 
@@ -159,7 +159,7 @@ class MyConnector(BaseConnector):
 - Timeout protection
 - HTTP client pooling
 
-### 2. OpenAlex Connector (`packages/connectors/src/researchops_connectors/openalex.py`)
+### 2. OpenAlex Connector (`backend/packages/connectors/src/researchops_connectors/openalex.py`)
 
 **Purpose:** Free, comprehensive academic paper search.
 
@@ -197,7 +197,7 @@ paper = connector.get_by_id("10.1234/abc")  # Or DOI
 - Keywords (from concepts)
 - Open access PDF URL
 
-### 3. arXiv Connector (`packages/connectors/src/researchops_connectors/arxiv.py`)
+### 3. arXiv Connector (`backend/packages/connectors/src/researchops_connectors/arxiv.py`)
 
 **Purpose:** Preprint access for cutting-edge research.
 
@@ -230,7 +230,7 @@ paper = connector.get_by_id("arxiv:2401.12345")  # Also works
 - Categories (subject areas)
 - PDF URL
 
-### 4. Deduplication (`packages/connectors/src/researchops_connectors/dedup.py`)
+### 4. Deduplication (`backend/packages/connectors/src/researchops_connectors/dedup.py`)
 
 **Purpose:** Eliminate duplicate papers across connectors.
 
@@ -298,7 +298,7 @@ Merged Result:
   - PDF: https://...        (from arXiv)
 ```
 
-### 5. Hybrid Retrieval (`packages/connectors/src/researchops_connectors/hybrid.py`)
+### 5. Hybrid Retrieval (`backend/packages/connectors/src/researchops_connectors/hybrid.py`)
 
 **Purpose:** Combine keyword, vector, and reranking for best results.
 
@@ -430,28 +430,28 @@ Final sources: 10 high-quality papers
 ### New Files Created (5):
 
 **Connector Modules:**
-- `packages/connectors/src/researchops_connectors/base.py` (300 lines)
+- `backend/packages/connectors/src/researchops_connectors/base.py` (300 lines)
   - Base connector class
   - Rate limiter
   - Retry logic
   - Error handling
 
-- `packages/connectors/src/researchops_connectors/openalex.py` (250 lines)
+- `backend/packages/connectors/src/researchops_connectors/openalex.py` (250 lines)
   - OpenAlex API connector
   - Inverted index parsing
   - Metadata extraction
 
-- `packages/connectors/src/researchops_connectors/arxiv.py` (200 lines)
+- `backend/packages/connectors/src/researchops_connectors/arxiv.py` (200 lines)
   - arXiv API connector
   - XML Atom parsing
   - Category extraction
 
-- `packages/connectors/src/researchops_connectors/dedup.py` (250 lines)
+- `backend/packages/connectors/src/researchops_connectors/dedup.py` (250 lines)
   - Canonical ID priority
   - Metadata merging
   - Statistics tracking
 
-- `packages/connectors/src/researchops_connectors/hybrid.py` (350 lines)
+- `backend/packages/connectors/src/researchops_connectors/hybrid.py` (350 lines)
   - Keyword search orchestration
   - Vector search integration
   - Reranking algorithm
@@ -467,7 +467,7 @@ Final sources: 10 high-quality papers
 - `PART7_IMPLEMENTATION.md` (this file)
 
 ### Modified Files (1):
-- `packages/connectors/src/researchops_connectors/__init__.py`
+- `backend/packages/connectors/src/researchops_connectors/__init__.py`
   - Added exports for all connector classes
   - Added deduplication functions
   - Added hybrid retrieval functions

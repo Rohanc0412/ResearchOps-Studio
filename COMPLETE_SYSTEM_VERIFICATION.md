@@ -43,11 +43,11 @@ The ResearchOps Studio application has been fully verified across all implemente
 
 ### Files Implemented
 
-- `packages/core/src/researchops_core/runs/lifecycle.py` (500+ lines)
-- `apps/api/src/researchops_api/routes/runs.py` (400+ lines, rewritten)
-- `apps/orchestrator/src/researchops_orchestrator/runner.py` (modified)
-- `db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py`
-- `tests/integration/test_run_lifecycle_and_sse.py` (15+ tests)
+- `backend/packages/core/src/researchops_core/runs/lifecycle.py` (500+ lines)
+- `backend/apps/api/src/researchops_api/routes/runs.py` (400+ lines, rewritten)
+- `backend/apps/orchestrator/src/researchops_orchestrator/runner.py` (modified)
+- `backend/db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py`
+- `backend/tests/integration/test_run_lifecycle_and_sse.py` (15+ tests)
 
 ---
 
@@ -93,16 +93,16 @@ The ResearchOps Studio application has been fully verified across all implemente
 
 ### Files Implemented
 
-- `packages/ingestion/src/researchops_ingestion/sanitize.py` (150 lines)
-- `packages/ingestion/src/researchops_ingestion/chunking.py` (200 lines)
-- `packages/ingestion/src/researchops_ingestion/embeddings.py` (120 lines)
-- `packages/ingestion/src/researchops_ingestion/pipeline.py` (400 lines)
-- `packages/retrieval/src/researchops_retrieval/search.py` (250 lines)
-- `apps/api/src/researchops_api/routes/evidence.py` (enhanced)
-- `tests/unit/test_sanitize.py` (16 tests)
-- `tests/unit/test_chunking.py` (14 tests)
-- `tests/integration/test_evidence_ingestion.py` (13 tests)
-- `tests/integration/test_retrieval.py` (12 tests)
+- `backend/packages/ingestion/src/researchops_ingestion/sanitize.py` (150 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/chunking.py` (200 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/embeddings.py` (120 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/pipeline.py` (400 lines)
+- `backend/packages/retrieval/src/researchops_retrieval/search.py` (250 lines)
+- `backend/apps/api/src/researchops_api/routes/evidence.py` (enhanced)
+- `backend/tests/unit/test_sanitize.py` (16 tests)
+- `backend/tests/unit/test_chunking.py` (14 tests)
+- `backend/tests/integration/test_evidence_ingestion.py` (13 tests)
+- `backend/tests/integration/test_retrieval.py` (12 tests)
 
 ---
 
@@ -151,11 +151,11 @@ DOI + arXiv        → ("doi", "10.1234/test")    # DOI wins
 
 ### Files Implemented
 
-- `packages/connectors/src/researchops_connectors/base.py` (300 lines)
-- `packages/connectors/src/researchops_connectors/openalex.py` (250 lines)
-- `packages/connectors/src/researchops_connectors/arxiv.py` (200 lines)
-- `packages/connectors/src/researchops_connectors/dedup.py` (250 lines)
-- `packages/connectors/src/researchops_connectors/hybrid.py` (350 lines)
+- `backend/packages/connectors/src/researchops_connectors/base.py` (300 lines)
+- `backend/packages/connectors/src/researchops_connectors/openalex.py` (250 lines)
+- `backend/packages/connectors/src/researchops_connectors/arxiv.py` (200 lines)
+- `backend/packages/connectors/src/researchops_connectors/dedup.py` (250 lines)
+- `backend/packages/connectors/src/researchops_connectors/hybrid.py` (350 lines)
 - `test_connectors.py` (180 lines)
 
 ---
@@ -326,7 +326,7 @@ Success Rate: 100%
 
 ```powershell
 # Start PostgreSQL + pgvector + API + Workers
-docker compose -f infra/compose.yaml up --build
+docker compose -f backend/infra/compose.yaml up --build
 ```
 
 ### 2. Run Migrations

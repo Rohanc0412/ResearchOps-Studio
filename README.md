@@ -1,28 +1,28 @@
 # ResearchOps Studio
 
-Backend production skeleton for ResearchOps: API + orchestrator + worker + Postgres (pgvector). Part 1 (contracts/enforcement) is included.
+Backend production skeleton for ResearchOps: API + orchestrator + worker + Postgres (pgvector). Contracts/enforcement modules are included.
 
 ## Frontend (Dashboard)
 
-A standalone React + Vite dashboard lives in `apps/web`.
+A standalone React + Vite dashboard lives in `frontend/web`.
 
 From repo root:
 
 ```powershell
-npm --prefix apps/web install
-npm run dev
+npm --prefix frontend/web install
+npm --prefix frontend/web run dev
 ```
 
-Or from within `apps/web`:
+Or from within `frontend/web`:
 
 ```powershell
-cd apps/web
+cd frontend/web
 npm install
 npm run dev
 ```
 
 Notes:
-- Configure OIDC env vars in `apps/web/.env` (issuer, client id, redirect uri).
+- Configure OIDC/Vite env vars in the shared repo `.env` (issuer, client id, redirect uri, API base URL).
 - The API must allow the web origin (e.g. `http://localhost:5173`) via CORS for browser requests.
 
 ### Local OIDC (Keycloak)
@@ -30,7 +30,7 @@ Notes:
 Run API + DB + Keycloak with real OIDC validation:
 
 ```powershell
-docker compose -f infra/compose.yaml -f infra/compose.oidc.yaml up --build
+docker compose -f backend/infra/compose.yaml -f backend/infra/compose.oidc.yaml up --build
 ```
 
 Keycloak:
@@ -44,8 +44,9 @@ Issuer:
 
 - Exposes a small FastAPI service with run management and chat endpoints.
 - Enqueues background jobs (`research.run`) into Postgres.
+- Creates runs immediately from a research question (queued, current_stage=retrieve).
 - Runs the research pipeline that produces report artifacts (OpenAlex + arXiv).
-- Project runs (`POST /projects/{project_id}/runs`) execute the full research pipeline.
+- Project runs (`POST /projects/{project_id}/runs`) execute the research pipeline for a question.
 
 ## Retrieval Connectors (Part 7)
 
@@ -62,13 +63,13 @@ Issuer:
 From repo root:
 
 ```powershell
-docker compose -f infra/compose.yaml up --build
+docker compose -f backend/infra/compose.yaml up --build
 ```
 
 Stop and wipe local DB volume:
 
 ```powershell
-docker compose -f infra/compose.yaml down -v
+docker compose -f backend/infra/compose.yaml down -v
 ```
 
 ## How To Trigger A Research Run (Windows PowerShell)
@@ -77,7 +78,6 @@ PowerShell's `curl` is an alias for `Invoke-WebRequest`, so use `Invoke-RestMeth
 
 ```powershell
 Invoke-RestMethod -Method Get -Uri "http://localhost:8000/healthz"
-Invoke-RestMethod -Method Get -Uri "http://localhost:8000/version"
 
 # Create a project (one-time)
 $project = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects" `
@@ -88,7 +88,7 @@ $projectId = $project.id
 # Create a research run
 $run = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects/$projectId/runs" `
   -ContentType "application/json" `
-  -Body '{"prompt":"Summarize recent work on retrieval-augmented generation","output_type":"report"}'
+  -Body '{"question":"Summarize recent work on retrieval-augmented generation","client_request_id":"demo-run-1"}'
 $runId = $run.run_id
 
 # Check status
@@ -101,18 +101,21 @@ Expected `GET /runs/{run_id}` fields:
 
 ## API Endpoints
 
-### Health & Version
+### Health
 - `GET /healthz` → `{ "status": "ok" }`
-- `GET /version` → `{ "name": "...", "git_sha": "...", "build_time": "..." }`
 
 ### Run Management
-- `POST /projects/{project_id}/runs` - Enqueue a research run (prompt + output_type)
+- `POST /projects/{project_id}/runs` - Create a run from a question (output_type is fixed to report)
 - `GET /runs/{run_id}` - Run status + metadata (status, current_stage, timestamps, error info)
 - `GET /runs/{run_id}/events` - List events as JSON or stream via SSE (see below)
 - `POST /runs/{run_id}/cancel` - Request cancellation (cooperative)
 - `POST /runs/{run_id}/retry` - Retry a failed or blocked run
 - `GET /runs/{run_id}/artifacts` - List artifacts for run
-- `GET /runs/{run_id}/claims` - List claim map entries for run
+
+Run creation request/response:
+- Request body: `{ "question": "...", "client_request_id": "..." }` (output_type always `report`)
+- Response body: `{ "run_id": "...", "status": "queued" }`
+- Idempotency: reuse the same `client_request_id` to return the same `run_id`
 
 ## Architecture (Text Diagram)
 
@@ -120,7 +123,7 @@ Expected `GET /runs/{run_id}` fields:
 client
   |
   v
-apps/api (FastAPI)
+backend/apps/api (FastAPI)
   |   \
   |    \ reads status/artifacts
   |     \
@@ -128,10 +131,10 @@ apps/api (FastAPI)
 db (Postgres + pgvector)
   ^
   |
-apps/workers (polls jobs table)
+backend/apps/workers (polls jobs table)
   |
   v
-apps/orchestrator (LangGraph)
+backend/apps/orchestrator (LangGraph)
   |
   v
 artifacts table (dummy JSON payload)
@@ -139,11 +142,10 @@ artifacts table (dummy JSON payload)
 
 ## Configuration
 
-All services use `packages/core` settings (`pydantic-settings`, `.env` supported).
+All services load the shared repo `.env` via `backend/packages/core` settings (`pydantic-settings`).
 
 Important env vars:
 - `DATABASE_URL` (Compose sets this to Postgres service)
-- `LOG_LEVEL` (default `INFO`)
 - `API_HOST`, `API_PORT`
 - `WORKER_POLL_SECONDS`
 
@@ -209,8 +211,8 @@ Enforced server-side in code (never trust the client).
 
 ### Protected Endpoints
 
-- Protected: `GET /me`, `GET /tenants/current`, `POST /projects/{project_id}/runs`, `GET /runs/{run_id}`, `GET /auth/jwks-status`
-- Public: `GET /health`, `GET /healthz`, `GET /version`
+- Protected: `GET /me`, `POST /projects/{project_id}/runs`, `GET /runs/{run_id}`
+- Public: `GET /health`, `GET /healthz`
 
 ## Audit Logs
 
@@ -234,12 +236,12 @@ LIMIT 50;
 
 ## Logging
 
-`packages/observability` configures structured JSON logs with correlation fields:
+`backend/packages/observability` configures structured JSON logs with correlation fields:
 - `service`, `request_id`, `tenant_id`, `run_id`
 
 ## Database (Minimal, Production-Shaped)
 
-SQLAlchemy models in `db/models/`:
+SQLAlchemy models in `backend/db/models/`:
 - `projects` (tenant-scoped workspace + last activity)
 - `runs` (status/stage/budgets/errors)
 - `run_events` (timeline stream)
@@ -248,7 +250,7 @@ SQLAlchemy models in `db/models/`:
 - `claim_map` (claim ↔ snippet enforcement storage)
 - `jobs` (Postgres-backed queue, polled by worker)
 
-Local pgvector is enabled via `infra/docker/postgres/init/001_pgvector.sql`.
+Local pgvector is enabled via `backend/infra/docker/postgres/init/001_pgvector.sql`.
 
 ## Database and Memory Model (Part 4)
 
@@ -261,10 +263,11 @@ This schema is the UI truth layer for:
 - Claim maps for citation enforcement/debugging
 
 Quickstart (local):
-1) Start Postgres (Compose): `docker compose -f infra/compose.yaml up --build`
-2) Set env vars: `DATABASE_URL` (Postgres) + auth vars as needed
-3) Run migrations: `python -m alembic -c alembic.ini upgrade head`
-4) Start API (PowerShell): `$env:PYTHONPATH="apps/api/src;packages/core/src;packages/observability/src;packages/citations/src;packages/llm/src;."; python -m researchops_api.main`
+1) Start Postgres (Compose): `docker compose -f backend/infra/compose.yaml up --build`
+2) `cd backend`
+3) Set env vars: `DATABASE_URL` (Postgres) + auth vars as needed
+4) Run migrations: `python -m alembic -c alembic.ini upgrade head`
+5) Start API (PowerShell): `$env:PYTHONPATH="apps/api/src;packages/core/src;packages/observability/src;packages/citations/src;packages/llm/src;db"; python -m researchops_api.main`
 
 Useful commands:
 - Upgrade: `python -m alembic -c alembic.ini upgrade head`
@@ -279,28 +282,30 @@ Notes:
 
 ## Repo Layout
 
-- `apps/api/src/researchops_api` FastAPI service
-- `apps/orchestrator/src/researchops_orchestrator` LangGraph research pipeline
-- `apps/workers/src/researchops_workers` job worker loop
-- `packages/core/src/researchops_core` shared models/constants/settings
-- `packages/observability/src/researchops_observability` logging + middleware
-- `packages/citations/src/researchops_citations` facade for Part 1 enforcement
-- `db/` database models + init
-- `infra/` Docker compose + Dockerfiles
-- `tests/unit` unit tests
-- `tests/integration` end-to-end run test (in-process)
-- `tests/golden` golden JSON fixtures for Part 1
+- `frontend/web` React + Vite dashboard
+- `backend/apps/api/src/researchops_api` FastAPI service
+- `backend/apps/orchestrator/src/researchops_orchestrator` LangGraph research pipeline
+- `backend/apps/workers/src/researchops_workers` job worker loop
+- `backend/packages/core/src/researchops_core` shared models/constants/settings
+- `backend/packages/observability/src/researchops_observability` logging + middleware
+- `backend/packages/citations/src/researchops_citations` facade for Part 1 enforcement
+- `backend/db/` database models + init
+- `backend/infra/` Docker compose + Dockerfiles
+- `backend/tests/unit` unit tests
+- `backend/tests/integration` end-to-end run test (in-process)
+- `backend/tests/golden` golden JSON fixtures for Part 1
 
 ## Dev Commands
 
-- `make up` (Compose up)
-- `make test` (pytest)
-- `make fmt` (black)
-- `make lint` (ruff)
+- `make -C backend up` (Compose up)
+- `make -C backend test` (pytest)
+- `make -C backend fmt` (black)
+- `make -C backend lint` (ruff)
 
 ## Running Tests Without Docker
 
 ```powershell
+cd backend
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pytest
@@ -308,7 +313,7 @@ python -m venv .venv
 
 ## Troubleshooting
 
-- Postgres init races: schema creation uses a Postgres advisory lock (`db/init_db.py`) so `api` and `worker` can start together safely.
+- Postgres init races: schema creation uses a Postgres advisory lock (`backend/db/init_db.py`) so `api` and `worker` can start together safely.
 - PowerShell script execution blocked: run scripts with `powershell -NoProfile -ExecutionPolicy Bypass -File ...`.
 - Line endings: `.gitattributes` is configured so `core.autocrlf=true` works on Windows without noisy diffs.
 
@@ -351,6 +356,8 @@ Every stage emits events that are persisted in the `run_events` table:
 - `log` - Informational messages during execution
 - `error` - Errors with error_code and reason
 - `state` - State transitions (created→queued, running→succeeded, etc.)
+- `run.created` - Run record created
+- `run.queued` - Run queued for execution
 
 Each event has:
 - `event_number` - Sequential ID for SSE Last-Event-ID support
@@ -466,7 +473,7 @@ $projectId = $project.id
 # 2. Create a run
 $run = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/projects/$projectId/runs" `
   -ContentType "application/json" `
-  -Body '{"prompt":"Summarize recent work on retrieval-augmented generation","output_type":"report"}'
+  -Body '{"question":"Summarize recent work on retrieval-augmented generation","client_request_id":"demo-run-1"}'
 $runId = $run.run_id
 
 # 3. Get run status
@@ -491,6 +498,7 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
 
 **Event Emission:**
 - Every stage emits at least `stage_start` and `stage_finish`
+- Run setup emits `run.created` and `run.queued`
 - Failures emit `error` event with structured error_code and reason
 - Idempotent: emitting `stage_start` twice for the same stage is safe
 
@@ -505,6 +513,13 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:8000/runs/$runId"
 - State transitions are serialized via row locks
 - Event numbers are assigned from a PostgreSQL sequence (globally unique)
 
-## Part 1 Contract
+## Pipeline Spec (v3, in progress)
 
-The Part 1 contract and enforcement config are in `SPEC.md` and `claim_policy.yaml` (strict, fail-closed).
+This README is the source of truth for the current pipeline behavior.
+
+Stage 1 (Run setup):
+- Creates a run immediately from a question
+- Sets `status=queued` and `current_stage=retrieve`
+- Output type is fixed to `report`
+- Emits `run.created` and `run.queued` events
+- Returns `{ "run_id": "...", "status": "queued" }`

@@ -102,11 +102,11 @@ The ResearchOps Studio application has been fully verified with comprehensive wo
 ### Part 5: Run Lifecycle + SSE Streaming ✅
 
 **Files Modified/Created:**
-- `packages/core/src/researchops_core/runs/lifecycle.py` (NEW, 500+ lines)
-- `apps/api/src/researchops_api/routes/runs.py` (REWRITTEN, 400+ lines)
-- `apps/orchestrator/src/researchops_orchestrator/runner.py` (MODIFIED)
-- `db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py` (NEW)
-- `tests/integration/test_run_lifecycle_and_sse.py` (NEW, 15+ tests)
+- `backend/packages/core/src/researchops_core/runs/lifecycle.py` (NEW, 500+ lines)
+- `backend/apps/api/src/researchops_api/routes/runs.py` (REWRITTEN, 400+ lines)
+- `backend/apps/orchestrator/src/researchops_orchestrator/runner.py` (MODIFIED)
+- `backend/db/alembic/versions/20260117_0001_add_run_lifecycle_fields.py` (NEW)
+- `backend/tests/integration/test_run_lifecycle_and_sse.py` (NEW, 15+ tests)
 
 **Key Features:**
 - State machine with validated transitions
@@ -118,16 +118,16 @@ The ResearchOps Studio application has been fully verified with comprehensive wo
 ### Part 6: Evidence Ingestion Pipeline ✅
 
 **Files Modified/Created:**
-- `packages/ingestion/src/researchops_ingestion/sanitize.py` (NEW, 150 lines)
-- `packages/ingestion/src/researchops_ingestion/chunking.py` (NEW, 200 lines)
-- `packages/ingestion/src/researchops_ingestion/embeddings.py` (NEW, 120 lines)
-- `packages/ingestion/src/researchops_ingestion/pipeline.py` (NEW, 400 lines)
-- `packages/retrieval/src/researchops_retrieval/search.py` (NEW, 250 lines)
-- `apps/api/src/researchops_api/routes/evidence.py` (ENHANCED)
-- `tests/unit/test_sanitize.py` (NEW, 16 tests)
-- `tests/unit/test_chunking.py` (NEW, 14 tests)
-- `tests/integration/test_evidence_ingestion.py` (NEW, 13 tests)
-- `tests/integration/test_retrieval.py` (NEW, 12 tests)
+- `backend/packages/ingestion/src/researchops_ingestion/sanitize.py` (NEW, 150 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/chunking.py` (NEW, 200 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/embeddings.py` (NEW, 120 lines)
+- `backend/packages/ingestion/src/researchops_ingestion/pipeline.py` (NEW, 400 lines)
+- `backend/packages/retrieval/src/researchops_retrieval/search.py` (NEW, 250 lines)
+- `backend/apps/api/src/researchops_api/routes/evidence.py` (ENHANCED)
+- `backend/tests/unit/test_sanitize.py` (NEW, 16 tests)
+- `backend/tests/unit/test_chunking.py` (NEW, 14 tests)
+- `backend/tests/integration/test_evidence_ingestion.py` (NEW, 13 tests)
+- `backend/tests/integration/test_retrieval.py` (NEW, 12 tests)
 
 **Key Features:**
 - HTML sanitization with BeautifulSoup
@@ -190,13 +190,13 @@ run_events (sequential event_number, SSE-ready)
 ## Testing Coverage
 
 ### Unit Tests (30 test cases)
-- `tests/unit/test_sanitize.py` - 16 tests
-- `tests/unit/test_chunking.py` - 14 tests
+- `backend/tests/unit/test_sanitize.py` - 16 tests
+- `backend/tests/unit/test_chunking.py` - 14 tests
 
 ### Integration Tests (40 test cases)
-- `tests/integration/test_evidence_ingestion.py` - 13 tests
-- `tests/integration/test_retrieval.py` - 12 tests
-- `tests/integration/test_run_lifecycle_and_sse.py` - 15+ tests
+- `backend/tests/integration/test_evidence_ingestion.py` - 13 tests
+- `backend/tests/integration/test_retrieval.py` - 12 tests
+- `backend/tests/integration/test_run_lifecycle_and_sse.py` - 15+ tests
 
 ### Total: 70+ test cases across all components
 
@@ -225,7 +225,7 @@ pip install -r requirements.txt
 
 ### 2. Start Services with Docker Compose
 ```powershell
-docker compose -f infra/compose.yaml up --build
+docker compose -f backend/infra/compose.yaml up --build
 ```
 
 This starts:
