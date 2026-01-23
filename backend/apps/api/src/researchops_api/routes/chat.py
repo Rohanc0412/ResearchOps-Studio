@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -41,6 +42,8 @@ ACTION_PREFIX = "__ACTION__:"
 ACTION_RUN_PIPELINE = "run_pipeline"
 ACTION_QUICK_ANSWER = "quick_answer"
 
+logger = logging.getLogger(__name__)
+
 
 def _truncate_for_log(text: str, limit: int = 400) -> str:
     cleaned = (text or "").strip()
@@ -52,12 +55,27 @@ def _truncate_for_log(text: str, limit: int = 400) -> str:
 def _log_llm_exchange(label: str, conversation_id: UUID, content: str) -> None:
     if not content:
         return
+    message = "LLM request prepared" if label == "request" else "LLM response received"
+    logger.info(
+        message,
+        extra={
+            "event": "chat.llm",
+            "label": label,
+            "conversation_id": str(conversation_id),
+            "chars": len(content),
+            "preview": _truncate_for_log(content),
+        },
+    )
 
 
 def _log_step(state: str, *, conversation_id: UUID, step: str, extra: dict | None = None) -> None:
     payload = {"conversation_id": str(conversation_id), "step": step, "state": state}
     if extra:
         payload.update(extra)
+    logger.info(
+        f"Chat step {state}: {step.replace('_', ' ')}",
+        extra={"event": "chat.step", **payload},
+    )
 
 
 def _tenant_uuid(identity: Identity) -> UUID:
@@ -344,6 +362,15 @@ def post_conversation(
             created_by_user_id=identity.user_id,
             title=body.title,
         )
+        logger.info(
+            "Conversation created",
+            extra={
+                "event": "chat.conversation.create",
+                "conversation_id": str(convo.id),
+                "project_id": str(convo.project_id) if convo.project_id else None,
+                "title": convo.title,
+            },
+        )
         return ConversationOut(
             conversation_id=convo.id,
             title=convo.title,
@@ -380,6 +407,16 @@ def get_conversations(
             last = items[-1]
             sort_ts = last.last_message_at or last.created_at
             next_cursor = _encode_cursor(sort_ts, last.id)
+        logger.info(
+            "Conversations listed",
+            extra={
+                "event": "chat.conversation.list",
+                "project_id": str(project_id) if project_id else None,
+                "count": len(items),
+                "limit": limit,
+                "has_more": has_more,
+            },
+        )
         return ConversationListOut(
             items=[
                 ConversationOut(
@@ -426,6 +463,16 @@ def get_conversation_messages(
         if has_more and items:
             last = items[-1]
             next_cursor = _encode_cursor(last.created_at, last.id)
+        logger.info(
+            "Conversation messages listed",
+            extra={
+                "event": "chat.message.list",
+                "conversation_id": str(conversation_id),
+                "count": len(items),
+                "limit": limit,
+                "has_more": has_more,
+            },
+        )
         return ChatMessageListOut(
             items=[_message_out(row) for row in items],
             next_cursor=next_cursor,
@@ -447,6 +494,20 @@ def post_send_chat(
             "client_message_id": body.client_message_id,
             "message_len": len(body.message or ""),
             "force_pipeline": bool(body.force_pipeline),
+        },
+    )
+    action_id = _action_id_from_message(body.message)
+    logger.info(
+        "Chat message received",
+        extra={
+            "event": "chat.message.receive",
+            "conversation_id": str(body.conversation_id),
+            "client_message_id": body.client_message_id,
+            "message_len": len(body.message or ""),
+            "message_preview": _truncate_for_log(body.message),
+            "project_id": str(body.project_id) if body.project_id else None,
+            "force_pipeline": bool(body.force_pipeline),
+            "action_id": action_id,
         },
     )
 
@@ -481,6 +542,14 @@ def post_send_chat(
                     )
                 except Exception:
                     assistant = None
+            logger.info(
+                "Chat message replayed from cache",
+                extra={
+                    "event": "chat.message.replay",
+                    "conversation_id": str(convo.id),
+                    "client_message_id": body.client_message_id,
+                },
+            )
             return ChatSendResponse(
                 conversation_id=convo.id,
                 user_message=_message_out(existing),
@@ -489,7 +558,6 @@ def post_send_chat(
                 idempotent_replay=True,
             )
 
-        action_id = _action_id_from_message(body.message)
         user_type = "action" if action_id else "chat"
         user_content_json = (
             {"action_id": action_id, "label": _action_label(action_id)} if action_id else None
@@ -506,6 +574,15 @@ def post_send_chat(
             client_message_id=body.client_message_id,
             metadata_json=None,
             created_at=now,
+        )
+        logger.info(
+            "User message stored",
+            extra={
+                "event": "chat.message.store",
+                "conversation_id": str(convo.id),
+                "message_id": str(user_message.id),
+                "message_type": user_message.type,
+            },
         )
 
         if convo.title is None and user_type == "chat":
@@ -617,6 +694,15 @@ def post_send_chat(
                             tenant_id=tenant_id,
                             run_id=run.id,
                             job_type=RESEARCH_JOB_TYPE,
+                        )
+                        logger.info(
+                            "Research run queued from chat",
+                            extra={
+                                "event": "chat.run.queue",
+                                "conversation_id": str(convo.id),
+                                "run_id": str(run.id),
+                                "project_id": str(convo.project_id) if convo.project_id else None,
+                            },
                         )
                         convo.last_action_json = {
                             "action_hash": action_hash,
@@ -856,6 +942,16 @@ def post_send_chat(
                     _log_step("finish", conversation_id=convo.id, step="greeting")
                 else:
                     decision = classify_chat_intent(body.message)
+                    logger.info(
+                        "Chat routing decision made",
+                        extra={
+                            "event": "chat.route.decision",
+                            "conversation_id": str(convo.id),
+                            "mode": decision.mode,
+                            "confidence": decision.confidence,
+                            "reason": decision.reason,
+                        },
+                    )
                     if decision.mode == "offer_pipeline" and decision.confidence >= 0.75:
                         _log_step("start", conversation_id=convo.id, step="offer_pipeline")
                         pending_action = _pending_action_payload(

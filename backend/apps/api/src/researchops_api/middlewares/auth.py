@@ -12,6 +12,7 @@ from researchops_core.auth.exceptions import (
     AuthMissingError,
 )
 from researchops_core.auth.identity import Identity, extract_identity
+from researchops_observability.context import bind
 from researchops_core.auth.jwks_cache import JWKSCache
 from researchops_core.auth.jwt_verify import verify_jwt
 from researchops_core.settings import get_settings
@@ -49,6 +50,7 @@ def get_identity(request: Request) -> Identity:
         identity = Identity(
             user_id=user_id, tenant_id=tenant_id, roles=roles or ["viewer"], raw_claims={}
         )
+        bind(tenant_id=identity.tenant_id)
         request.state.identity = identity
         return identity
 
@@ -59,6 +61,7 @@ def get_identity(request: Request) -> Identity:
             roles=["viewer"],
             raw_claims={},
         )
+        bind(tenant_id=identity.tenant_id)
         request.state.identity = identity
         return identity
 
@@ -92,6 +95,7 @@ def get_identity(request: Request) -> Identity:
     except ValueError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
+    bind(tenant_id=identity.tenant_id)
     request.state.identity = identity
     return identity
 
