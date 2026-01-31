@@ -44,10 +44,24 @@ def _redact_key_value(k: str, v: Any) -> Any:
     return v
 
 
-def _clamp_string(s: str, max_len: int = 2000) -> str:
-    if len(s) <= max_len:
+def _max_log_string_len() -> int:
+    raw = os.getenv("LOG_MAX_STRING")
+    if raw is None or not raw.strip():
+        return 2000
+    try:
+        value = int(raw)
+    except ValueError:
+        return 2000
+    return value
+
+
+def _clamp_string(s: str, max_len: int | None = None) -> str:
+    limit = _max_log_string_len() if max_len is None else max_len
+    if limit <= 0:
         return s
-    return s[:max_len] + "…(truncated)"
+    if len(s) <= limit:
+        return s
+    return s[:limit] + "...(truncated)"
 
 
 def _to_jsonable(value: Any) -> Any:

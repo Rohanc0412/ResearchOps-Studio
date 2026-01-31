@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 import os
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
@@ -26,6 +27,8 @@ from db.services.truth import (
 from db.session import session_scope
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -138,6 +141,18 @@ def post_run_for_project(
         question = (body.question or body.prompt or "").strip()
         if not question:
             raise HTTPException(status_code=400, detail="question is required")
+        logger.info(
+            "Research pipeline request received",
+            extra={
+                "event": "pipeline.request",
+                "project_id": str(project_id),
+                "question": question,
+                "client_request_id": body.client_request_id,
+                "budget_override": body.budget_override,
+                "llm_provider": body.llm_provider,
+                "llm_model": body.llm_model,
+            },
+        )
 
         if body.client_request_id:
             existing = get_run_by_client_request_id(
@@ -147,6 +162,16 @@ def post_run_for_project(
                 client_request_id=body.client_request_id,
             )
             if existing is not None:
+                logger.info(
+                    "Research pipeline request reused existing run",
+                    extra={
+                        "event": "pipeline.request.replay",
+                        "project_id": str(project_id),
+                        "run_id": str(existing.id),
+                        "status": existing.status.value,
+                        "client_request_id": body.client_request_id,
+                    },
+                )
                 return RunSetupResponse(
                     run_id=str(existing.id),
                     status=existing.status.value,
@@ -213,6 +238,16 @@ def post_run_for_project(
                     client_request_id=body.client_request_id,
                 )
                 if existing is not None:
+                    logger.info(
+                        "Research pipeline request reused existing run after conflict",
+                        extra={
+                            "event": "pipeline.request.replay",
+                            "project_id": str(project_id),
+                            "run_id": str(existing.id),
+                            "status": existing.status.value,
+                            "client_request_id": body.client_request_id,
+                        },
+                    )
                     return RunSetupResponse(
                         run_id=str(existing.id),
                         status=existing.status.value,
@@ -220,6 +255,15 @@ def post_run_for_project(
             raise HTTPException(status_code=409, detail="run already exists")
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        logger.info(
+            "Research pipeline response sent",
+            extra={
+                "event": "pipeline.response",
+                "project_id": str(project_id),
+                "run_id": str(run.id),
+                "status": run.status.value,
+            },
+        )
         return RunSetupResponse(
             run_id=str(run.id),
             status=run.status.value,

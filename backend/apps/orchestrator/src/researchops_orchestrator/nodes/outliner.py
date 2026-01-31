@@ -7,6 +7,7 @@ Generates an LLM-driven outline and enforces hard constraints.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -21,16 +22,78 @@ from researchops_core.orchestrator.state import (
     OutlineModel,
     OutlineSection,
 )
-from researchops_llm import LLMError, get_llm_client
+from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
+
+logger = logging.getLogger(__name__)
+
+OUTLINE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sections": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "section_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "goal": {"type": "string"},
+                    "key_points": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "suggested_evidence_themes": {"type": "array", "items": {"type": "string"}},
+                    "section_order": {"type": "integer"},
+                },
+                "required": [
+                    "section_id",
+                    "title",
+                    "goal",
+                    "key_points",
+                    "suggested_evidence_themes",
+                    "section_order",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["sections"],
+    "additionalProperties": False,
+}
 
 
 
 def _print_llm_exchange(label: str, content: str) -> None:
     if content is None:
         return
-    if os.getenv("OUTLINE_DEBUG") != "1":
+    message = (
+        "LLM request sent for outline"
+        if "request" in label and "response" not in label
+        else "LLM response received for outline"
+    )
+    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+    if log_full:
+        logger.info(f"{message}\n{content}")
+        logger.info(
+            message,
+            extra={
+                "event": "pipeline.llm",
+                "stage": "outline",
+                "label": label,
+                "chars": len(content),
+            },
+        )
         return
-    snippet = content[:4000]
+    logger.info(
+        message,
+        extra={
+            "event": "pipeline.llm",
+            "stage": "outline",
+            "label": label,
+            "chars": len(content),
+            "content": content,
+        },
+    )
 
 
 @instrument_node("outline")
@@ -42,7 +105,7 @@ def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     vetted_sources = state.vetted_sources
 
     try:
-        llm_client = get_llm_client(state.llm_provider, state.llm_model)
+        llm_client = get_llm_client_for_stage("outline", state.llm_provider, state.llm_model)
     except LLMError as exc:
         raise ValueError("LLM outline generation is required but unavailable.") from exc
 
@@ -136,7 +199,7 @@ def _generate_outline_with_llm(
         "    {\n"
         '      "section_id": "intro",\n'
         '      "title": "Introduction",\n'
-        '      "goal": "2-3 sentences.",\n'
+        '      "goal": "Describe the section objective.",\n'
         '      "key_points": ["...", "..."],\n'
         '      "suggested_evidence_themes": ["..."],\n'
         '      "section_order": 1\n'
@@ -152,7 +215,6 @@ def _generate_outline_with_llm(
         f"- Total sections should be {min_sections} to {max_sections}\n"
         "- Introduction must be first and Conclusion must be last\n"
         "- Section titles must be unique\n"
-        "- Each section must include 6-10 key_points\n"
         "- suggested_evidence_themes should be keywords/topics\n"
         "- If too few sources, use fewer sections but keep intro+conclusion\n"
         "- Do not include markdown, no backticks, no commentary\n"
@@ -165,7 +227,7 @@ def _generate_outline_with_llm(
             system=system,
             max_tokens=1400,
             temperature=0.3,
-            response_format="json",
+            response_format=json_response_format("outline", OUTLINE_SCHEMA),
         )
     except LLMError as exc:
         try:
@@ -181,7 +243,13 @@ def _generate_outline_with_llm(
     _print_llm_exchange("response", response)
     payload = _extract_json_payload(response)
     if payload is None:
-        return None
+        fallback = _fallback_outline_from_text(response, user_query, vetted_sources)
+        if fallback:
+            logger.warning(
+                "Outline JSON missing; reconstructed from text",
+                extra={"event": "outline.fallback", "reason": "no_json"},
+            )
+        return fallback
 
     if isinstance(payload, list):
         payload = {"sections": payload}
@@ -189,10 +257,16 @@ def _generate_outline_with_llm(
     try:
         outline = OutlineModel.model_validate(payload)
     except Exception as exc:
-        return None
+        fallback = _fallback_outline_from_text(response, user_query, vetted_sources)
+        if fallback:
+            logger.warning(
+                "Outline JSON invalid; reconstructed from text",
+                extra={"event": "outline.fallback", "reason": "invalid_json"},
+            )
+        return fallback
 
     if not outline.sections:
-        return None
+        return _fallback_outline_from_text(response, user_query, vetted_sources)
     return outline
 
 
@@ -240,15 +314,6 @@ def _validate_outline(outline: OutlineModel, vetted_sources: list) -> list[str]:
         errors.append("Section IDs must be unique.")
 
     for section in sections:
-        if not section.goal.strip():
-            errors.append("Each section must include a non-empty goal.")
-        sentence_count = _sentence_count(section.goal)
-        if sentence_count < 2 or sentence_count > 3:
-            errors.append("Each section goal must be 2 to 3 sentences.")
-        if len(section.key_points) < 2:
-            errors.append("Each section must include at least 2 key_points.")
-        if len(section.key_points) < 6 or len(section.key_points) > 10:
-            errors.append("Each section must include 6 to 10 key_points.")
         if not section.suggested_evidence_themes:
             errors.append("Each section must include suggested_evidence_themes.")
     return errors
@@ -322,6 +387,194 @@ def _normalize_str_list(items: list[str]) -> list[str]:
     return cleaned
 
 
+def _fallback_outline_from_text(
+    text: str,
+    user_query: str,
+    vetted_sources: list,
+) -> OutlineModel | None:
+    titles = _extract_section_titles(text)
+    min_sections, max_sections = _section_count_bounds(vetted_sources)
+    target_count = min(max(len(titles), min_sections), max_sections)
+
+    if not titles:
+        titles = _default_section_titles(target_count)
+    else:
+        titles = _ensure_intro_conclusion(titles)
+        if len(titles) < min_sections:
+            titles.extend(_default_section_titles(min_sections)[len(titles) :])
+        titles = titles[:target_count]
+
+    keywords = _collect_keywords(vetted_sources, limit=8)
+    sections: list[OutlineSection] = []
+    for idx, title in enumerate(titles, start=1):
+        section_id = _section_id_from_title(title, idx)
+        goal = _section_goal(title, user_query, keywords)
+        key_points = _section_key_points(title, user_query, keywords, count=8)
+        themes = _section_themes(keywords, count=5)
+        sections.append(
+            OutlineSection(
+                section_id=section_id,
+                title=title,
+                goal=goal,
+                key_points=key_points,
+                suggested_evidence_themes=themes,
+                section_order=idx,
+            )
+        )
+
+    return OutlineModel(sections=sections, total_estimated_words=None)
+
+
+def _extract_section_titles(text: str) -> list[str]:
+    if not text:
+        return []
+    cleaned = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    titles: list[str] = []
+    seen: set[str] = set()
+    for line in cleaned.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        candidate = re.sub(r"^[#\-\*\d\.\)\s]+", "", candidate).strip()
+        candidate = re.sub(r"^section\s+\d+\s*[:\-]\s*", "", candidate, flags=re.I).strip()
+        if len(candidate) < 3:
+            continue
+        normalized = candidate.lower()
+        if normalized in {"references", "bibliography", "citations"}:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        titles.append(candidate)
+    return titles
+
+
+def _default_section_titles(target_count: int) -> list[str]:
+    base = [
+        "Introduction",
+        "Background and Context",
+        "Methods and Approaches",
+        "Findings and Evidence",
+        "Limitations and Risks",
+        "Conclusion",
+    ]
+    extras = [
+        "Applications and Use Cases",
+        "Open Questions",
+        "Future Directions",
+        "Practical Implications",
+    ]
+    if target_count <= len(base):
+        return base[:target_count]
+    needed = target_count - len(base)
+    return base + extras[:needed]
+
+
+def _ensure_intro_conclusion(titles: list[str]) -> list[str]:
+    normalized = [t.strip() for t in titles if t.strip()]
+    if not normalized:
+        return normalized
+    lower = [t.lower() for t in normalized]
+    if "introduction" not in lower:
+        normalized.insert(0, "Introduction")
+    if "conclusion" not in lower:
+        normalized.append("Conclusion")
+    return normalized
+
+
+def _section_id_from_title(title: str, index: int) -> str:
+    lower = title.strip().lower()
+    if lower.startswith("intro") or lower == "introduction":
+        return "intro"
+    if lower.startswith("conclusion") or lower == "summary":
+        return "conclusion"
+    slug = re.sub(r"[^a-z0-9]+", "_", lower).strip("_")
+    return slug or f"section_{index}"
+
+
+def _section_goal(title: str, user_query: str, keywords: list[str]) -> str:
+    hint = ", ".join(keywords[:2]) if keywords else "the available evidence"
+    return (
+        f"Clarify the purpose of {title.lower()} in answering the question about {user_query}. "
+        f"Highlight how this section uses themes like {hint} to frame the discussion."
+    )
+
+
+def _section_key_points(
+    title: str, user_query: str, keywords: list[str], *, count: int
+) -> list[str]:
+    points: list[str] = []
+    seeds = keywords[:max(3, min(len(keywords), 6))]
+    if not seeds:
+        seeds = ["scope", "evidence", "implications"]
+    templates = [
+        f"Define how {title.lower()} relates to {user_query}.",
+        f"Summarize key evidence about {seeds[0]}.",
+        f"Explain notable patterns or trends in {seeds[1]}.",
+        f"Describe limitations or gaps around {seeds[2]}.",
+        f"Connect {title.lower()} to practical impacts.",
+        f"Identify open questions that remain unresolved.",
+        f"Compare viewpoints that shape this section.",
+        f"Outline why these points matter for the final report.",
+    ]
+    for item in templates:
+        if len(points) >= count:
+            break
+        points.append(item)
+    return points[:count]
+
+
+def _section_themes(keywords: list[str], *, count: int) -> list[str]:
+    if not keywords:
+        return ["evidence", "methods", "trends", "risks", "implications"][:count]
+    return keywords[:count]
+
+
+def _collect_keywords(vetted_sources: list, limit: int = 8) -> list[str]:
+    text = " ".join(
+        [
+            str(getattr(source, "title", "") or "")
+            for source in vetted_sources or []
+        ]
+    )
+    text += " " + " ".join(
+        [
+            str(getattr(source, "abstract", "") or "")
+            for source in vetted_sources or []
+        ]
+    )
+    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9\-]{2,}", text.lower())
+    stop = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "from",
+        "this",
+        "into",
+        "about",
+        "using",
+        "based",
+        "study",
+        "research",
+        "analysis",
+        "approach",
+        "methods",
+        "results",
+        "paper",
+        "model",
+        "models",
+    }
+    counts: dict[str, int] = {}
+    for token in tokens:
+        if token in stop:
+            continue
+        counts[token] = counts.get(token, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+    return [word for word, _ in ranked[:limit]]
+
+
 def _repair_outline_with_llm(
     outline: OutlineModel,
     errors: list[str],
@@ -349,7 +602,7 @@ def _repair_outline_with_llm(
         "    {\n"
         '      "section_id": "intro",\n'
         '      "title": "Introduction",\n'
-        '      "goal": "2-3 sentences.",\n'
+        '      "goal": "Describe the section objective.",\n'
         '      "key_points": ["...", "..."],\n'
         '      "suggested_evidence_themes": ["..."],\n'
         '      "section_order": 1\n'
@@ -401,14 +654,6 @@ def _repair_outline_with_llm(
     if not repaired.sections:
         return None
     return repaired
-
-
-def _sentence_count(text: str) -> int:
-    cleaned = text.strip()
-    if not cleaned:
-        return 0
-    parts = [p for p in re.split(r"(?<=[.!?])\s+", cleaned) if p.strip()]
-    return len(parts)
 
 
 def _persist_outline(session: Session, tenant_id, run_id, outline: OutlineModel) -> None:

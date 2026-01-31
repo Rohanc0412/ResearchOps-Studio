@@ -39,7 +39,7 @@ services:
           "CMD-SHELL",
           "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\"",
         ]
-      interval: 2s
+      interval: 5m
       timeout: 3s
       retries: 30
 
@@ -47,33 +47,33 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/worker.Dockerfile
-    runtime: nvidia
+    gpus: all
     env_file:
       - ../../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
       WORKER_POLL_SECONDS: "1.0"
+      HF_HOME: /app/.cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /app/.cache/huggingface/hub
+      TRANSFORMERS_CACHE: /app/.cache/huggingface/transformers
+      SENTENCE_TRANSFORMERS_HOME: /app/.cache/sentence-transformers
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      HOSTED_LLM_BASE_URL: ${HOSTED_LLM_BASE_URL:-https://openrouter.ai/api}
-      HOSTED_LLM_MODEL: ${HOSTED_LLM_MODEL:-xiaomi/mimo-v2-flash:free}
       LLM_DRAFT_REQUIRED: "true"
       LLM_OUTLINE_REQUIRED: "true"
       LLM_CLAIM_REQUIRED: "true"
       LLM_EVALUATOR_REQUIRED: "true"
       LLM_REPAIR_REQUIRED: "true"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     depends_on:
       postgres:
         condition: service_healthy
       api:
-        condition: service_healthy
+        condition: service_started
+    volumes:
+      - hf_cache:/app/.cache/huggingface
+      - st_cache:/app/.cache/sentence-transformers
 
 volumes:
   postgres_data: {}
+  hf_cache: {}
+  st_cache: {}

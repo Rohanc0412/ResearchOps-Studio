@@ -14,6 +14,8 @@ from db.models.jobs import JobStatusDb
 from db.models.runs import RunStatusDb
 from db.session import create_db_engine, create_sessionmaker, session_scope
 from researchops_core import get_settings
+from researchops_core.constants import SERVICE_WORKER
+from researchops_observability import setup_logging
 from researchops_orchestrator import RESEARCH_JOB_TYPE, process_research_run
 
 
@@ -109,6 +111,7 @@ def run_once(*, SessionLocal) -> bool:
 
 
 def main() -> None:
+    setup_logging(SERVICE_WORKER)
     settings = get_settings()
     run_forever(poll_seconds=settings.worker_poll_seconds)
 

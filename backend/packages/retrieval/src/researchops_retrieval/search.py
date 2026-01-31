@@ -10,6 +10,7 @@ This module provides:
 
 from __future__ import annotations
 
+import math
 from typing import TypedDict
 from uuid import UUID
 
@@ -118,7 +119,93 @@ def search_snippets(
     # - orthogonal → 0.5
     # - opposite → 0.0
 
-    # Build query with joins
+    bind = session.get_bind()
+    dialect = bind.dialect.name if bind else None
+
+    def _cosine_sim(a: list[float], b: list[float]) -> float:
+        if not a or not b:
+            return 0.0
+        if len(a) != len(b):
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(y * y for y in b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        return max(0.0, min(1.0, dot / (norm_a * norm_b)))
+
+    # Prefer pgvector cosine distance when available.
+    if hasattr(SnippetEmbeddingRow.embedding, "cosine_distance"):
+        distance_expr = SnippetEmbeddingRow.embedding.cosine_distance(query_embedding)
+        similarity_expr = (1 - distance_expr / 2).label("similarity")
+        order_expr = (1 - distance_expr / 2).desc()
+    elif dialect == "postgresql":
+        distance_expr = SnippetEmbeddingRow.embedding.op("<=>")(query_embedding)
+        similarity_expr = (1 - distance_expr / 2).label("similarity")
+        order_expr = (1 - distance_expr / 2).desc()
+    else:
+        query = (
+            select(
+                SnippetRow.id.label("snippet_id"),
+                SnippetRow.text.label("snippet_text"),
+                SnippetRow.snippet_index,
+                SnippetRow.char_start,
+                SnippetRow.char_end,
+                SnippetEmbeddingRow.embedding.label("embedding"),
+                SourceRow.id.label("source_id"),
+                SourceRow.title.label("source_title"),
+                SourceRow.source_type,
+                SourceRow.canonical_id.label("source_canonical_id"),
+                SourceRow.year.label("source_year"),
+                SourceRow.authors_json.label("source_authors"),
+                SourceRow.url.label("source_url"),
+                SnapshotRow.id.label("snapshot_id"),
+                SnapshotRow.snapshot_version,
+            )
+            .select_from(SnippetEmbeddingRow)
+            .join(SnippetRow, SnippetRow.id == SnippetEmbeddingRow.snippet_id)
+            .join(SnapshotRow, SnapshotRow.id == SnippetRow.snapshot_id)
+            .join(SourceRow, SourceRow.id == SnapshotRow.source_id)
+            .where(
+                SnippetEmbeddingRow.tenant_id == tenant_id,
+                SnippetEmbeddingRow.embedding_model == embedding_model,
+            )
+        )
+        if source_ids:
+            query = query.where(SourceRow.id.in_(source_ids))
+
+        rows = session.execute(query).all()
+        scored = []
+        for row in rows:
+            similarity = _cosine_sim(row.embedding or [], query_embedding)
+            if similarity < min_similarity:
+                continue
+            scored.append((similarity, row))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        results: list[SearchResult] = []
+        for similarity, row in scored[:limit]:
+            results.append(
+                SearchResult(
+                    snippet_id=row.snippet_id,
+                    snippet_text=row.snippet_text,
+                    snippet_index=row.snippet_index,
+                    char_start=row.char_start,
+                    char_end=row.char_end,
+                    similarity=float(similarity),
+                    source_id=row.source_id,
+                    source_title=row.source_title,
+                    source_type=row.source_type,
+                    source_canonical_id=row.source_canonical_id,
+                    source_year=row.source_year,
+                    source_authors=row.source_authors,
+                    source_url=row.source_url,
+                    snapshot_id=row.snapshot_id,
+                    snapshot_version=row.snapshot_version,
+                )
+            )
+        return results
+
+    # Build query with joins (pgvector path)
     query = (
         select(
             SnippetRow.id.label("snippet_id"),
@@ -126,7 +213,7 @@ def search_snippets(
             SnippetRow.snippet_index,
             SnippetRow.char_start,
             SnippetRow.char_end,
-            (1 - SnippetEmbeddingRow.embedding.cosine_distance(query_embedding) / 2).label("similarity"),
+            similarity_expr,
             SourceRow.id.label("source_id"),
             SourceRow.title.label("source_title"),
             SourceRow.source_type,
@@ -145,7 +232,7 @@ def search_snippets(
             SnippetEmbeddingRow.tenant_id == tenant_id,
             SnippetEmbeddingRow.embedding_model == embedding_model,
         )
-        .order_by((1 - SnippetEmbeddingRow.embedding.cosine_distance(query_embedding) / 2).desc())
+        .order_by(order_expr)
         .limit(limit)
     )
     if source_ids:

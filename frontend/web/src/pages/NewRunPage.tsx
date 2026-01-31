@@ -8,7 +8,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Input } from "../components/ui/Input";
 import { Textarea } from "../components/ui/Textarea";
 
-const DEFAULT_HOSTED_MODEL = "xiaomi/mimo-v2-flash:free";
+const DEFAULT_HOSTED_MODEL = "arcee-ai/trinity-large-preview:free";
 
 export function NewRunPage() {
   const { projectId } = useParams();

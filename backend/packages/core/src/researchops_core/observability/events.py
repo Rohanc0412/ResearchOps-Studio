@@ -7,6 +7,7 @@ Provides utilities to emit SSE events during graph execution.
 from __future__ import annotations
 
 import functools
+import logging
 import time
 import traceback
 from datetime import UTC, datetime
@@ -16,6 +17,21 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from db.models.run_events import RunEventRow
+
+logger = logging.getLogger(__name__)
+
+
+def _get_state_value(state: Any, key: str) -> Any:
+    if isinstance(state, dict):
+        return state.get(key)
+    return getattr(state, key, None)
+
+
+def _truncate_text(text: str, max_chars: int = 2000) -> str:
+    cleaned = (text or "").strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[:max_chars].rstrip() + "...(truncated)"
 
 
 
@@ -31,11 +47,6 @@ def _state_summary(state: Any) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     if state is None:
         return summary
-
-    def get_value(key: str) -> Any:
-        if isinstance(state, dict):
-            return state.get(key)
-        return getattr(state, key, None)
 
     def maybe_len(value: Any) -> int | None:
         try:
@@ -54,35 +65,122 @@ def _state_summary(state: Any) -> dict[str, Any]:
         "artifacts",
     ]
     for field in summary_fields:
-        value = get_value(field)
+        value = _get_state_value(state, field)
         count = maybe_len(value) if value is not None else None
         if count is not None:
             summary[field] = count
 
-    outline = get_value("outline")
+    outline = _get_state_value(state, "outline")
     if outline is not None:
         sections = outline.get("sections") if isinstance(outline, dict) else getattr(outline, "sections", None)
         count = maybe_len(sections) if sections is not None else None
         if count is not None:
             summary["outline_sections"] = count
 
-    draft_text = get_value("draft_text")
+    draft_text = _get_state_value(state, "draft_text")
     if isinstance(draft_text, str) and draft_text:
         summary["draft_length"] = len(draft_text)
 
-    evaluator_decision = get_value("evaluator_decision")
+    evaluator_decision = _get_state_value(state, "evaluator_decision")
     if evaluator_decision:
         summary["evaluator_decision"] = getattr(evaluator_decision, "value", str(evaluator_decision))
 
-    iteration_count = get_value("iteration_count")
+    iteration_count = _get_state_value(state, "iteration_count")
     if isinstance(iteration_count, int):
         summary["iteration_count"] = iteration_count
 
-    repair_attempts = get_value("repair_attempts")
+    repair_attempts = _get_state_value(state, "repair_attempts")
     if isinstance(repair_attempts, int):
         summary["repair_attempts"] = repair_attempts
 
     return summary
+
+
+def _source_preview(sources: Any, limit: int = 5) -> list[dict[str, Any]]:
+    if not sources:
+        return []
+    preview: list[dict[str, Any]] = []
+    for source in list(sources)[:limit]:
+        preview.append(
+            {
+                "source_id": str(_get_state_value(source, "source_id") or ""),
+                "title": _get_state_value(source, "title"),
+                "year": _get_state_value(source, "year"),
+                "connector": _get_state_value(source, "connector"),
+            }
+        )
+    return preview
+
+
+def _outline_preview(outline: Any, limit: int = 8) -> list[dict[str, Any]]:
+    if outline is None:
+        return []
+    sections = outline.get("sections") if isinstance(outline, dict) else getattr(outline, "sections", None)
+    if not sections:
+        return []
+    items: list[dict[str, Any]] = []
+    for section in list(sections)[:limit]:
+        items.append(
+            {
+                "section_id": _get_state_value(section, "section_id"),
+                "title": _get_state_value(section, "title"),
+            }
+        )
+    return items
+
+
+def _stage_input_details(stage: str, state: Any) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    details["user_query"] = _truncate_text(str(_get_state_value(state, "user_query") or ""))
+    if stage == "retrieve":
+        details["existing_queries"] = list(_get_state_value(state, "generated_queries") or [])
+    if stage == "evidence_pack":
+        details["outline_sections"] = _outline_preview(_get_state_value(state, "outline"))
+    if stage == "outline":
+        details["vetted_sources_preview"] = _source_preview(_get_state_value(state, "vetted_sources"))
+    if stage == "draft":
+        details["outline_sections"] = _outline_preview(_get_state_value(state, "outline"))
+        details["evidence_snippet_count"] = len(_get_state_value(state, "evidence_snippets") or [])
+    if stage == "evaluate":
+        details["draft_length"] = len(_get_state_value(state, "draft_text") or "")
+    if stage == "repair":
+        details["repair_attempts"] = _get_state_value(state, "repair_attempts")
+    if stage == "export":
+        details["draft_length"] = len(_get_state_value(state, "draft_text") or "")
+    return {k: v for k, v in details.items() if v not in (None, "", [])}
+
+
+def _stage_output_details(stage: str, state: Any) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    if stage == "retrieve":
+        details["generated_queries"] = list(_get_state_value(state, "generated_queries") or [])
+        vetted_sources = _get_state_value(state, "vetted_sources") or []
+        details["selected_sources_count"] = len(vetted_sources)
+        details["selected_sources_preview"] = _source_preview(vetted_sources)
+    elif stage == "evidence_pack":
+        section_snippets = _get_state_value(state, "section_evidence_snippets") or {}
+        details["section_snippet_counts"] = {
+            str(section_id): len(snippets or [])
+            for section_id, snippets in list(section_snippets.items())[:12]
+        }
+    elif stage == "outline":
+        details["outline_sections"] = _outline_preview(_get_state_value(state, "outline"))
+    elif stage == "draft":
+        draft_text = _get_state_value(state, "draft_text") or ""
+        details["draft_length"] = len(draft_text)
+        details["draft_preview"] = _truncate_text(str(draft_text), max_chars=800)
+    elif stage == "evaluate":
+        decision = _get_state_value(state, "evaluator_decision")
+        if decision is not None:
+            details["evaluator_decision"] = getattr(decision, "value", str(decision))
+        details["evaluation_reason"] = _get_state_value(state, "evaluation_reason")
+    elif stage == "repair":
+        details["repair_attempts"] = _get_state_value(state, "repair_attempts")
+        details["repair_edits_count"] = len(_get_state_value(state, "repair_edits_json") or [])
+    elif stage == "export":
+        artifacts = _get_state_value(state, "artifacts") or {}
+        details["artifacts"] = list(artifacts.keys()) if isinstance(artifacts, dict) else []
+    return {k: v for k, v in details.items() if v not in (None, "", [])}
 
 
 def emit_run_event(
@@ -169,6 +267,16 @@ def instrument_node(stage_name: str) -> Callable:
             """Wrapped function with event emission."""
             start_time = time.monotonic()
             state_summary = _state_summary(state)
+            logger.info(
+                f"Starting pipeline step: {stage_name}",
+                extra={
+                    "event": "pipeline.step.start",
+                    "stage": stage_name,
+                    "state_summary": state_summary,
+                    "input": _stage_input_details(stage_name, state),
+                    "iteration": _get_state_value(state, "iteration_count"),
+                },
+            )
             # Emit stage_start
             emit_run_event(
                 session=session,
@@ -203,6 +311,17 @@ def instrument_node(stage_name: str) -> Callable:
                         "state_summary": result_summary,
                     },
                 )
+                logger.info(
+                    f"Finished pipeline step: {stage_name}",
+                    extra={
+                        "event": "pipeline.step.finish",
+                        "stage": stage_name,
+                        "duration_ms": duration_ms,
+                        "state_summary": result_summary,
+                        "output": _stage_output_details(stage_name, result),
+                        "iteration": _get_state_value(result, "iteration_count"),
+                    },
+                )
 
                 return result
 
@@ -211,6 +330,16 @@ def instrument_node(stage_name: str) -> Callable:
                     session.rollback()
                 except Exception:
                     pass
+                logger.exception(
+                    f"Pipeline step failed: {stage_name}",
+                    extra={
+                        "event": "pipeline.step.error",
+                        "stage": stage_name,
+                        "error": str(e),
+                        "state_summary": state_summary,
+                        "iteration": _get_state_value(state, "iteration_count"),
+                    },
+                )
                 # Emit error event
                 emit_run_event(
                     session=session,

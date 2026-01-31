@@ -651,6 +651,17 @@ def post_send_chat(
                         except Exception:
                             last_run_id = None
                     if assistant_message is None:
+                        logger.info(
+                            "Research pipeline request accepted from chat",
+                            extra={
+                                "event": "pipeline.request",
+                                "conversation_id": str(convo.id),
+                                "project_id": str(convo.project_id) if convo.project_id else None,
+                                "prompt": pending_prompt,
+                                "llm_provider": llm_provider,
+                                "llm_model": llm_model,
+                            },
+                        )
                         run = create_run(
                             session=session,
                             tenant_id=tenant_id,
@@ -696,6 +707,16 @@ def post_send_chat(
                             job_type=RESEARCH_JOB_TYPE,
                         )
                         logger.info(
+                            "Research pipeline run created from chat",
+                            extra={
+                                "event": "pipeline.response",
+                                "conversation_id": str(convo.id),
+                                "project_id": str(convo.project_id) if convo.project_id else None,
+                                "run_id": str(run.id),
+                                "status": run.status.value,
+                            },
+                        )
+                        logger.info(
                             "Research run queued from chat",
                             extra={
                                 "event": "chat.run.queue",
@@ -721,6 +742,15 @@ def post_send_chat(
                             content_json={"run_id": str(run.id), "action_hash": action_hash},
                             client_message_id=None,
                             metadata_json=None,
+                        )
+                        logger.info(
+                            "Research pipeline chat response sent",
+                            extra={
+                                "event": "pipeline.response",
+                                "conversation_id": str(convo.id),
+                                "run_id": str(run.id),
+                                "assistant_message": "Starting a research run now.",
+                            },
                         )
                         write_audit_log(
                             db=session,

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
+import os
 import re
 
 from sqlalchemy.orm import Session
@@ -24,7 +26,32 @@ from researchops_core.orchestrator.state import (
     OrchestratorState,
     OutlineSection,
 )
-from researchops_llm import LLMError, get_llm_client
+from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
+
+logger = logging.getLogger(__name__)
+
+REPAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "section_id": {"type": "string"},
+        "revised_text": {"type": "string"},
+        "revised_summary": {"type": "string"},
+        "next_section_id": {"type": "string"},
+        "patched_next_text": {"type": "string"},
+        "patched_next_summary": {"type": "string"},
+        "edits_json": {"type": "object"},
+    },
+    "required": [
+        "section_id",
+        "revised_text",
+        "revised_summary",
+        "next_section_id",
+        "patched_next_text",
+        "patched_next_summary",
+        "edits_json",
+    ],
+    "additionalProperties": False,
+}
 
 _CITATION_PATTERN = re.compile(r"\[CITE:([a-f0-9-]+)\]")
 _ALLOWED_ISSUE_TYPES = {
@@ -39,6 +66,36 @@ _ALLOWED_ISSUE_TYPES = {
 def _log_llm_exchange(label: str, section_id: str, content: str) -> None:
     if not content:
         return
+    message = (
+        "LLM request sent for repair"
+        if label == "request"
+        else "LLM response received for repair"
+    )
+    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+    if log_full:
+        logger.info(f"{message} (section={section_id})\n{content}")
+        logger.info(
+            message,
+            extra={
+                "event": "pipeline.llm",
+                "stage": "repair",
+                "label": label,
+                "section_id": section_id,
+                "chars": len(content),
+            },
+        )
+        return
+    logger.info(
+        message,
+        extra={
+            "event": "pipeline.llm",
+            "stage": "repair",
+            "label": label,
+            "section_id": section_id,
+            "chars": len(content),
+            "content": content,
+        },
+    )
 
 
 def _extract_json_payload(text: str) -> dict | list | None:
@@ -101,21 +158,6 @@ def _validate_section_text(section_text: str, allowed_snippet_ids: set[str]) -> 
             raise ValueError("Citations must appear only at the end of each cited sentence.")
 
 
-def _validate_section_summary(summary: str) -> None:
-    cleaned = (summary or "").strip()
-    if not cleaned:
-        raise ValueError("section_summary is empty.")
-
-    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-    if len(lines) != 2:
-        raise ValueError("section_summary must be exactly 2 non-empty lines.")
-    if "[CITE:" in cleaned:
-        raise ValueError("section_summary must not include citations.")
-    for line in lines:
-        if line[-1] not in ".!?":
-            raise ValueError("Each section_summary line must end with punctuation.")
-
-
 def _strip_citations(text: str) -> str:
     cleaned = _CITATION_PATTERN.sub("", text)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
@@ -136,7 +178,6 @@ def _summary_from_text(text: str) -> str:
         line1 = "This section contains no supported factual statements."
         line2 = "Additional evidence is required to expand the analysis."
     summary = f"{line1}\n{line2}"
-    _validate_section_summary(summary)
     return summary
 
 
@@ -379,10 +420,10 @@ def _repair_with_llm(
         "{\n"
         '  "section_id": "...",\n'
         '  "revised_text": "...",\n'
-        '  "revised_summary": "line1\\nline2",\n'
+        '  "revised_summary": "...",\n'
         '  "next_section_id": "...",\n'
         '  "patched_next_text": "...",\n'
-        '  "patched_next_summary": "line1\\nline2",\n'
+        '  "patched_next_summary": "...",\n'
         '  "edits_json": {\n'
         '    "repaired_section_edits": [\n'
         '      { "sentence_index": 0, "before": "...", "after": "...", "change_type": "..." }\n'
@@ -425,7 +466,7 @@ def _repair_with_llm(
         "- Citations only at the end of sentences.\n"
         "- No headings, bullet lists, or markdown.\n\n"
         "Micro-summary rules:\n"
-        "- Exactly 2 lines, one sentence per line.\n"
+        "- Provide 1 to 3 sentences as plain text.\n"
         "- No citations.\n"
         "- No new facts not in revised_text.\n\n"
         "Continuity patch rules (next section):\n"
@@ -444,7 +485,7 @@ def _repair_with_llm(
         system=system,
         max_tokens=1800,
         temperature=0.2,
-        response_format="json",
+        response_format=json_response_format("repair", REPAIR_SCHEMA),
     )
     _log_llm_exchange("response", section.section_id, response)
     payload = _extract_json_payload(response)
@@ -511,7 +552,7 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
         return state
 
     try:
-        llm_client = get_llm_client(state.llm_provider, state.llm_model)
+        llm_client = get_llm_client_for_stage("repair", state.llm_provider, state.llm_model)
     except LLMError as exc:
         raise ValueError("LLM repair is required but unavailable.") from exc
     if not llm_client:
@@ -622,7 +663,6 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
 
         allowed_ids = {str(snippet.snippet_id) for snippet in section_snippets}
         _validate_section_text(revised_text, allowed_ids)
-        _validate_section_summary(revised_summary)
         if not has_invalid_indexes:
             _validate_repair_scope(original_text, revised_text, issue_indices)
         else:
@@ -633,7 +673,6 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
         if not next_allowed_ids:
             next_allowed_ids = allowed_ids
         _validate_next_section_patch(next_text, patched_next_text, next_allowed_ids)
-        _validate_section_summary(patched_next_summary)
 
         _persist_draft_section(
             session,

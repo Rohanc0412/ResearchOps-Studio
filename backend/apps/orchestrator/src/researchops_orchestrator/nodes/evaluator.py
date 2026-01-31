@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
+import os
 
 from sqlalchemy.orm import Session
 
@@ -23,7 +25,33 @@ from researchops_core.orchestrator.state import (
     OrchestratorState,
     OutlineSection,
 )
-from researchops_llm import LLMError, get_llm_client
+from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
+
+logger = logging.getLogger(__name__)
+
+EVALUATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "section_id": {"type": "string"},
+        "verdict": {"type": "string"},
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sentence_index": {"type": "integer"},
+                    "problem": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "citations": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["sentence_index", "problem", "notes", "citations"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["section_id", "verdict", "issues"],
+    "additionalProperties": False,
+}
 
 
 _ALLOWED_PROBLEMS = {
@@ -39,6 +67,36 @@ _ALLOWED_PROBLEMS = {
 def _log_llm_exchange(label: str, section_id: str, content: str) -> None:
     if not content:
         return
+    message = (
+        "LLM request sent for evaluation"
+        if label == "request"
+        else "LLM response received for evaluation"
+    )
+    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+    if log_full:
+        logger.info(f"{message} (section={section_id})\n{content}")
+        logger.info(
+            message,
+            extra={
+                "event": "pipeline.llm",
+                "stage": "evaluate",
+                "label": label,
+                "section_id": section_id,
+                "chars": len(content),
+            },
+        )
+        return
+    logger.info(
+        message,
+        extra={
+            "event": "pipeline.llm",
+            "stage": "evaluate",
+            "label": label,
+            "section_id": section_id,
+            "chars": len(content),
+            "content": content,
+        },
+    )
 
 
 def _extract_json_payload(text: str) -> dict | list | None:
@@ -154,7 +212,7 @@ def _evaluate_section_with_llm(
             system=system,
             max_tokens=1400,
             temperature=0.2,
-            response_format="json",
+            response_format=json_response_format("evaluation", EVALUATION_SCHEMA),
         )
     except LLMError as exc:
         raise ValueError("LLM evaluator failed to respond.") from exc
@@ -300,7 +358,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         raise ValueError("Draft sections not found for evaluation.")
 
     try:
-        llm_client = get_llm_client(state.llm_provider, state.llm_model)
+        llm_client = get_llm_client_for_stage("evaluate", state.llm_provider, state.llm_model)
     except LLMError as exc:
         raise ValueError("LLM evaluator is required but unavailable.") from exc
     if not llm_client:
@@ -369,6 +427,14 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         stage="evaluate",
         data={"pass_count": pass_count, "fail_count": fail_count},
     )
+
+    state.iteration_count += 1
+    if state.iteration_count >= state.max_iterations:
+        state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
+        state.evaluation_reason = (
+            f"Reached max iterations ({state.max_iterations}); exporting latest draft"
+        )
+        return state
 
     if fail_count > 0:
         state.evaluator_decision = EvaluatorDecision.CONTINUE_REWRITE

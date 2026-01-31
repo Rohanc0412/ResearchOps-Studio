@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
 import os
 import re
 
@@ -18,7 +19,21 @@ from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
 from researchops_core.observability import emit_run_event, instrument_node
 from researchops_core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
-from researchops_llm import LLMError, get_llm_client
+from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
+
+logger = logging.getLogger(__name__)
+
+DRAFT_SECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "section_id": {"type": "string"},
+        "section_text": {"type": "string"},
+        "section_summary": {"type": "string"},
+        "status": {"type": "string"},
+    },
+    "required": ["section_id", "section_text", "section_summary", "status"],
+    "additionalProperties": False,
+}
 
 _CITATION_PATTERN = re.compile(r"\[CITE:([a-f0-9-]+)\]")
 
@@ -26,6 +41,50 @@ _CITATION_PATTERN = re.compile(r"\[CITE:([a-f0-9-]+)\]")
 def _print_llm_exchange(label: str, section_id: str, content: str) -> None:
     if not content:
         return
+    message = (
+        "LLM request sent for drafting"
+        if label == "request"
+        else "LLM response received for drafting"
+    )
+    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+    if log_full:
+        logger.info(f"{message} (section={section_id})\n{content}")
+        logger.info(
+            message,
+            extra={
+                "event": "pipeline.llm",
+                "stage": "draft",
+                "label": label,
+                "section_id": section_id,
+                "chars": len(content),
+            },
+        )
+        return
+    logger.info(
+        message,
+        extra={
+            "event": "pipeline.llm",
+            "stage": "draft",
+            "label": label,
+            "section_id": section_id,
+            "chars": len(content),
+            "content": content,
+        },
+    )
+
+
+def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = default
+    if min_value is not None:
+        return max(min_value, value)
+    return value
 
 
 def _load_section_snippet_ids(
@@ -127,27 +186,10 @@ def _word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", text))
 
 
-def _validate_section_summary(summary: str) -> None:
-    cleaned = (summary or "").strip()
-    if not cleaned:
-        raise ValueError("section_summary is empty.")
-
-    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-    if len(lines) != 2:
-        raise ValueError("section_summary must be exactly 2 non-empty lines.")
-
-    if "[CITE:" in cleaned:
-        raise ValueError("section_summary must not include citations.")
-
-    for line in lines:
-        if line[-1] not in ".!?":
-            raise ValueError("Each section_summary line must end with punctuation.")
-
-
 def _validate_section_length(section_text: str) -> None:
     count = _word_count(section_text)
-    if count < 300 or count > 600:
-        raise ValueError(f"Section length must be 300-600 words, got {count}.")
+    if count < 50 or count > 600:
+        raise ValueError(f"Section length must be 50-600 words, got {count}.")
 
 
 def _generate_section_with_llm(
@@ -183,7 +225,7 @@ def _generate_section_with_llm(
         f"{prior_summary or 'NONE'}\n\n"
         "Rules:\n"
         "- Use ONLY the snippets provided for factual content.\n"
-        "- Section length MUST be between 300 and 600 words.\n"
+        "- Section length MUST be between 150 and 600 words (strictly more than 150).\n"
         "- Every factual sentence must end with citation token(s).\n"
         "- Citation format: [CITE:snippet_id]\n"
         "- Multiple citations must be separate tokens: [CITE:id1] [CITE:id2]\n"
@@ -196,8 +238,7 @@ def _generate_section_with_llm(
         "- End section_text with 1 short bridge sentence that sets up the next section.\n"
         "- Do NOT repeat long chunks from prior sections.\n\n"
         "Micro-summary requirements (section_summary):\n"
-        "- Provide exactly 2 lines.\n"
-        "- Each line must be a single sentence.\n"
+        "- Provide 1 to 3 sentences as plain text.\n"
         "- No citations in section_summary.\n"
         "- No new facts or numbers that are not already stated in section_text.\n"
         "- The summary is for continuity only.\n\n"
@@ -210,9 +251,9 @@ def _generate_section_with_llm(
         response = llm_client.generate(
             prompt,
             system=system,
-            max_tokens=1400,
+            max_tokens=_env_int("DRAFT_SECTION_MAX_TOKENS", 1800, min_value=600),
             temperature=0.3,
-            response_format="json",
+            response_format=json_response_format("draft_section", DRAFT_SECTION_SCHEMA),
         )
     except LLMError as exc:
         raise ValueError("LLM drafting failed for section.") from exc
@@ -290,7 +331,7 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
     section_evidence_snippets = state.section_evidence_snippets
 
     try:
-        llm_client = get_llm_client(state.llm_provider, state.llm_model)
+        llm_client = get_llm_client_for_stage("draft", state.llm_provider, state.llm_model)
     except LLMError as exc:
         raise ValueError("LLM drafting is required but the LLM client is unavailable.") from exc
     if not llm_client:
@@ -356,7 +397,6 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
         allowed_ids = {str(snippet.snippet_id) for snippet in section_snippets}
         _validate_section_text(section_text, allowed_ids)
         _validate_section_length(section_text)
-        _validate_section_summary(section_summary)
         _persist_draft_section(
             session,
             tenant_id=state.tenant_id,

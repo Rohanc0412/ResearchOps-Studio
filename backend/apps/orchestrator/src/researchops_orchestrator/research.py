@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models.runs import RunRow
+from researchops_observability.context import bind
 from researchops_orchestrator.runner import run_orchestrator
 
 
 RESEARCH_JOB_TYPE = "research.run"
+
+logger = logging.getLogger(__name__)
 
 
 def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> None:
@@ -30,15 +34,46 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
     if not user_query:
         raise ValueError("run input missing user_query")
 
-
-    asyncio.run(
-        run_orchestrator(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            user_query=user_query,
-            research_goal=research_goal,
-            llm_provider=llm_provider,
-            llm_model=llm_model,
-        )
+    bind(tenant_id=str(tenant_id), run_id=str(run_id))
+    logger.info(
+        "Starting research pipeline run",
+        extra={
+            "event": "pipeline.run.start",
+            "run_id": str(run_id),
+            "tenant_id": str(tenant_id),
+            "user_query": user_query,
+            "research_goal": research_goal,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+        },
     )
+    try:
+        asyncio.run(
+            run_orchestrator(
+                session=session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                user_query=user_query,
+                research_goal=research_goal,
+                llm_provider=llm_provider,
+                llm_model=llm_model,
+            )
+        )
+        logger.info(
+            "Research pipeline run finished",
+            extra={
+                "event": "pipeline.run.finish",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Research pipeline run failed",
+            extra={
+                "event": "pipeline.run.error",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+            },
+        )
+        raise

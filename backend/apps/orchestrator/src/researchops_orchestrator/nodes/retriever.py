@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
+import logging
 import math
 import os
+import re
 import time
 from typing import Iterable, Protocol
 
@@ -29,8 +31,10 @@ from researchops_connectors.base import RetrievedSource
 from researchops_connectors.dedup import deduplicate_sources
 from researchops_core.observability import emit_run_event, instrument_node
 from researchops_core.orchestrator.state import OrchestratorState, SourceRef
-from researchops_llm import LLMError, get_llm_client
+from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
 from researchops_orchestrator.embeddings import get_sentence_transformer_client
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -56,10 +60,55 @@ ALLOWED_INTENTS = [
     "recent work",
 ]
 
+QUERY_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "queries": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string"},
+                    "query": {"type": "string"},
+                },
+                "required": ["intent", "query"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["queries"],
+    "additionalProperties": False,
+}
+
 
 def _log_llm_exchange(label: str, content: str) -> None:
     if not content:
         return
+    message = "LLM request sent for retrieval" if label == "request" else "LLM response received for retrieval"
+    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+    if log_full:
+        logger.info(f"{message}\n{content}")
+        logger.info(
+            message,
+            extra={
+                "event": "pipeline.llm",
+                "stage": "retrieve",
+                "label": label,
+                "chars": len(content),
+            },
+        )
+        return
+    logger.info(
+        message,
+        extra={
+            "event": "pipeline.llm",
+            "stage": "retrieve",
+            "label": label,
+            "chars": len(content),
+            "content": content,
+        },
+    )
 
 
 def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
@@ -158,6 +207,66 @@ def _normalize_intent(intent: str) -> str | None:
     return None
 
 
+def _strip_code_fence(text: str) -> str:
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip() if match else text
+
+
+def _clean_query_line(line: str) -> str:
+    cleaned = re.sub(r"^\s*[-*•\d\)\.:\s]+", "", line).strip()
+    return cleaned.strip().strip('"').strip("'").strip()
+
+
+def _fallback_query_plan_from_text(text: str, max_queries: int) -> list[QueryPlan]:
+    if not text:
+        return []
+    content = _strip_code_fence(text)
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+
+    plans: list[QueryPlan] = []
+    seen_queries: set[str] = set()
+
+    def add_plan(query: str, intent: str | None) -> None:
+        normalized_query = " ".join(query.split())
+        if len(normalized_query) < 6:
+            return
+        if normalized_query in seen_queries:
+            return
+        plans.append(QueryPlan(intent=intent or "survey", query=normalized_query))
+        seen_queries.add(normalized_query)
+
+    for line in lines:
+        cleaned = _clean_query_line(line)
+        if not cleaned:
+            continue
+
+        intent = None
+        query = cleaned
+
+        match = re.match(r"^\[?([A-Za-z\s]+)\]?\s*[:\-]\s*(.+)$", cleaned)
+        if match:
+            intent = _normalize_intent(match.group(1))
+            query = match.group(2).strip()
+        else:
+            match = re.match(r"^([A-Za-z\s]+)\s*-\s*(.+)$", cleaned)
+            if match:
+                intent = _normalize_intent(match.group(1))
+                query = match.group(2).strip()
+
+        add_plan(query, intent)
+        if len(plans) >= max_queries:
+            break
+
+    if not plans:
+        chunks = [c.strip() for c in re.split(r"[;\n]+", content) if c.strip()]
+        for chunk in chunks:
+            add_plan(_clean_query_line(chunk), None)
+            if len(plans) >= max_queries:
+                break
+
+    return plans
+
+
 def _build_query_plan_with_llm(
     *,
     question: str,
@@ -166,11 +275,31 @@ def _build_query_plan_with_llm(
     llm_model: str | None,
 ) -> list[QueryPlan]:
     try:
-        llm_client = get_llm_client(llm_provider, llm_model)
+        llm_client = get_llm_client_for_stage("retrieve", llm_provider, llm_model)
     except LLMError as exc:
+        logger.warning(
+            "LLM client unavailable for query generation",
+            extra={
+                "event": "pipeline.llm.error",
+                "stage": "retrieve",
+                "reason": str(exc),
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+            },
+        )
         return []
 
     if llm_client is None:
+        logger.warning(
+            "LLM client disabled for query generation",
+            extra={
+                "event": "pipeline.llm.error",
+                "stage": "retrieve",
+                "reason": "llm_disabled",
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+            },
+        )
         return []
 
     intents = ", ".join(ALLOWED_INTENTS)
@@ -197,9 +326,19 @@ def _build_query_plan_with_llm(
             system=system,
             max_tokens=600,
             temperature=0.4,
-            response_format="json",
+            response_format=json_response_format("query_plan", QUERY_PLAN_SCHEMA),
         )
     except LLMError as exc:
+        logger.warning(
+            "LLM query generation request failed",
+            extra={
+                "event": "pipeline.llm.error",
+                "stage": "retrieve",
+                "reason": str(exc),
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+            },
+        )
         return []
 
     _log_llm_exchange("response", response)
@@ -211,6 +350,28 @@ def _build_query_plan_with_llm(
         items = payload
 
     if not isinstance(items, list):
+        logger.warning(
+            "LLM query generation returned invalid JSON",
+            extra={
+                "event": "pipeline.llm.error",
+                "stage": "retrieve",
+                "reason": "invalid_response",
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+                "response_preview": response[:600] if response else "",
+            },
+        )
+        fallback = _fallback_query_plan_from_text(response or "", max_queries)
+        if fallback:
+            logger.info(
+                "Fallback query parsing recovered queries",
+                extra={
+                    "event": "pipeline.llm.fallback",
+                    "stage": "retrieve",
+                    "query_count": len(fallback),
+                },
+            )
+            return fallback
         return []
 
     plans: list[QueryPlan] = []

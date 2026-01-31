@@ -7,6 +7,7 @@ Integrates with the run lifecycle and emits SSE events.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -18,6 +19,20 @@ from researchops_core.orchestrator.state import OrchestratorState
 from researchops_core.runs.lifecycle import transition_run_status
 from researchops_orchestrator.checkpoints import PostgresCheckpointSaver
 from researchops_orchestrator.graph import create_orchestrator_graph
+
+
+def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = default
+    if min_value is not None:
+        return max(min_value, value)
+    return value
 
 
 def _guess_mime_type(name: str) -> str:
@@ -122,6 +137,8 @@ async def run_orchestrator(
         current_stage="retrieve",
     )
     session.commit()
+
+    max_iterations = _env_int("ORCHESTRATOR_MAX_ITERATIONS", max_iterations, min_value=1)
 
     # Initialize state
     initial_state = OrchestratorState(
