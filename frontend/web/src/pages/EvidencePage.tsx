@@ -16,7 +16,7 @@ export function EvidencePage() {
   if (snippet.isLoading) {
     return (
       <Card>
-        <Spinner label="Loading snippet…" />
+        <Spinner label="Loading snippet???" />
       </Card>
     );
   }
@@ -42,7 +42,7 @@ export function EvidencePage() {
 
       <Card>
         <div className="mb-2 text-sm font-semibold text-slate-100">Snippet</div>
-        <pre className="overflow-auto rounded-md border border-slate-900 bg-black/30 p-3 text-xs text-slate-200">
+        <pre className="overflow-auto rounded-md border border-slate-900 bg-slate-950 p-3 text-xs text-slate-200">
           {s.text}
         </pre>
         {s.risk_flags?.length ? (
@@ -53,16 +53,16 @@ export function EvidencePage() {
       <Card>
         <div className="mb-2 text-sm font-semibold text-slate-100">Source</div>
         {source.isLoading ? (
-          <Spinner label="Loading source…" />
+          <Spinner label="Loading source???" />
         ) : source.isError ? (
           <div className="text-sm text-slate-500">Source lookup failed or is unavailable.</div>
         ) : source.data ? (
           <div className="flex flex-col gap-2 text-sm text-slate-300">
             <div>
-              <span className="text-slate-500">Title:</span> {source.data.title ?? "—"}
+              <span className="text-slate-500">Title:</span> {source.data.title ?? "???"}
             </div>
             <div>
-              <span className="text-slate-500">Canonical id:</span> {source.data.canonical_id ?? "—"}
+              <span className="text-slate-500">Canonical id:</span> {source.data.canonical_id ?? "???"}
             </div>
             <div className="flex items-center gap-2">
               <span className="text-slate-500">URL:</span>{" "}
@@ -71,7 +71,7 @@ export function EvidencePage() {
                   Open <ExternalLink className="h-3 w-3" />
                 </a>
               ) : (
-                "—"
+                "???"
               )}
             </div>
           </div>
@@ -82,4 +82,6 @@ export function EvidencePage() {
     </div>
   );
 }
+
+
 

@@ -10,7 +10,7 @@ export function ProtectedRoute() {
   if (auth.isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Spinner label="Loading session…" />
+        <Spinner label="Loading session..." />
       </div>
     );
   }
@@ -21,4 +21,3 @@ export function ProtectedRoute() {
 
   return <Outlet />;
 }
-

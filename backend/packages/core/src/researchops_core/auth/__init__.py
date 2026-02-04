@@ -6,11 +6,14 @@ __all__ = [
     "AuthIssuerError",
     "AuthMissingError",
     "Identity",
-    "JWKSCache",
     "extract_identity",
+    "hash_password",
+    "issue_access_token",
+    "issue_mfa_challenge_token",
     "require_roles",
     "require_tenant",
-    "verify_jwt",
+    "verify_access_token",
+    "verify_mfa_challenge_token",
 ]
 
 from researchops_core.auth.config import AuthConfig
@@ -22,7 +25,12 @@ from researchops_core.auth.exceptions import (
     AuthMissingError,
 )
 from researchops_core.auth.identity import Identity, extract_identity
-from researchops_core.auth.jwks_cache import JWKSCache
-from researchops_core.auth.jwt_verify import verify_jwt
+from researchops_core.auth.passwords import hash_password
 from researchops_core.auth.rbac import require_roles, require_tenant
+from researchops_core.auth.tokens import (
+    issue_access_token,
+    issue_mfa_challenge_token,
+    verify_access_token,
+    verify_mfa_challenge_token,
+)
 

@@ -10,7 +10,7 @@ export function Badge({
   children: React.ReactNode;
 }) {
   const tones: Record<string, string> = {
-    neutral: "bg-slate-800 text-slate-200",
+    neutral: "bg-slate-900 text-slate-200",
     info: "bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30",
     success: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30",
     warning: "bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/30",
@@ -22,4 +22,5 @@ export function Badge({
     </span>
   );
 }
+
 

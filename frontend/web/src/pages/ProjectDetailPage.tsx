@@ -79,7 +79,7 @@ export function ProjectDetailPage() {
         <button
           type="button"
           onClick={() => createNewChat()}
-          className="flex items-center gap-1.5 rounded-md bg-slate-800 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700"
+          className="flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700"
         >
           <Plus className="h-4 w-4" />
           New chat
@@ -88,7 +88,7 @@ export function ProjectDetailPage() {
 
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
         {/* Input area for quick start */}
-        <div className="rounded-2xl bg-slate-800/60 p-4">
+        <div className="rounded-2xl bg-slate-900 p-4">
           <Textarea
             rows={2}
             className="border-0 bg-transparent text-slate-100 placeholder-slate-500 focus:border-transparent focus:ring-0"
@@ -125,10 +125,10 @@ export function ProjectDetailPage() {
                 <button
                   key={chat.id}
                   type="button"
-                  className="flex items-center gap-3 rounded-xl bg-slate-900/50 px-4 py-3 text-left hover:bg-slate-800/50"
+                  className="flex items-center gap-3 rounded-xl bg-slate-900 px-4 py-3 text-left hover:bg-slate-900"
                   onClick={() => openChat(chat.id)}
                 >
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-800">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900">
                     <MessageSquare className="h-4 w-4 text-slate-400" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -148,3 +148,5 @@ export function ProjectDetailPage() {
     </div>
   );
 }
+
+

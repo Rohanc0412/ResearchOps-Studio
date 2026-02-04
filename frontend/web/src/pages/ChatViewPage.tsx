@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 // TECH: React Router helpers for navigation and reading URL parameters/state.
 // PLAIN: Lets the page know which chat/project to show and lets us move to other pages.
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom";
 
 // TECH: Icon components (SVG) from lucide-react for consistent UI icons.
 // PLAIN: Small pictures (icons) used on buttons like back, download, send, etc.
@@ -28,7 +28,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 // TECH: Custom API hooks to fetch conversations/messages and send messages.
-// PLAIN: Ready-made helpers that talk to the app’s backend for chat data.
+// PLAIN: Ready-made helpers that talk to the app???s backend for chat data.
 import {
   flattenInfiniteMessages,
   useChatConversationsQuery,
@@ -41,7 +41,7 @@ import {
 import { useProjectQuery } from "../api/projects";
 
 // TECH: Custom API mutations to cancel and retry long-running report generation runs.
-// PLAIN: Buttons to stop or retry the background “report generation” job.
+// PLAIN: Buttons to stop or retry the background ???report generation??? job.
 import { useCancelRunMutation, useRetryRunMutation } from "../api/runs";
 
 // TECH: Shared API helper for JSON requests with schema validation.
@@ -52,25 +52,27 @@ import { apiFetchJson } from "../api/client";
 // PLAIN: Shows helpful messages when something fails and a loader while waiting.
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
+import { Button } from "../components/ui/Button";
+import type { TopbarActionsContext } from "../components/layout/AppLayout";
 
 // TECH: SSE (Server-Sent Events) hook for real-time streaming updates from the server.
 // PLAIN: Lets the page receive live progress updates while a report is being created.
 import { useSSE } from "../hooks/useSSE";
 
 // TECH: DTO (data transfer object) types and Zod schema for runtime validation of artifacts.
-// PLAIN: Defines the shape of data we expect from the server (so we don’t guess wrong).
+// PLAIN: Defines the shape of data we expect from the server (so we don???t guess wrong).
 import { ArtifactSchema, RunSchema, type Artifact, type ChatMessage, type Run } from "../types/dto";
 
-// TECH: UI component that shows “thinking / running / failed” status for a run.
+// TECH: UI component that shows ???thinking / running / failed??? status for a run.
 // PLAIN: A banner that tells you the report is being worked on and lets you stop/retry.
 import { RunThinkingBanner } from "../components/run/RunThinkingBanner";
 
 // TECH: Zod provides runtime schema validation (safer API responses).
-// PLAIN: A “data checker” to confirm incoming data is shaped correctly.
+// PLAIN: A ???data checker??? to confirm incoming data is shaped correctly.
 import { z } from "zod";
 
 // TECH: ReportSection is the UI-friendly structure of a report section: heading + content blocks.
-// PLAIN: One part of the report (like “Introduction”) with lines of text underneath it.
+// PLAIN: One part of the report (like ???Introduction???) with lines of text underneath it.
 type ReportSection = {
   id: string;
   heading: string;
@@ -89,7 +91,7 @@ type Report = {
 };
 
 // TECH: The possible terminal and non-terminal statuses for a server run.
-// PLAIN: The “job status” showing whether the report is still working, done, or failed.
+// PLAIN: The ???job status??? showing whether the report is still working, done, or failed.
 type ActiveRunStatus = "running" | "failed" | "succeeded" | "canceled";
 
 // TECH: ActiveRun stores the currently running job state for the UI (progress banner).
@@ -104,7 +106,7 @@ type ActiveRun = {
 };
 
 // TECH: Schema for validating a list of artifacts returned by the server endpoint.
-// PLAIN: A rule set that says “the server must return a list of correctly shaped artifacts.”
+// PLAIN: A rule set that says ???the server must return a list of correctly shaped artifacts.???
 const ArtifactsSchema = z.array(ArtifactSchema);
 
 // TECH: Default report state when no report exists yet.
@@ -114,7 +116,7 @@ const EMPTY_REPORT: Report = {
   sections: []
 };
 
-// TECH: Default hosted LLM model name used if user doesn’t override.
+// TECH: Default hosted LLM model name used if user doesn???t override.
 // PLAIN: The default AI model chosen for generating the report.
 const DEFAULT_HOSTED_MODEL = "arcee-ai/trinity-large-preview:free";
 const CUSTOM_MODEL_VALUE = "__custom__";
@@ -128,10 +130,10 @@ const MODEL_OPTIONS = [
 ];
 
 // TECH (Function Summary): Generates a pseudo-unique ID using timestamp + random chunk.
-// PLAIN (Function Summary): Makes a “unique enough” label so different sections don’t collide.
+// PLAIN (Function Summary): Makes a ???unique enough??? label so different sections don???t collide.
 function generateId(): string {
   // TECH: Date.now() gives time in ms; random base36 string adds extra uniqueness.
-  // PLAIN: Uses the current time plus a random bit so IDs don’t repeat.
+  // PLAIN: Uses the current time plus a random bit so IDs don???t repeat.
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -139,14 +141,62 @@ function generateId(): string {
 // PLAIN (Function Summary): Creates a unique ID so the app can track this message reliably.
 function generateClientMessageId(): string {
   // TECH: Prefer crypto.randomUUID() for strong uniqueness and collision resistance.
-  // PLAIN: If the browser supports it, use the safest “unique ID generator.”
+  // PLAIN: If the browser supports it, use the safest ???unique ID generator.???
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
   }
 
   // TECH: Fallback uses timestamp + random string when randomUUID is unavailable.
-  // PLAIN: If the best option isn’t available, use a backup method.
+  // PLAIN: If the best option isn???t available, use a backup method.
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// TECH (Function Summary): Build a stable storage key for a chat's report.
+// PLAIN (Function Summary): Gives us a consistent place to save/load each chat's report.
+function reportStorageKey(chatId: string): string {
+  return `researchops_report:${chatId}`;
+}
+
+// TECH (Function Summary): Minimal runtime guard for report shape before using stored data.
+// PLAIN (Function Summary): Make sure saved report data looks valid.
+function isReportLike(value: unknown): value is Report {
+  if (!value || typeof value !== "object") return false;
+  const report = value as Report;
+  if (typeof report.title !== "string" || !Array.isArray(report.sections)) return false;
+  return report.sections.every((section) => {
+    if (!section || typeof section !== "object") return false;
+    if (typeof section.id !== "string" || typeof section.heading !== "string") return false;
+    if (!Array.isArray(section.content)) return false;
+    return section.content.every((item) => item && typeof item.text === "string");
+  });
+}
+
+// TECH (Function Summary): Load saved report from localStorage for a specific chat.
+// PLAIN (Function Summary): Restore the last report when you reopen a conversation.
+function loadStoredReport(chatId: string): Report | null {
+  try {
+    const raw = window.localStorage.getItem(reportStorageKey(chatId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return isReportLike(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// TECH (Function Summary): Persist report to localStorage (or clear if empty).
+// PLAIN (Function Summary): Save report so it shows up next time you open the chat.
+function persistReport(chatId: string, report: Report): void {
+  try {
+    const key = reportStorageKey(chatId);
+    if (report.sections.length === 0) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, JSON.stringify(report));
+  } catch {
+    // ignore storage failures
+  }
 }
 
 // TECH (Function Summary): Converts snake_case or kebab-case into a readable Title Case style.
@@ -168,23 +218,23 @@ function buildFinalResponse(artifacts: Artifact[]): string {
   // PLAIN: Look through the results and pick the first meaningful text we find.
   for (const artifact of artifacts) {
     // TECH: Many systems store the final report in metadata.markdown.
-    // PLAIN: Sometimes the report text is saved under “markdown.”
+    // PLAIN: Sometimes the report text is saved under ???markdown.???
     const md = artifact.metadata?.["markdown"];
     if (typeof md === "string" && md.trim()) return md.trim();
 
     // TECH: Some artifacts store text under metadata.message instead.
-    // PLAIN: If it’s not markdown, it might be stored as a plain “message.”
+    // PLAIN: If it???s not markdown, it might be stored as a plain ???message.???
     const msg = artifact.metadata?.["message"];
     if (typeof msg === "string" && msg.trim()) return msg.trim();
   }
 
   // TECH: Fallback string when no artifact text is available.
-  // PLAIN: A default message when the system finished but didn’t return text here.
+  // PLAIN: A default message when the system finished but didn???t return text here.
   return "Run completed. Output is available in artifacts.";
 }
 
 /**
- * ✅ Upgraded markdown parsing
+ * ??? Upgraded markdown parsing
  * Supports:
  * - Headers (##, ###)
  * - Paragraphs (multi-line)
@@ -203,7 +253,7 @@ function extractInlineCitations(input: string): { text: string; citations: numbe
   const citations: number[] = [];
 
   // TECH: Regex matches either standard citations [12] OR footnote-style citations [^12].
-  // PLAIN: Looks for citation markers like “[1]” or “[^1]” in the text.
+  // PLAIN: Looks for citation markers like ???[1]??? or ???[^1]??? in the text.
   const citationRegex = /\[(\d+)\]|\[\^(\d+)\]/g;
 
   // TECH: Replace citations with empty string, collecting numeric identifiers into citations[].
@@ -213,13 +263,13 @@ function extractInlineCitations(input: string): { text: string; citations: numbe
     // PLAIN: One match group is used depending on which citation type was found.
     const numRaw = g1 ?? g2;
 
-    // TECH: Convert to number and verify it’s valid.
+    // TECH: Convert to number and verify it???s valid.
     // PLAIN: Turn the number into a real numeric value.
     const num = Number(numRaw);
     if (!Number.isNaN(num)) citations.push(num);
 
     // TECH: Remove citation tokens from output text.
-    // PLAIN: Don’t show the raw citation marker in the sentence.
+    // PLAIN: Don???t show the raw citation marker in the sentence.
     return "";
   });
 
@@ -245,7 +295,7 @@ function extractInlineCitations(input: string): { text: string; citations: numbe
 }
 
 // TECH (Function Summary): Detects if a line is a references/bibliography heading in markdown.
-// PLAIN (Function Summary): Checks if a line means “we are now in the references section.”
+// PLAIN (Function Summary): Checks if a line means ???we are now in the references section.???
 function isReferencesHeading(line: string): boolean {
   // TECH: Normalize whitespace and casing for tolerant matching.
   // PLAIN: Make the text easier to compare by ignoring spaces and capitalization.
@@ -273,7 +323,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
 
   // TECH: Track the section currently being built.
-  // PLAIN: Keep track of which part of the report we’re currently filling in.
+  // PLAIN: Keep track of which part of the report we???re currently filling in.
   let currentSection: ReportSection | null = null;
 
   // TECH: Buffer multiple lines into a single paragraph (markdown paragraphs can span lines).
@@ -288,7 +338,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
   // PLAIN (Function Summary): Makes sure we always have a section to put text into.
   const ensureSection = (heading: string) => {
     // TECH: Only create a new section if none exists.
-    // PLAIN: Don’t create duplicates if we already have a section.
+    // PLAIN: Don???t create duplicates if we already have a section.
     if (!currentSection) {
       currentSection = {
         id: generateId(),
@@ -310,14 +360,14 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
   };
 
   // TECH (Function Summary): Converts buffered paragraph lines into a single content item in the current section.
-  // PLAIN (Function Summary): Takes the paragraph we’ve been collecting and adds it to the report.
+  // PLAIN (Function Summary): Takes the paragraph we???ve been collecting and adds it to the report.
   const flushParagraph = () => {
     // TECH: A paragraph belongs to a section; do nothing if no section exists.
-    // PLAIN: If we don’t know where to place the text, don’t add it.
+    // PLAIN: If we don???t know where to place the text, don???t add it.
     if (!currentSection) return;
 
     // TECH: If buffer is empty, nothing to flush.
-    // PLAIN: If there’s no paragraph text saved up, we’re done.
+    // PLAIN: If there???s no paragraph text saved up, we???re done.
     if (paragraphBuffer.length === 0) return;
 
     // TECH: Join buffered lines with spaces for a single paragraph sentence flow.
@@ -329,11 +379,11 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     paragraphBuffer = [];
 
     // TECH: Paragraph flush resets footnote continuation tracking.
-    // PLAIN: If we ended a paragraph, we’re no longer continuing a footnote.
+    // PLAIN: If we ended a paragraph, we???re no longer continuing a footnote.
     lastFootnoteIndex = null;
 
     // TECH: If the paragraph becomes empty after trimming, skip.
-    // PLAIN: Ignore blank lines that don’t contain real content.
+    // PLAIN: Ignore blank lines that don???t contain real content.
     if (!rawText) return;
 
     // TECH: Extract citations and remove them from visible text.
@@ -345,7 +395,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     const finalText = text || rawText;
 
     // TECH: Safety check to avoid pushing empty text blocks.
-    // PLAIN: Don’t add empty content to the report.
+    // PLAIN: Don???t add empty content to the report.
     if (!finalText) return;
 
     // TECH: Push as a normal (non-bullet) paragraph item.
@@ -358,10 +408,10 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
   };
 
   // TECH (Function Summary): Adds a bullet item to the current section, ensuring paragraph buffer is flushed first.
-  // PLAIN (Function Summary): Adds a “bullet point” line to the report.
+  // PLAIN (Function Summary): Adds a ???bullet point??? line to the report.
   const pushBullet = (raw: string) => {
     // TECH: Bullets should always have some section to go into, default to Live Report.
-    // PLAIN: If we don’t have a section heading yet, put bullets into “Live Report.”
+    // PLAIN: If we don???t have a section heading yet, put bullets into ???Live Report.???
     ensureSection("Live Report");
 
     // TECH: A bullet starts a new block, so flush any pending paragraph first.
@@ -382,22 +432,22 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     });
 
     // TECH: Bullets are not footnote continuations.
-    // PLAIN: A bullet resets any “continuing reference” behavior.
+    // PLAIN: A bullet resets any ???continuing reference??? behavior.
     lastFootnoteIndex = null;
   };
 
-  // TECH (Function Summary): Adds a reference footnote item like “[1] Source details...” into a References section.
+  // TECH (Function Summary): Adds a reference footnote item like ???[1] Source details...??? into a References section.
   // PLAIN (Function Summary): Adds a citation entry into the References list.
   const pushReferenceFootnote = (num: number, content: string) => {
-    // TECH: Footnotes are stored under “References” section.
-    // PLAIN: References go into a section named “References.”
+    // TECH: Footnotes are stored under ???References??? section.
+    // PLAIN: References go into a section named ???References.???
     ensureSection("References");
 
     // TECH: Footnotes are separate items, so flush pending paragraph first.
     // PLAIN: Save any paragraph text before adding a reference line.
     flushParagraph();
 
-    // TECH: Format references consistently as “[n] text”.
+    // TECH: Format references consistently as ???[n] text???.
     // PLAIN: Show references in a standard numbered format.
     const formatted = `[${num}] ${content}`.trim();
 
@@ -421,7 +471,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     const line = lines[i] ?? "";
 
     // TECH: Detect section headers with ## or ### (not # which is treated as title).
-    // PLAIN: If the line starts with “##” it means a new section heading.
+    // PLAIN: If the line starts with ???##??? it means a new section heading.
     const headerMatch = line.match(/^(#{2,3})\s+(.+)$/);
     if (headerMatch) {
       // TECH: Close any pending paragraph before switching sections.
@@ -453,7 +503,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     }
 
     // TECH: Special-case common reference section headings.
-    // PLAIN: If the line says “References,” switch into the references section.
+    // PLAIN: If the line says ???References,??? switch into the references section.
     if (isReferencesHeading(line)) {
       flushParagraph();
       pushSectionIfAny();
@@ -467,7 +517,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     }
 
     // TECH: Horizontal rule can be used as a separator before references; treat it as reference section start.
-    // PLAIN: A line with “---” often means “next part starts now,” so we treat it like References begin.
+    // PLAIN: A line with ???---??? often means ???next part starts now,??? so we treat it like References begin.
     if (line.trim() === "---") {
       flushParagraph();
       pushSectionIfAny();
@@ -488,7 +538,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     }
 
     // TECH: Parse footnote definitions: [^1]: citation text.
-    // PLAIN: Lines like “[^1]: ...” are reference entries.
+    // PLAIN: Lines like ???[^1]: ...??? are reference entries.
     const footnoteMatch = line.match(/^\[\^(\d+)\]:\s*(.*)$/);
     if (footnoteMatch) {
       // TECH: Convert captured footnote number to integer.
@@ -496,10 +546,10 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
       const num = Number(footnoteMatch[1]);
 
       // TECH: Footnote body text is remainder of the line.
-      // PLAIN: Everything after “:” is the reference content.
+      // PLAIN: Everything after ???:??? is the reference content.
       const body = footnoteMatch[2] ?? "";
 
-      // TECH: Store as a reference bullet line in “References”.
+      // TECH: Store as a reference bullet line in ???References???.
       // PLAIN: Add this as a new reference item.
       pushReferenceFootnote(num, body);
       continue;
@@ -530,7 +580,7 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
     }
 
     // TECH: Numbered list support like "1. item" treated as bullets for consistent UI.
-    // PLAIN: Lines starting with “1.” or “2.” become list items.
+    // PLAIN: Lines starting with ???1.??? or ???2.??? become list items.
     const numberedMatch = line.match(/^\s*\d+\.\s+(.*)$/);
     if (numberedMatch) {
       pushBullet(numberedMatch[1] ?? "");
@@ -552,12 +602,12 @@ function parseMarkdownToSections(markdown: string): ReportSection[] {
   pushSectionIfAny();
 
   // TECH: Remove empty sections so UI doesn't show headings with no content.
-  // PLAIN: Don’t show empty sections in the report.
+  // PLAIN: Don???t show empty sections in the report.
   return sections.filter((s) => s.content.length > 0);
 }
 
 // TECH (Function Summary): Derives a user-friendly run status update from an SSE event payload.
-// PLAIN (Function Summary): Turns raw progress updates into readable “what’s happening” messages.
+// PLAIN (Function Summary): Turns raw progress updates into readable ???what???s happening??? messages.
 function deriveRunUpdate(event: { stage?: string; message?: string; payload?: Record<string, unknown> }) {
   // TECH: Defensive default payload object to avoid undefined access.
   // PLAIN: Make sure we always have a payload to read from.
@@ -589,13 +639,13 @@ function deriveRunUpdate(event: { stage?: string; message?: string; payload?: Re
   }
 
   // TECH: Prefer payload.step when available for more granular status updates.
-  // PLAIN: If the server says which step it’s on, show that to the user.
+  // PLAIN: If the server says which step it???s on, show that to the user.
   const step = payload["step"];
   if (typeof step === "string" && step.trim()) {
     secondaryText = `Step: ${step}`;
   } else {
     // TECH: Otherwise show artifact type as context if the server emits it.
-    // PLAIN: If it’s creating a particular output, show which type it is.
+    // PLAIN: If it???s creating a particular output, show which type it is.
     const artifactType = payload["artifact_type"];
     if (typeof artifactType === "string" && artifactType.trim()) {
       secondaryText = `Artifact: ${artifactType}`;
@@ -611,7 +661,7 @@ function deriveRunUpdate(event: { stage?: string; message?: string; payload?: Re
 // PLAIN (Function Summary): Converts hidden action codes into friendly button text.
 function formatActionLabel(actionId: string | null) {
   // TECH: Provide a fallback string for unknown/null actions.
-  // PLAIN: If we don’t know what action it is, call it “Action.”
+  // PLAIN: If we don???t know what action it is, call it ???Action.???
   if (!actionId) return "Action";
 
   // TECH: Special-case known action IDs for best UX.
@@ -620,7 +670,7 @@ function formatActionLabel(actionId: string | null) {
   if (actionId === "quick_answer") return "Quick answer";
 
   // TECH: Default transformation: replace underscores with spaces.
-  // PLAIN: Make “snake_case” look like normal words.
+  // PLAIN: Make ???snake_case??? look like normal words.
   return actionId.replace(/_/g, " ");
 }
 
@@ -628,7 +678,7 @@ function formatActionLabel(actionId: string | null) {
 // PLAIN (Function Summary): Decides what text should appear in the chat bubble.
 function displayMessageText(message: ChatMessage) {
   // TECH: Action messages are encoded and need conversion to a friendly label.
-  // PLAIN: Some messages represent “actions” and must be shown as a readable name.
+  // PLAIN: Some messages represent ???actions??? and must be shown as a readable name.
   if (message.type === "action") {
     // TECH: Prefer structured action_id from content_json; fallback to parsing content_text.
     // PLAIN: If the action ID is stored in a structured field, use it; otherwise extract it.
@@ -646,26 +696,41 @@ function displayMessageText(message: ChatMessage) {
   return message.content_text;
 }
 
+// TECH (Function Summary): Normalizes markdown to reduce extra blank lines between list items.
+// PLAIN (Function Summary): Cleans up list spacing so numbered items don't look too far apart.
+function normalizeChatMarkdown(input: string) {
+  if (!input) return input;
+  return (
+    input
+      // Collapse excessive blank lines.
+      .replace(/\n{3,}/g, "\n\n")
+      // Remove blank lines between ordered list items like "1.\n\n2."
+      .replace(/\n\s*\n(?=\d+\.)/g, "\n")
+      // Remove blank lines between unordered list items like "- \n\n-"
+      .replace(/\n\s*\n(?=[*-]\s)/g, "\n")
+  );
+}
+
 const chatMarkdownComponents: Components = {
   h1: ({ children }) => <h1 className="mb-2 text-base font-semibold text-slate-100">{children}</h1>,
   h2: ({ children }) => <h2 className="mb-2 text-sm font-semibold text-slate-100">{children}</h2>,
   h3: ({ children }) => <h3 className="mb-2 text-sm font-medium text-slate-100">{children}</h3>,
-  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-  ul: ({ children }) => <ul className="ml-5 list-disc space-y-1">{children}</ul>,
-  ol: ({ children }) => <ol className="ml-5 list-decimal space-y-1">{children}</ol>,
-  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  p: ({ children }) => <p className="mb-1 last:mb-0 leading-relaxed">{children}</p>,
+  ul: ({ children }) => <ul className="ml-5 list-disc space-y-0">{children}</ul>,
+  ol: ({ children }) => <ol className="ml-5 list-decimal space-y-0">{children}</ol>,
+  li: ({ children }) => <li className="leading-snug [&>p]:m-0 [&>p]:leading-snug">{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
   em: ({ children }) => <em className="italic text-slate-200">{children}</em>,
   code: ({ inline, children }) =>
     inline ? (
-      <code className="rounded bg-slate-900/70 px-1 py-0.5 font-mono text-xs text-emerald-200">
+      <code className="rounded bg-slate-900 px-1 py-0.5 font-mono text-xs text-emerald-200">
         {children}
       </code>
     ) : (
       <code className="font-mono">{children}</code>
     ),
   pre: ({ children }) => (
-    <pre className="mt-2 overflow-auto rounded-md bg-slate-900/80 p-3 text-xs text-slate-200">
+    <pre className="mt-2 overflow-auto rounded-md bg-slate-900 p-3 text-xs text-slate-200">
       {children}
     </pre>
   ),
@@ -701,7 +766,7 @@ function CitationBadge({ number }: { number: number }) {
 }
 
 // Typing indicator
-// TECH (Function Summary): Renders an animated dot indicator to show the assistant is “typing” (waiting for API).
+// TECH (Function Summary): Renders an animated dot indicator to show the assistant is ???typing??? (waiting for API).
 // PLAIN (Function Summary): Shows bouncing dots so the user knows the system is working.
 function TypingIndicator() {
   return (
@@ -743,7 +808,7 @@ function ReportSectionView({
   // PLAIN (Function Summary): Applies the edits and returns to normal view.
   const handleSave = () => {
     // TECH: Notify parent of the new content; parent owns report state.
-    // PLAIN: Tell the main page “this section text changed.”
+    // PLAIN: Tell the main page ???this section text changed.???
     onEdit(section.id, editedContent);
 
     // TECH: Exit editing UI after saving.
@@ -761,7 +826,7 @@ function ReportSectionView({
         {!isEditing && (
           <button
             // TECH: Clicking switches to edit mode and shows textarea + buttons.
-            // PLAIN: Clicking “Edit” lets you change the section text.
+            // PLAIN: Clicking ???Edit??? lets you change the section text.
             onClick={() => setIsEditing(true)}
             className="ml-auto flex items-center gap-1.5 rounded border border-slate-700 bg-transparent px-2 py-1 text-xs text-slate-500 transition-colors hover:border-slate-500 hover:text-slate-300"
           >
@@ -778,7 +843,7 @@ function ReportSectionView({
             // PLAIN: The text box always shows the latest typed text.
             value={editedContent}
             onChange={(e) => setEditedContent(e.target.value)}
-            className="min-h-32 w-full resize-y rounded-lg border border-emerald-500/40 bg-black/30 p-3 text-sm leading-relaxed text-slate-200 outline-none focus:border-emerald-500/60"
+            className="min-h-32 w-full resize-y rounded-lg border border-emerald-500/40 bg-slate-950 p-3 text-sm leading-relaxed text-slate-200 outline-none focus:border-emerald-500/60"
           />
           <div className="mt-3 flex justify-end gap-2">
             <button
@@ -803,7 +868,7 @@ function ReportSectionView({
         <div className="pl-4">
           {section.content.map((item, idx) => (
             <div key={idx} className="mb-3 flex items-start">
-              {item.isBullet && <span className="mr-3 mt-0.5 text-xs text-emerald-500">▸</span>}
+              {item.isBullet && <span className="mr-3 mt-0.5 text-xs text-emerald-500">???</span>}
               <p className="flex-1 text-sm leading-relaxed text-slate-300">
                 {item.text}
                 {item.citations?.map((num) => (
@@ -831,26 +896,26 @@ function ExportModal({
   onExport: (format: string) => void;
 }) {
   // TECH: Conditional rendering prevents modal from existing in DOM when closed.
-  // PLAIN: If the modal isn’t open, don’t show it.
+  // PLAIN: If the modal isn???t open, don???t show it.
   if (!isOpen) return null;
 
   // TECH: Static option list for rendering export choices.
   // PLAIN: The buttons you can pick from for downloading.
   const options = [
-    { id: "pdf", label: "PDF Document", icon: "📄", desc: "Best for sharing and printing" },
-    { id: "docx", label: "Word Document", icon: "📝", desc: "Editable in Microsoft Word" },
-    { id: "md", label: "Markdown", icon: "📋", desc: "Plain text with formatting" },
-    { id: "html", label: "HTML", icon: "🌐", desc: "Web-ready format" }
+    { id: "pdf", label: "PDF Document", icon: "????", desc: "Best for sharing and printing" },
+    { id: "docx", label: "Word Document", icon: "????", desc: "Editable in Microsoft Word" },
+    { id: "md", label: "Markdown", icon: "????", desc: "Plain text with formatting" },
+    { id: "html", label: "HTML", icon: "????", desc: "Web-ready format" }
   ];
 
   return (
     // TECH: Backdrop covers entire screen; clicking backdrop closes modal.
     // PLAIN: Dark overlay behind the popup; click outside to close.
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950" onClick={onClose}>
       <div
         // TECH: Stop click propagation so clicking inside the card doesn't close the modal.
-        // PLAIN: Clicking inside the popup shouldn’t close it by accident.
-        className="w-96 max-w-[90vw] rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-2xl"
+        // PLAIN: Clicking inside the popup shouldn???t close it by accident.
+        className="w-96 max-w-[90vw] rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="mb-5 text-lg font-semibold text-slate-100">Export Report</h3>
@@ -861,7 +926,7 @@ function ExportModal({
               // TECH: onExport triggers the export process in parent component with selected format.
               // PLAIN: Clicking starts downloading in the chosen format.
               onClick={() => onExport(opt.id)}
-              className="flex items-center gap-4 rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-left transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
+              className="flex items-center gap-4 rounded-xl border border-slate-700 bg-slate-900 p-4 text-left transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
             >
               <span className="text-2xl">{opt.icon}</span>
               <div>
@@ -907,25 +972,25 @@ function ShareModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void 
   };
 
   // TECH: Do not render modal when closed.
-  // PLAIN: Hide the popup when it’s not open.
+  // PLAIN: Hide the popup when it???s not open.
   if (!isOpen) return null;
 
   return (
     // TECH: Backdrop click closes modal.
     // PLAIN: Clicking outside the popup closes it.
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950" onClick={onClose}>
       <div
         // TECH: Prevent inside clicks from closing modal.
-        // PLAIN: Clicking inside shouldn’t close the popup.
-        className="w-[420px] max-w-[90vw] rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-2xl"
+        // PLAIN: Clicking inside shouldn???t close the popup.
+        className="w-[420px] max-w-[90vw] rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="mb-5 text-lg font-semibold text-slate-100">Share Report</h3>
         <p className="mb-4 text-sm text-slate-400">Anyone with this link can view the report</p>
-        <div className="flex gap-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+        <div className="flex gap-2 rounded-lg border border-slate-700 bg-slate-900 p-3">
           <input
             // TECH: Read-only input prevents edits while allowing easy selection/copy.
-            // PLAIN: Shows the link so you can see it, but you can’t accidentally change it.
+            // PLAIN: Shows the link so you can see it, but you can???t accidentally change it.
             type="text"
             value={shareLink}
             readOnly
@@ -961,7 +1026,7 @@ function ShareModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void 
 // PLAIN (Function Summary): The main screen where you chat on the left and see the report appear on the right.
 export function ChatViewPage() {
   // TECH: Read route params from URL; these identify current project and conversation.
-  // PLAIN: Get which project and chat we’re looking at from the web address.
+  // PLAIN: Get which project and chat we???re looking at from the web address.
   const { projectId, chatId } = useParams();
 
   // TECH: useLocation provides access to navigation state (e.g., initialMessage passed from previous screen).
@@ -971,6 +1036,10 @@ export function ChatViewPage() {
   // TECH: useNavigate enables imperative navigation (back to project page, etc.).
   // PLAIN: Lets us jump to another page when a button is clicked.
   const navigate = useNavigate();
+
+  // TECH: useOutletContext provides access to topbar action controls from AppLayout.
+  // PLAIN: Lets this page put buttons in the top bar.
+  const { setTopbarActions } = useOutletContext<TopbarActionsContext>();
 
   // TECH: Normalize project ID to empty string if undefined for hook usage.
   // PLAIN: Make sure we always have a string ID to use.
@@ -1006,7 +1075,7 @@ export function ChatViewPage() {
   const [draft, setDraft] = useState("");
 
   // TECH: isTyping indicates we are waiting for server response to sendChat; drives typing indicator.
-  // PLAIN: Shows a “working” animation so user knows something is happening.
+  // PLAIN: Shows a ???working??? animation so user knows something is happening.
   const [isTyping, setIsTyping] = useState(false);
 
   // TECH: selectedModel/customModel track dropdown vs custom model selection.
@@ -1022,6 +1091,10 @@ export function ChatViewPage() {
   // PLAIN: Holds the generated report content that shows on the right side.
   const [report, setReport] = useState<Report>(EMPTY_REPORT);
 
+  // TECH: reportChatIdRef tracks which chatId the report state currently corresponds to.
+  // PLAIN: Prevents saving a report under the wrong conversation when switching chats.
+  const reportChatIdRef = useRef<string | null>(null);
+
   // TECH: highlightedSection temporarily highlights newly added section for UX feedback.
   // PLAIN: Makes new content briefly stand out so user notices it.
   const [highlightedSection, setHighlightedSection] = useState<string | null>(null);
@@ -1032,11 +1105,11 @@ export function ChatViewPage() {
   const [showShareModal, setShowShareModal] = useState(false);
 
   // TECH: exportNotification shows a temporary toast message for export status.
-  // PLAIN: Shows a message like “Exporting…” or “Downloaded!”
+  // PLAIN: Shows a message like ???Exporting?????? or ???Downloaded!???
   const [exportNotification, setExportNotification] = useState<string | null>(null);
 
   // TECH: lastEventIdRef deduplicates SSE events by monotonic ID to avoid reprocessing on reconnect.
-  // PLAIN: Remembers the latest progress update so we don’t apply the same update twice.
+  // PLAIN: Remembers the latest progress update so we don???t apply the same update twice.
   const lastEventIdRef = useRef<number>(0);
 
   // TECH: debounceRef is used to throttle rapid SSE updates to reduce re-renders.
@@ -1082,6 +1155,62 @@ export function ChatViewPage() {
   // PLAIN: Turn pages into a single message list.
   const messages = flattenInfiniteMessages(messagesQuery.data);
 
+  // TECH: Build topbar actions for share/export.
+  // PLAIN: Put Share and Export buttons in the header.
+  const topbarActions = useMemo(
+    () => (
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          onClick={() => setShowShareModal(true)}
+          disabled={report.sections.length === 0}
+        >
+          Share
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setShowExportModal(true)}
+          disabled={report.sections.length === 0}
+        >
+          Export
+        </Button>
+      </div>
+    ),
+    [report.sections.length, setShowExportModal, setShowShareModal]
+  );
+
+  // TECH: Sync topbar actions when report state changes.
+  // PLAIN: Keep header buttons in sync with this chat.
+  useEffect(() => {
+    setTopbarActions(topbarActions);
+  }, [setTopbarActions, topbarActions]);
+
+  // TECH: Clear topbar actions when leaving this page.
+  // PLAIN: Remove chat-specific buttons on navigation.
+  useEffect(() => () => setTopbarActions(null), [setTopbarActions]);
+
+  // TECH: Restore saved report whenever the conversation changes.
+  // PLAIN: When you open a chat, bring back its last report.
+  useEffect(() => {
+    if (!chatId) {
+      reportChatIdRef.current = null;
+      setReport(EMPTY_REPORT);
+      return;
+    }
+
+    const stored = loadStoredReport(chatId);
+    reportChatIdRef.current = chatId;
+    setReport(stored ?? EMPTY_REPORT);
+  }, [chatId]);
+
+  // TECH: Persist report updates so reopening the chat shows the latest report.
+  // PLAIN: Save report changes automatically.
+  useEffect(() => {
+    if (!chatId) return;
+    if (reportChatIdRef.current !== chatId) return;
+    persistReport(chatId, report);
+  }, [chatId, report]);
+
   // TECH: Effect to auto-send initialMessage once when page loads with that state.
   // PLAIN: If we arrived with a pre-filled message, send it automatically.
   useEffect(() => {
@@ -1090,7 +1219,7 @@ export function ChatViewPage() {
     if (!initialMessage || !chatId || initialMessageSentRef.current) return;
 
     // TECH: Mark sent before awaiting to avoid double-send due to re-renders.
-    // PLAIN: Lock it immediately so it doesn’t send twice.
+    // PLAIN: Lock it immediately so it doesn???t send twice.
     initialMessageSentRef.current = true;
 
     // TECH: Fire-and-forget sendMessage; catch errors to avoid unhandled promise rejection.
@@ -1107,7 +1236,7 @@ export function ChatViewPage() {
   // PLAIN: Keep the newest message visible automatically.
   useEffect(() => {
     // TECH: Use ref to scroll to the sentinel element at bottom.
-    // PLAIN: Scroll to the invisible “bottom marker.”
+    // PLAIN: Scroll to the invisible ???bottom marker.???
     const node = messagesEndRef.current;
     if (node && typeof node.scrollIntoView === "function") {
       node.scrollIntoView({ behavior: "smooth" });
@@ -1123,14 +1252,14 @@ export function ChatViewPage() {
   );
 
   // TECH: Apply incoming SSE events to update activeRun UI and detect terminal status.
-  // PLAIN: Update the “progress banner” as new updates arrive.
+  // PLAIN: Update the ???progress banner??? as new updates arrive.
   useEffect(() => {
-    // TECH: If no active run, there’s nothing to update.
+    // TECH: If no active run, there???s nothing to update.
     // PLAIN: If no job is running, ignore streaming updates.
     if (!activeRun) return;
 
     // TECH: If there are no SSE events yet, nothing to do.
-    // PLAIN: If we haven’t received updates, don’t change anything.
+    // PLAIN: If we haven???t received updates, don???t change anything.
     if (sse.events.length === 0) return;
 
     // TECH: Filter events to only those with ID greater than last processed to avoid duplicates.
@@ -1173,7 +1302,7 @@ export function ChatViewPage() {
       const { status, primaryText, secondaryText } = deriveRunUpdate(evt);
 
       // TECH: Terminal statuses stop the run and trigger completion handling.
-      // PLAIN: If the job is finished, we stop showing “working.”
+      // PLAIN: If the job is finished, we stop showing ???working.???
       if (status && ["succeeded", "failed", "canceled"].includes(status)) {
         terminal = status as ActiveRunStatus;
 
@@ -1206,7 +1335,7 @@ export function ChatViewPage() {
     }
 
     // TECH: If no status message updates, do nothing.
-    // PLAIN: If there’s no new text to show, leave it as is.
+    // PLAIN: If there???s no new text to show, leave it as is.
     if (!nextPrimary) return;
 
     // TECH: Debounce updates so high-frequency SSE doesn't cause excessive re-renders.
@@ -1243,7 +1372,7 @@ export function ChatViewPage() {
   // PLAIN (Function Summary): When the job finishes, it grabs the final result and adds it into the report view.
   async function handleRunCompletion(status: ActiveRunStatus) {
     // TECH: Must have an activeRun to know runId.
-    // PLAIN: If there’s no job, there’s nothing to finish.
+    // PLAIN: If there???s no job, there???s nothing to finish.
     if (!activeRun) return;
 
     // TECH: Cache runId because activeRun might change during awaits.
@@ -1262,7 +1391,7 @@ export function ChatViewPage() {
     // PLAIN: If it finished, download the result files from the system.
     if (status === "succeeded") {
       // TECH: API call expects Artifact[] response; schema validation protects against malformed data.
-      // PLAIN: Ask the server for the run’s outputs, and make sure they look correct.
+      // PLAIN: Ask the server for the run???s outputs, and make sure they look correct.
       const artifacts = await apiFetchJson(`/runs/${encodeURIComponent(runId)}/artifacts`, {
         schema: ArtifactsSchema
       }).catch(() => [] as Artifact[]);
@@ -1287,7 +1416,7 @@ export function ChatViewPage() {
             sections: [...prev.sections, ...parsedSections]
           }));
 
-          // TECH: Highlight first newly inserted section for UX “new content” indication.
+          // TECH: Highlight first newly inserted section for UX ???new content??? indication.
           // PLAIN: Briefly highlight the new section so you can spot it.
           const firstSection = parsedSections[0];
           if (firstSection) {
@@ -1299,7 +1428,7 @@ export function ChatViewPage() {
     }
 
     // TECH: Cleanup: clear active run and reset last event id so next run starts clean.
-    // PLAIN: Reset the “job running” state so the UI goes back to normal.
+    // PLAIN: Reset the ???job running??? state so the UI goes back to normal.
     setActiveRun(null);
     lastEventIdRef.current = 0;
   }
@@ -1365,7 +1494,7 @@ export function ChatViewPage() {
   // PLAIN (Function Summary): Sends the chat message and starts tracking the report job if one begins.
   async function sendMessage(text: string) {
     // TECH: Trim whitespace to avoid sending empty messages.
-    // PLAIN: Don’t send blank messages.
+    // PLAIN: Don???t send blank messages.
     const trimmed = text.trim();
     if (!trimmed || !chatId) return;
     const isAction = trimmed.startsWith("__ACTION__:");
@@ -1400,12 +1529,12 @@ export function ChatViewPage() {
       const assistant = response.assistant_message;
 
       if (assistant?.type === "run_started") {
-        // TECH: run_id is stored in content_json; validate it’s a string.
+        // TECH: run_id is stored in content_json; validate it???s a string.
         // PLAIN: Get the job ID if one was created.
         const runId = assistant.content_json?.["run_id"];
         if (typeof runId === "string") {
           // TECH: Set activeRun so SSE starts and banner appears.
-          // PLAIN: Show the “job running” indicator and start listening for progress.
+          // PLAIN: Show the ???job running??? indicator and start listening for progress.
           setActiveRun({
             runId,
             status: "running",
@@ -1421,7 +1550,7 @@ export function ChatViewPage() {
 
     } finally {
       // TECH: Always clear typing indicator even if request fails.
-      // PLAIN: Stop showing “typing” no matter what happens.
+      // PLAIN: Stop showing ???typing??? no matter what happens.
       setIsTyping(false);
     }
   }
@@ -1430,7 +1559,7 @@ export function ChatViewPage() {
   // PLAIN (Function Summary): Sends what you typed, and clears the box if it worked.
   async function onSend() {
     // TECH: Trim to prevent whitespace-only messages.
-    // PLAIN: Don’t send empty messages.
+    // PLAIN: Don???t send empty messages.
     const text = draft.trim();
     if (!text) return;
 
@@ -1449,10 +1578,10 @@ export function ChatViewPage() {
   }
 
   // TECH (Function Summary): Requests canceling the current run; updates banner status.
-  // PLAIN (Function Summary): Stops the report job if it’s running.
+  // PLAIN (Function Summary): Stops the report job if it???s running.
   async function onAnswerNow() {
     // TECH: Only possible if a run exists.
-    // PLAIN: If there’s no job running, there’s nothing to stop.
+    // PLAIN: If there???s no job running, there???s nothing to stop.
     if (!activeRun) return;
 
     try {
@@ -1460,12 +1589,12 @@ export function ChatViewPage() {
       // PLAIN: Tell the server to stop generating the report.
       await cancelRun.mutateAsync();
 
-      // TECH: Optimistically update banner to “stopping” for immediate feedback.
-      // PLAIN: Immediately show “stopping” so the user sees something happen.
+      // TECH: Optimistically update banner to ???stopping??? for immediate feedback.
+      // PLAIN: Immediately show ???stopping??? so the user sees something happen.
       setActiveRun((prev) => (prev ? { ...prev, primaryText: "Stopping run..." } : prev));
     } catch {
       // TECH: If cancel fails, clear run state anyway to unblock UI.
-      // PLAIN: If stopping doesn’t work, remove the banner so the UI isn’t stuck.
+      // PLAIN: If stopping doesn???t work, remove the banner so the UI isn???t stuck.
       setActiveRun(null);
     }
   }
@@ -1508,9 +1637,16 @@ export function ChatViewPage() {
   // PLAIN (Function Summary): Deletes the report text from the right panel (with a safety prompt).
   function handleClear() {
     // TECH: window.confirm prevents accidental destructive action.
-    // PLAIN: Ask “are you sure?” before deleting content.
+    // PLAIN: Ask ???are you sure???? before deleting content.
     if (window.confirm("Are you sure you want to clear the report?")) {
       setReport(EMPTY_REPORT);
+      if (chatId) {
+        try {
+          window.localStorage.removeItem(reportStorageKey(chatId));
+        } catch {
+          // ignore storage failures
+        }
+      }
     }
   }
 
@@ -1527,7 +1663,7 @@ export function ChatViewPage() {
 
     try {
       // TECH: Build export filename using report title; omit extension for reuse.
-      // PLAIN: Use the report’s title as the file name.
+      // PLAIN: Use the report???s title as the file name.
       const filename = `${report.title || "report"}`;
 
       // TECH: Branch by format; some are synchronous string generation, others are async binary creation.
@@ -1560,7 +1696,7 @@ export function ChatViewPage() {
   // PLAIN (Function Summary): Turns text into a downloadable file and saves it to your computer.
   function downloadText(content: string, filename: string, mimeType: string) {
     // TECH: Blob wraps raw content with MIME type so the browser knows what it is.
-    // PLAIN: Package the text into a real “file-like” object.
+    // PLAIN: Package the text into a real ???file-like??? object.
     const blob = new Blob([content], { type: mimeType });
 
     // TECH: Object URL provides a temporary local URL pointing to the Blob data.
@@ -1623,7 +1759,7 @@ export function ChatViewPage() {
 
     report.sections.forEach((section) => {
       // TECH: Page break if near bottom before writing new section heading.
-      // PLAIN: If we’re near the bottom, start a new page.
+      // PLAIN: If we???re near the bottom, start a new page.
       if (yPosition > pageHeight - 30) {
         doc.addPage();
         yPosition = margin;
@@ -1655,7 +1791,7 @@ export function ChatViewPage() {
         // TECH: Render bullets with a leading bullet character.
         // PLAIN: Put a bullet dot in front of list items.
         if (item.isBullet) {
-          text = `• ${text}`;
+          text = `??? ${text}`;
         }
 
         // TECH: splitTextToSize handles line wrapping within maxWidth.
@@ -1671,7 +1807,7 @@ export function ChatViewPage() {
         const totalHeight = lines.length * lineHeight;
 
         // TECH: Page break if this block would overflow bottom margin.
-        // PLAIN: Start a new page if the text won’t fit here.
+        // PLAIN: Start a new page if the text won???t fit here.
         if (yPosition + totalHeight > pageHeight - margin) {
           doc.addPage();
           yPosition = margin;
@@ -1745,7 +1881,7 @@ export function ChatViewPage() {
         }
 
         // TECH: bullet property makes Word render it as a bulleted list item.
-        // PLAIN: If it’s a list item, show it as a bullet in Word.
+        // PLAIN: If it???s a list item, show it as a bullet in Word.
         children.push(
           new Paragraph({
             children: runs,
@@ -1832,17 +1968,17 @@ export function ChatViewPage() {
       margin: 0 auto;
       padding: 2rem;
       line-height: 1.6;
-      color: #1e293b;
-    }
-    h1 {
-      color: #0f172a;
-      border-bottom: 2px solid #10b981;
-      padding-bottom: 0.5rem;
-    }
-    h2 {
-      color: #334155;
-      margin-top: 2rem;
-    }
+        color: #e0dde6;
+      }
+      h1 {
+        color: #e0dde6;
+        border-bottom: 2px solid #9580c4;
+        padding-bottom: 0.5rem;
+      }
+      h2 {
+        color: #8a8694;
+        margin-top: 2rem;
+      }
     p {
       margin: 1rem 0;
     }
@@ -1852,10 +1988,10 @@ export function ChatViewPage() {
     li {
       margin: 0.5rem 0;
     }
-    sup {
-      color: #10b981;
-      font-weight: 600;
-    }
+      sup {
+        color: #9580c4;
+        font-weight: 600;
+      }
   </style>
 </head>
 <body>
@@ -1927,7 +2063,7 @@ export function ChatViewPage() {
   }
 
   // TECH: Error state for project query; show error banner with message.
-  // PLAIN: If the project can’t load, show an error message.
+  // PLAIN: If the project can???t load, show an error message.
   if (project.isError) {
     return <ErrorBanner message={project.error instanceof Error ? project.error.message : "Failed to load project"} />;
   }
@@ -1948,7 +2084,7 @@ export function ChatViewPage() {
   }
 
   // TECH: If chatId is not found in conversations list, show fallback UI.
-  // PLAIN: If the chat doesn’t exist, show “not found.”
+  // PLAIN: If the chat doesn???t exist, show ???not found.???
   if (!chat) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -1964,11 +2100,11 @@ export function ChatViewPage() {
   return (
     // TECH: Two-panel fixed layout; left is chat, right is report preview.
     // PLAIN: Split screen with chat on the left and report on the right.
-    <div className="fixed inset-0 left-16 top-14 flex bg-slate-950 text-slate-200 md:left-64">
+    <div className="flex h-full min-h-0 bg-slate-950 text-slate-200">
       {/* Left Panel - Chat */}
       {/* TECH: Left panel is chat column with header, message list, quick actions, and input area. */}
       {/* PLAIN: This is where you talk to the assistant. */}
-      <div className="flex w-[45%] flex-col border-r border-slate-800">
+      <div className="flex w-[45%] min-h-0 flex-col border-r border-slate-800">
         {/* Chat Header */}
         {/* TECH: Header shows back navigation and chat/project metadata. */}
         {/* PLAIN: Top bar with a back button and the chat name. */}
@@ -2002,7 +2138,7 @@ export function ChatViewPage() {
             const isRunStarted = message.type === "run_started";
             const isError = message.type === "error";
 
-            // TECH: Extract run ID for “open run viewer” link from run_started message JSON.
+            // TECH: Extract run ID for ???open run viewer??? link from run_started message JSON.
             // PLAIN: If a report job started, grab its ID so we can link to it.
             const runId = isRunStarted ? (message.content_json?.["run_id"] as string | undefined) : undefined;
 
@@ -2026,7 +2162,7 @@ export function ChatViewPage() {
                       ? "rounded-br-sm border border-emerald-500/30 bg-emerald-500/15 text-slate-200"
                       : isError
                         ? "rounded-bl-sm border border-rose-500/40 bg-rose-500/10 text-rose-100"
-                        : "rounded-bl-sm border border-slate-700/50 bg-slate-800/80 text-slate-200"
+                        : "rounded-bl-sm border border-slate-800 bg-slate-900 text-slate-200"
                   }`}
                 >
                   {/* TECH: Render markdown for chat text; action messages use friendly labels. */}
@@ -2035,7 +2171,7 @@ export function ChatViewPage() {
                     <span>{displayMessageText(message)}</span>
                   ) : (
                     <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents}>
-                      {message.content_text}
+                      {normalizeChatMarkdown(message.content_text)}
                     </ReactMarkdown>
                   )}
 
@@ -2043,10 +2179,10 @@ export function ChatViewPage() {
                   {/* PLAIN: If a report job started, show a button to view its details. */}
                   {isRunStarted && runId ? (
                     <div className="mt-2">
-                      <Link
-                        to={`/runs/${encodeURIComponent(runId)}`}
-                        className="inline-flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-200 hover:bg-emerald-500/20"
-                      >
+                        <Link
+                          to={`/runs/${encodeURIComponent(runId)}`}
+                          className="inline-flex items-center gap-2 rounded-md border border-sky-500 bg-sky-500 px-2.5 py-1 text-xs text-slate-100 hover:bg-sky-500"
+                        >
                         Open run viewer
                       </Link>
                     </div>
@@ -2062,7 +2198,7 @@ export function ChatViewPage() {
                         key={action.id ?? action.label}
                         onClick={() => {
                           // TECH: Guard against missing action IDs to avoid sending invalid messages.
-                          // PLAIN: If there’s no action code, do nothing.
+                          // PLAIN: If there???s no action code, do nothing.
                           if (!action.id) return;
 
                           // TECH: Send an encoded message; backend interprets __ACTION__ prefix as command.
@@ -2095,7 +2231,7 @@ export function ChatViewPage() {
           {/* TECH: Show typing indicator when a message is being sent/processed. */}
           {/* PLAIN: Animated dots show the system is working. */}
           {isTyping && (
-            <div className="inline-block rounded-2xl rounded-bl-sm border border-slate-700/50 bg-slate-800/80 px-4 py-3.5">
+            <div className="inline-block rounded-2xl rounded-bl-sm border border-slate-800 bg-slate-900 px-4 py-3.5">
               <TypingIndicator />
             </div>
           )}
@@ -2129,7 +2265,7 @@ export function ChatViewPage() {
               // TECH: Set draft text to the selected action template.
               // PLAIN: Put this suggestion into the message box.
               onClick={() => setDraft(action)}
-              className="rounded-full border border-slate-700 bg-slate-800/50 px-3.5 py-2 text-xs text-slate-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-400"
+              className="rounded-full border border-slate-700 bg-slate-900 px-3.5 py-2 text-xs text-slate-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-400"
             >
               {action}
             </button>
@@ -2148,7 +2284,7 @@ export function ChatViewPage() {
                 // PLAIN: Pick a model from the list.
                 value={selectedModel}
                 onChange={(e) => setSelectedModel(e.target.value)}
-                className="min-w-[220px] rounded-md border border-slate-700 bg-slate-900/50 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
+                className="min-w-[220px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
               >
                 {MODEL_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -2163,7 +2299,7 @@ export function ChatViewPage() {
                   value={customModel}
                   onChange={(e) => setCustomModel(e.target.value)}
                   placeholder="Enter model id"
-                  className="min-w-[220px] flex-1 rounded-md border border-slate-700 bg-slate-900/50 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
+                  className="min-w-[220px] flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
                 />
               ) : null}
             </div>
@@ -2174,7 +2310,7 @@ export function ChatViewPage() {
               className={`rounded-full border px-3.5 py-2 text-xs transition-colors ${
                 runPipelineArmed
                   ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-200"
-                  : "border-slate-700 bg-slate-900/50 text-slate-400 hover:border-emerald-500/30 hover:text-emerald-300"
+                  : "border-slate-700 bg-slate-900 text-slate-400 hover:border-emerald-500/30 hover:text-emerald-300"
               }`}
             >
               Run research report
@@ -2197,7 +2333,7 @@ export function ChatViewPage() {
               }}
               placeholder="Ask a question or request a report..."
               rows={1}
-              className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3.5 text-sm text-slate-200 outline-none transition-colors focus:border-emerald-500/50"
+              className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3.5 text-sm text-slate-200 outline-none transition-colors focus:border-emerald-500/50"
             />
             <button
               // TECH: Click send triggers onSend; disabled unless valid draft and not busy.
@@ -2219,10 +2355,10 @@ export function ChatViewPage() {
       {/* Right Panel - Report */}
       {/* TECH: Right panel displays the live report and related actions (export/clear/share). */}
       {/* PLAIN: This is where your report appears and where you can download/share it. */}
-      <div className="flex w-[55%] flex-col bg-slate-950">
+      <div className="flex w-[55%] min-h-0 flex-col bg-slate-950">
         {/* Report Header */}
         {/* TECH: Shows report title and a status pill that reflects whether a run is active. */}
-        {/* PLAIN: Top bar showing “Live Report” and whether it’s ready or processing. */}
+        {/* PLAIN: Top bar showing ???Live Report??? and whether it???s ready or processing. */}
         <div className="flex items-center justify-between border-b border-slate-800 px-8 py-5">
           <h2 className="font-mono text-xl font-semibold text-slate-100">Live Report</h2>
           <div className="flex items-center gap-3">
@@ -2236,13 +2372,13 @@ export function ChatViewPage() {
         {/* Action Buttons */}
         {/* TECH: Report-level actions; disabled when report is empty to prevent meaningless exports/shares. */}
         {/* PLAIN: Buttons to download, clear, or share the report once it exists. */}
-        <div className="flex gap-3 border-b border-slate-800/50 px-8 py-4">
+        <div className="flex gap-3 border-b border-slate-800 px-8 py-4">
           <button
             // TECH: Open export modal; disabled if no sections.
             // PLAIN: Choose how to download the report.
             onClick={() => setShowExportModal(true)}
             disabled={report.sections.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700/50 disabled:cursor-not-allowed disabled:text-slate-600"
+            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600"
           >
             <Download className="h-4 w-4" />
             Export
@@ -2252,7 +2388,7 @@ export function ChatViewPage() {
             // PLAIN: Delete the report text from the screen.
             onClick={handleClear}
             disabled={report.sections.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700/50 disabled:cursor-not-allowed disabled:text-slate-600"
+            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600"
           >
             <Trash2 className="h-4 w-4" />
             Clear
@@ -2262,7 +2398,7 @@ export function ChatViewPage() {
             // PLAIN: Show a share link for the report.
             onClick={() => setShowShareModal(true)}
             disabled={report.sections.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700/50 disabled:cursor-not-allowed disabled:text-slate-600"
+            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600"
           >
             <Share2 className="h-4 w-4" />
             Share
@@ -2276,11 +2412,11 @@ export function ChatViewPage() {
 
         {/* Report Content */}
         {/* TECH: Conditional rendering shows empty-state when no report sections exist; otherwise renders each section. */}
-        {/* PLAIN: If there’s no report yet, show a placeholder; otherwise show the report. */}
+        {/* PLAIN: If there???s no report yet, show a placeholder; otherwise show the report. */}
         <div className="flex-1 overflow-y-auto p-8">
           {report.sections.length === 0 ? (
             <div className="py-20 text-center text-slate-500">
-              <div className="mb-4 text-5xl opacity-50">📄</div>
+              <div className="mb-4 text-5xl opacity-50">????</div>
               <p className="text-sm">Your report will appear here</p>
               <p className="mt-2 text-xs text-slate-600">Start a conversation to generate content</p>
             </div>
@@ -2307,7 +2443,7 @@ export function ChatViewPage() {
       {/* TECH: Toast notification shows export progress/result; disappears after timer in handleExport. */}
       {/* PLAIN: Small message popup in the corner about downloading status. */}
       {exportNotification && (
-        <div className="fixed bottom-6 right-6 flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-slate-800 px-5 py-3.5 text-sm font-medium text-emerald-400 shadow-xl">
+        <div className="fixed bottom-6 right-6 flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-slate-900 px-5 py-3.5 text-sm font-medium text-emerald-400 shadow-xl">
           <Download className="h-4 w-4" />
           {exportNotification}
         </div>
@@ -2315,3 +2451,6 @@ export function ChatViewPage() {
     </div>
   );
 }
+
+
+

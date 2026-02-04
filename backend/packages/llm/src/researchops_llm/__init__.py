@@ -108,6 +108,8 @@ class OpenAICompatibleClient:
 def get_llm_client(
     provider: str | None = None,
     model: str | None = None,
+    *,
+    timeout_seconds: float | None = None,
 ) -> LLMProvider | None:
     """
     Resolve an LLM client based on provider/model overrides and environment defaults.
@@ -134,6 +136,7 @@ def get_llm_client(
             base_url=base_url,
             api_key=api_key,
             model_name=model_name,
+            timeout_seconds=timeout_seconds or _resolve_timeout_seconds(),
         )
 
     raise LLMError(f"Unknown LLM provider: {provider_name}")
@@ -151,7 +154,40 @@ def get_llm_client_for_stage(
     model_override = os.getenv(f"LLM_MODEL_{stage_key}") or os.getenv(f"LLM_{stage_key}_MODEL")
     resolved_provider = provider or provider_override
     resolved_model = model or model_override
-    return get_llm_client(resolved_provider, resolved_model)
+    timeout_seconds = _resolve_timeout_seconds(stage_key)
+    return get_llm_client(
+        resolved_provider,
+        resolved_model,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _resolve_timeout_seconds(stage_key: str | None = None) -> float:
+    def _read_timeout(name: str) -> float | None:
+        raw = os.getenv(name)
+        if raw is None or not raw.strip():
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    if stage_key:
+        for key in (
+            f"LLM_TIMEOUT_SECONDS_{stage_key}",
+            f"LLM_{stage_key}_TIMEOUT_SECONDS",
+            f"HOSTED_LLM_TIMEOUT_SECONDS_{stage_key}",
+        ):
+            value = _read_timeout(key)
+            if value is not None and value > 0:
+                return value
+
+    for key in ("LLM_TIMEOUT_SECONDS", "HOSTED_LLM_TIMEOUT_SECONDS"):
+        value = _read_timeout(key)
+        if value is not None and value > 0:
+            return value
+
+    return 60.0
 
 
 def use_json_schema() -> bool:

@@ -50,7 +50,7 @@ export function ArtifactsPage() {
 
       {artifacts.isLoading ? (
         <Card>
-          <Spinner label="Loading artifacts…" />
+          <Spinner label="Loading artifacts???" />
         </Card>
       ) : artifacts.isError ? (
         <ErrorBanner message={artifacts.error instanceof Error ? artifacts.error.message : "Failed to load artifacts"} />
@@ -90,7 +90,7 @@ export function ArtifactsPage() {
           <Card>
             <div className="mb-2 text-sm font-semibold text-slate-100">Preview</div>
             {preview ? (
-              <pre className="max-h-[520px] overflow-auto rounded-md border border-slate-900 bg-black/30 p-3 text-xs text-slate-200">
+              <pre className="max-h-[520px] overflow-auto rounded-md border border-slate-900 bg-slate-950 p-3 text-xs text-slate-200">
                 {preview.markdown}
               </pre>
             ) : (
@@ -104,3 +104,5 @@ export function ArtifactsPage() {
     </div>
   );
 }
+
+

@@ -16,7 +16,7 @@ export class ApiError extends Error {
   }
 }
 
-function apiBaseUrl(): string {
+export function apiBaseUrl(): string {
   const value = import.meta.env.VITE_API_BASE_URL?.trim();
   if (!value) throw new Error("Missing VITE_API_BASE_URL");
   return value.replace(/\/+$/, "");
@@ -49,7 +49,11 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   }
   if (token) headers.set("authorization", `Bearer ${token}`);
 
-  const response = await fetch(url, { ...init, headers });
+  const response = await fetch(url, {
+    ...init,
+    headers,
+    credentials: init?.credentials ?? "include"
+  });
   if (response.status === 401) {
     handleUnauthorized();
   }

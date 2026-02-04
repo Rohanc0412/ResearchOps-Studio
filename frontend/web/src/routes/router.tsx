@@ -7,10 +7,10 @@ import { ChatViewPage } from "../pages/ChatViewPage";
 import { ErrorPage } from "../pages/ErrorPage";
 import { EvidencePage } from "../pages/EvidencePage";
 import { LoginPage } from "../pages/LoginPage";
-import { OidcCallbackPage } from "../pages/OidcCallbackPage";
 import { ProjectDetailPage } from "../pages/ProjectDetailPage";
 import { ProjectsPage } from "../pages/ProjectsPage";
 import { RunViewerPage } from "../pages/RunViewerPage";
+import { SecurityPage } from "../pages/SecurityPage";
 
 export const router = createBrowserRouter([
   {
@@ -18,7 +18,6 @@ export const router = createBrowserRouter([
     children: [
       { path: "/", element: <Navigate to="/projects" replace /> },
       { path: "/login", element: <LoginPage /> },
-      { path: "/auth/callback", element: <OidcCallbackPage /> },
       {
         element: <ProtectedRoute />,
         children: [
@@ -30,7 +29,8 @@ export const router = createBrowserRouter([
               { path: "/projects/:projectId/chats/:chatId", element: <ChatViewPage /> },
               { path: "/runs/:runId", element: <RunViewerPage /> },
               { path: "/runs/:runId/artifacts", element: <ArtifactsPage /> },
-              { path: "/evidence/snippets/:snippetId", element: <EvidencePage /> }
+              { path: "/evidence/snippets/:snippetId", element: <EvidencePage /> },
+              { path: "/security", element: <SecurityPage /> }
             ]
           }
         ]

@@ -31,8 +31,8 @@ export function Modal({
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className={cx("relative w-full max-w-lg rounded-xl border border-slate-800 bg-slate-950 p-4 shadow-soft", className)}>
+      <div className="absolute inset-0 bg-slate-950" onClick={onClose} />
+      <div className={cx("relative w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-soft", className)}>
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-semibold text-slate-100">{title}</div>
           <Button variant="ghost" onClick={onClose} aria-label="Close">
@@ -45,4 +45,6 @@ export function Modal({
     document.body
   );
 }
+
+
 

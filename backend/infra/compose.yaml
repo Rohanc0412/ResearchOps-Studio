@@ -22,12 +22,14 @@ services:
       dockerfile: infra/docker/api.Dockerfile
     env_file:
       - ../../.env
+      - ../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
       API_HOST: 0.0.0.0
       API_PORT: 8000
       AUTH_REQUIRED: "true"
       DEV_BYPASS_AUTH: "true"
+      AUTH_JWT_SECRET: "dev-insecure-secret"
     ports:
       - "8000:8000"
     depends_on:
@@ -50,6 +52,7 @@ services:
     gpus: all
     env_file:
       - ../../.env
+      - ../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
       WORKER_POLL_SECONDS: "1.0"

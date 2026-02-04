@@ -32,7 +32,11 @@ from researchops_connectors.dedup import deduplicate_sources
 from researchops_core.observability import emit_run_event, instrument_node
 from researchops_core.orchestrator.state import OrchestratorState, SourceRef
 from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
-from researchops_orchestrator.embeddings import get_sentence_transformer_client
+from researchops_orchestrator.embeddings import (
+    get_hf_client,
+    get_ollama_client,
+    get_sentence_transformer_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +421,13 @@ def _resolve_embed_provider(llm_provider: str | None) -> str:
 
 
 def _resolve_embed_model(provider_name: str) -> str:
+    if provider_name == "ollama":
+        for name in ("OLLAMA_EMBED_MODEL", "RETRIEVER_EMBED_MODEL", "EMBEDDING_MODEL"):
+            raw = os.getenv(name)
+            if raw and raw.strip():
+                return raw.strip()
+        return "nomic-embed-text"
+
     for name in ("RETRIEVER_EMBED_MODEL",):
         raw = os.getenv(name)
         if raw and raw.strip():
@@ -476,6 +487,37 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
     provider_name = _resolve_embed_provider(llm_provider)
     if provider_name in {"", "none", "disabled"}:
         raise EmbedError("Embeddings are required for reranking but provider is disabled.")
+    if provider_name == "ollama":
+        model_name = _resolve_embed_model(provider_name)
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
+        timeout_seconds = _env_int("OLLAMA_TIMEOUT_SECONDS", 60, min_value=5)
+        return get_ollama_client(
+            model_name=model_name,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+    if provider_name in {"hf", "huggingface", "hosted", "inference"}:
+        model_name = os.getenv("HF_EMBED_MODEL", "BAAI/bge-m3").strip()
+        base_url = os.getenv(
+            "HF_INFERENCE_BASE_URL",
+            "https://router.huggingface.co/hf-inference/models",
+        ).strip()
+        api_key = os.getenv("HF_TOKEN", "").strip()
+        if not api_key:
+            raise EmbedError("HF_TOKEN is required for hosted embeddings.")
+        timeout_seconds = _env_int("HF_TIMEOUT_SECONDS", 60, min_value=5)
+        wait_for_model = os.getenv("HF_WAIT_FOR_MODEL", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        return get_hf_client(
+            model_name=model_name,
+            base_url=base_url,
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+            wait_for_model=wait_for_model,
+        )
     if provider_name in {"local", "sentence-transformers", "bge"}:
         model_name = _resolve_embed_model(provider_name)
         device = _resolve_embed_device()
@@ -502,9 +544,14 @@ def _embedding_text_for_source(source: RetrievedSource) -> str:
     else:
         text = title or abstract
     text = text.strip()
-    max_chars = _env_int("RETRIEVER_EMBED_TEXT_MAX_CHARS", 7000, min_value=1000)
-    if len(text) > max_chars:
-        text = text[:max_chars]
+    raw = os.getenv("RETRIEVER_EMBED_TEXT_MAX_CHARS")
+    if raw and raw.strip():
+        try:
+            max_chars = int(raw)
+        except ValueError:
+            max_chars = 0
+        if max_chars > 0 and len(text) > max_chars:
+            text = text[:max_chars]
     return text
 
 

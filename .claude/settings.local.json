@@ -3,7 +3,9 @@
     "allow": [
       "Bash(docker compose logs:*)",
       "Bash(docker compose:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx vite build:*)"
     ]
   }
 }

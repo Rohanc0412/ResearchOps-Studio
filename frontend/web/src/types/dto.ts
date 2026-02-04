@@ -4,6 +4,7 @@ export type IsoTimestamp = string;
 
 export type Me = {
   user_id: string;
+  username?: string;
   tenant_id: string;
   roles: string[];
   email?: string;
@@ -12,6 +13,7 @@ export type Me = {
 export const MeSchema: z.ZodType<Me, z.ZodTypeDef, unknown> = z
   .object({
     user_id: z.string().min(1),
+    username: z.string().min(1).optional(),
     tenant_id: z.string().min(1),
     roles: z.union([z.array(z.string()), z.string()]).optional(),
     role: z.string().optional(),
@@ -29,7 +31,13 @@ export const MeSchema: z.ZodType<Me, z.ZodTypeDef, unknown> = z
         : value.role
           ? [value.role]
           : [];
-    return { user_id: value.user_id, tenant_id: value.tenant_id, roles, email: value.email };
+    return {
+      user_id: value.user_id,
+      username: value.username ?? value.user_id,
+      tenant_id: value.tenant_id,
+      roles,
+      email: value.email
+    };
   });
 
 export type Project = {

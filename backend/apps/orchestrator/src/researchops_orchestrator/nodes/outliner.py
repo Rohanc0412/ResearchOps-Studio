@@ -216,6 +216,10 @@ def _generate_outline_with_llm(
         "- Introduction must be first and Conclusion must be last\n"
         "- Section titles must be unique\n"
         "- suggested_evidence_themes should be keywords/topics\n"
+        "- The outline MUST read as a connected narrative from Introduction to Conclusion\n"
+        "- Each section goal MUST explicitly connect to the previous section and set up the next\n"
+        "- Use a logical arc: context -> methods/approach -> findings/evidence -> implications/risks -> conclusion\n"
+        "- Avoid random or disconnected section titles; ensure continuity between adjacent sections\n"
         "- If too few sources, use fewer sections but keep intro+conclusion\n"
         "- Do not include markdown, no backticks, no commentary\n"
     )
@@ -612,6 +616,7 @@ def _repair_outline_with_llm(
         f"Run ID: {run_id}\n"
         f"Question: {user_query}\n"
         f"Required section count: {min_sections} to {max_sections}\n\n"
+        "Flow requirement: ensure sections form a connected narrative from Introduction to Conclusion.\n"
         "Previous JSON:\n"
         + payload_json
         + "\n\n"

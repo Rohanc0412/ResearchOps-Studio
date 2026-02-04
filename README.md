@@ -22,23 +22,9 @@ npm run dev
 ```
 
 Notes:
-- Configure OIDC/Vite env vars in the shared repo `.env` (issuer, client id, redirect uri, API base URL).
+- Frontend uses `frontend/web/.env` for `VITE_API_BASE_URL` and `VITE_GOOGLE_CLIENT_ID`.
+- Backend tuning overrides live in `backend/.env`.
 - The API must allow the web origin (e.g. `http://localhost:5173`) via CORS for browser requests.
-
-### Local OIDC (Keycloak)
-
-Run API + DB + Keycloak with real OIDC validation:
-
-```powershell
-docker compose -f backend/infra/compose.yaml -f backend/infra/compose.oidc.yaml up --build
-```
-
-Keycloak:
-- Admin UI: `http://keycloak.localhost:8080` (admin/admin)
-- Dev user: `dev-admin` / `dev-admin`
-
-Issuer:
-- `http://keycloak.localhost:8080/realms/researchops`
 
 ## What This Repo Does (Today)
 
@@ -159,17 +145,24 @@ OpenRouter example:
 - `HOSTED_LLM_MODEL=xiaomi/mimo-v2-flash:free`
 - `HOSTED_LLM_API_KEY=...`
 
-## Auth Overview (OIDC + JWT)
+## Auth Overview (JWT Access + Refresh)
 
 Flow:
-1) Your frontend authenticates with an OIDC provider (Keycloak/Auth0/etc).
-2) Frontend receives an **access token** (JWT).
+1) Frontend calls `POST /auth/login` with username + password.
+2) API returns an **access token** (JWT) and sets a httpOnly refresh cookie.
 3) Frontend calls the API with `Authorization: Bearer <access_token>`.
 
+### Google Sign-In + MFA
+
+- `POST /auth/google` exchanges a Google ID token for ResearchOps access/refresh tokens.
+- If MFA is enabled for the user, login returns `{ mfa_required: true, mfa_token: "..." }`.
+- Complete MFA with `POST /auth/mfa/verify` and the TOTP code.
+- Manage MFA: `GET /auth/mfa/status`, `POST /auth/mfa/enroll/start`, `POST /auth/mfa/enroll/verify`, `POST /auth/mfa/disable`.
+
 Fail-closed rules (default behavior):
-- Missing/invalid token → request is rejected.
-- Missing `tenant_id` claim → request is rejected.
-- Cross-tenant resource access → rejected (tenant-scoped queries return `404`).
+- Missing/invalid token -> request is rejected.
+- Missing `tenant_id` claim -> request is rejected.
+- Cross-tenant resource access -> rejected (tenant-scoped queries return `404`).
 
 ### Required Claims
 
@@ -179,17 +172,30 @@ Fail-closed rules (default behavior):
   - fallback: `tenant_id`
 - Roles (optional; defaults to `viewer`):
   - `roles`
-  - or `realm_access.roles`
-  - or `resource_access.<client>.roles` (Keycloak style)
 
 ### Auth Environment Variables
 
 - `AUTH_REQUIRED` (default `true`)
 - `DEV_BYPASS_AUTH` (default `false`, local only)
-- `OIDC_ISSUER` (required when `AUTH_REQUIRED=true` and no bypass)
-- `OIDC_AUDIENCE` (required when `AUTH_REQUIRED=true` and no bypass)
-- `OIDC_JWKS_CACHE_SECONDS` (default `300`)
-- `OIDC_CLOCK_SKEW_SECONDS` (default `60`)
+- `AUTH_JWT_SECRET` (required when `AUTH_REQUIRED=true` and no bypass)
+- `AUTH_JWT_ISSUER` (default `researchops-api`)
+- `AUTH_ACCESS_TOKEN_MINUTES` (default `30`)
+- `AUTH_REFRESH_TOKEN_DAYS` (default `14`)
+- `AUTH_REFRESH_COOKIE_NAME` (default `researchops_refresh`)
+- `AUTH_REFRESH_COOKIE_SECURE` (default `false` in local, `true` elsewhere)
+- `AUTH_REFRESH_COOKIE_SAMESITE` (default `lax`)
+- `AUTH_REFRESH_TOKEN_SECRET` (optional; defaults to `AUTH_JWT_SECRET`)
+- `AUTH_ALLOW_REGISTER` (default `true`)
+- `AUTH_CLOCK_SKEW_SECONDS` (default `60`)
+- `AUTH_MFA_CHALLENGE_MINUTES` (default `5`)
+- `AUTH_MFA_TOTP_ISSUER` (default `ResearchOps Studio`)
+- `AUTH_MFA_TOTP_PERIOD_SECONDS` (default `30`)
+- `AUTH_MFA_TOTP_DIGITS` (default `6`)
+- `AUTH_MFA_TOTP_WINDOW` (default `1`)
+- `AUTH_GOOGLE_CLIENT_ID` (required for Google login)
+- `AUTH_GOOGLE_ISSUER` (default `https://accounts.google.com`)
+- `AUTH_GOOGLE_ALLOW_LINK_EXISTING` (default `true`)
+- `AUTH_GOOGLE_JWKS_CACHE_SECONDS` (default `300`)
 
 ### Local Development Notes
 

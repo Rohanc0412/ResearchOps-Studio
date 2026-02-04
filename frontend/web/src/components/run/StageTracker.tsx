@@ -13,7 +13,7 @@ export function StageTracker({ currentStage }: { currentStage?: Stage | null }) 
           <div
             key={stage}
             className={cx(
-              "rounded-md border border-slate-800 bg-slate-950/50 px-2 py-2 text-center text-xs text-slate-300",
+              "rounded-md border border-slate-800 bg-slate-900 px-2 py-2 text-center text-xs text-slate-300",
               isCurrent && "border-sky-500/40 bg-sky-500/10 text-sky-100"
             )}
           >

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=_resolve_env_file() or ".env",
         env_file_encoding="utf-8",
-        extra="forbid",
+        extra="ignore",
     )
 
     environment: str = Field(default="local")

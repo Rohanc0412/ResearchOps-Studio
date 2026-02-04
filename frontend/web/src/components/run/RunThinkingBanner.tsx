@@ -29,7 +29,7 @@ export function RunThinkingBanner({
     <div
       className={cx(
         "flex items-start justify-between gap-4 rounded-xl border px-4 py-3",
-        isFailed ? "border-rose-900/60 bg-rose-950/20" : "border-slate-900 bg-slate-950/60"
+        isFailed ? "border-rose-900/60 bg-rose-950/20" : "border-slate-800 bg-slate-900"
       )}
     >
       <div className="min-w-0 flex-1">

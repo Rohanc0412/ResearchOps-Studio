@@ -50,7 +50,7 @@ export function EventsFeed({
                 {e.message}
               </div>
               {e.payload ? (
-                <pre className="mt-2 overflow-auto rounded-md border border-slate-900 bg-black/30 p-2 text-xs text-slate-300">
+                <pre className="mt-2 overflow-auto rounded-md border border-slate-900 bg-slate-950 p-2 text-xs text-slate-300">
                   {JSON.stringify(e.payload, null, 2)}
                 </pre>
               ) : null}
@@ -68,4 +68,6 @@ function toneFromLevel(level: RunEvent["level"]): "info" | "warning" | "danger" 
   if (level === "error") return "danger";
   return "info";
 }
+
+
 

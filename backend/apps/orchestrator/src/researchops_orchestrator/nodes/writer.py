@@ -134,6 +134,10 @@ def _extract_citations(text: str) -> list[str]:
     return _CITATION_PATTERN.findall(text)
 
 
+def _word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", text))
+
+
 def _split_into_sentences(text: str) -> list[str]:
     cleaned = text.strip()
     if not cleaned:
@@ -157,17 +161,46 @@ def _citations_at_sentence_end(sentence: str) -> bool:
     return len(all_cites) == len(tail_cites)
 
 
-def _validate_section_text(section_text: str, allowed_snippet_ids: set[str]) -> None:
-    citations = _extract_citations(section_text)
-    invalid = sorted({cid for cid in citations if cid not in allowed_snippet_ids})
-    if invalid:
-        raise ValueError(f"Section cites snippets not in evidence pack: {invalid}")
+def _resolve_citation_ids(section_text: str, allowed_snippet_ids: set[str]) -> tuple[str, list[str]]:
+    if not section_text:
+        return section_text, []
 
-    for sentence in _split_into_sentences(section_text):
+    allowed_lower = {cid.lower(): cid for cid in allowed_snippet_ids}
+
+    def resolve_id(cited: str) -> str | None:
+        if cited in allowed_lower:
+            return allowed_lower[cited]
+        matches = [full for lower, full in allowed_lower.items() if lower.startswith(cited)]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    invalid: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        raw = match.group(1).lower()
+        resolved = resolve_id(raw)
+        if resolved is None:
+            invalid.append(match.group(1))
+            return match.group(0)
+        return f"[CITE:{resolved}]"
+
+    updated = _CITATION_PATTERN.sub(replace, section_text)
+    return updated, invalid
+
+
+def _validate_section_text(section_text: str, allowed_snippet_ids: set[str]) -> str:
+    updated_text, invalid = _resolve_citation_ids(section_text, allowed_snippet_ids)
+    if invalid:
+        invalid_sorted = sorted(set(invalid))
+        raise ValueError(f"Section cites snippets not in evidence pack: {invalid_sorted}")
+
+    for sentence in _split_into_sentences(updated_text):
         if "[CITE:" not in sentence:
             continue
         if not _citations_at_sentence_end(sentence):
             raise ValueError("Citations must appear only at the end of each cited sentence.")
+    return updated_text
 
 
 def _build_snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
@@ -182,14 +215,13 @@ def _build_snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
     return payload
 
 
-def _word_count(text: str) -> int:
-    return len(re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", text))
-
-
 def _validate_section_length(section_text: str) -> None:
+    min_words = _env_int("DRAFT_SECTION_MIN_WORDS", 50, min_value=0)
+    if min_words <= 0:
+        return
     count = _word_count(section_text)
-    if count < 50 or count > 600:
-        raise ValueError(f"Section length must be 50-600 words, got {count}.")
+    if count < min_words:
+        raise ValueError(f"Section length must be at least {min_words} words, got {count}.")
 
 
 def _generate_section_with_llm(
@@ -225,12 +257,15 @@ def _generate_section_with_llm(
         f"{prior_summary or 'NONE'}\n\n"
         "Rules:\n"
         "- Use ONLY the snippets provided for factual content.\n"
-        "- Section length MUST be between 150 and 600 words (strictly more than 150).\n"
-        "- Every factual sentence must end with citation token(s).\n"
+        f"- Section length MUST be at least {_env_int('DRAFT_SECTION_MIN_WORDS', 50, min_value=0)} words.\n"
+        "- Every sentence that contains any factual claim MUST end with citation token(s).\n"
+        "- If a sentence cannot be supported by the provided snippets, rewrite it as a non-factual transition.\n"
         "- Citation format: [CITE:snippet_id]\n"
         "- Multiple citations must be separate tokens: [CITE:id1] [CITE:id2]\n"
+        "- Use the exact snippet_id values from the evidence list; do NOT shorten or truncate them.\n"
+        "- Citations must appear at the very end of the sentence, after the final punctuation.\n"
         "- No citations spanning multiple sentences.\n"
-        "- Narrative transitions may be uncited.\n"
+        "- Narrative transitions may be uncited, but must contain no facts, names, dates, numbers, or definitions.\n"
         "- Do NOT include headings, bullet lists, or markdown in section_text.\n"
         "- Do NOT include any commentary outside JSON.\n\n"
         "Flow requirements:\n"
@@ -395,7 +430,7 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
             prior_summary=prior_summary,
         )
         allowed_ids = {str(snippet.snippet_id) for snippet in section_snippets}
-        _validate_section_text(section_text, allowed_ids)
+        section_text = _validate_section_text(section_text, allowed_ids)
         _validate_section_length(section_text)
         _persist_draft_section(
             session,
