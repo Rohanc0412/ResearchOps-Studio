@@ -1,8 +1,8 @@
 __all__ = [
     "ArtifactRow",
     "AuditLogRow",
-    "AuthExternalIdentityRow",
     "AuthMfaFactorRow",
+    "AuthPasswordResetRow",
     "AuthRefreshTokenRow",
     "AuthUserRow",
     "Base",
@@ -29,8 +29,8 @@ __all__ = [
 
 from db.models.artifacts import ArtifactRow
 from db.models.audit_logs import AuditLogRow
-from db.models.auth_external_identities import AuthExternalIdentityRow
 from db.models.auth_mfa_factors import AuthMfaFactorRow
+from db.models.auth_password_resets import AuthPasswordResetRow
 from db.models.auth_refresh_tokens import AuthRefreshTokenRow
 from db.models.auth_users import AuthUserRow
 from db.models.base import Base

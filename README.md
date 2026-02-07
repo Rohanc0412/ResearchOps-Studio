@@ -22,7 +22,7 @@ npm run dev
 ```
 
 Notes:
-- Frontend uses `frontend/web/.env` for `VITE_API_BASE_URL` and `VITE_GOOGLE_CLIENT_ID`.
+- Frontend uses `frontend/web/.env` for `VITE_API_BASE_URL`.
 - Backend tuning overrides live in `backend/.env`.
 - The API must allow the web origin (e.g. `http://localhost:5173`) via CORS for browser requests.
 
@@ -51,6 +51,17 @@ From repo root:
 ```powershell
 docker compose -f backend/infra/compose.yaml up --build
 ```
+
+Gmail SMTP (for local dev OTP emails):
+- Enable 2FA on the Google account, then generate an **App Password**.
+- In the repo-root `.env` (used by Docker Compose for interpolation), set:
+  - `SMTP_HOST=smtp.gmail.com`
+  - `SMTP_PORT=587`
+  - `SMTP_STARTTLS=true`
+  - `SMTP_USER=your.email@gmail.com`
+  - `SMTP_PASSWORD=your_google_app_password`
+  - `SMTP_FROM_EMAIL=your.email@gmail.com`
+  - `SMTP_FROM_NAME=ResearchOps Studio`
 
 Stop and wipe local DB volume:
 
@@ -152,9 +163,8 @@ Flow:
 2) API returns an **access token** (JWT) and sets a httpOnly refresh cookie.
 3) Frontend calls the API with `Authorization: Bearer <access_token>`.
 
-### Google Sign-In + MFA
+### MFA
 
-- `POST /auth/google` exchanges a Google ID token for ResearchOps access/refresh tokens.
 - If MFA is enabled for the user, login returns `{ mfa_required: true, mfa_token: "..." }`.
 - Complete MFA with `POST /auth/mfa/verify` and the TOTP code.
 - Manage MFA: `GET /auth/mfa/status`, `POST /auth/mfa/enroll/start`, `POST /auth/mfa/enroll/verify`, `POST /auth/mfa/disable`.
@@ -192,10 +202,6 @@ Fail-closed rules (default behavior):
 - `AUTH_MFA_TOTP_PERIOD_SECONDS` (default `30`)
 - `AUTH_MFA_TOTP_DIGITS` (default `6`)
 - `AUTH_MFA_TOTP_WINDOW` (default `1`)
-- `AUTH_GOOGLE_CLIENT_ID` (required for Google login)
-- `AUTH_GOOGLE_ISSUER` (default `https://accounts.google.com`)
-- `AUTH_GOOGLE_ALLOW_LINK_EXISTING` (default `true`)
-- `AUTH_GOOGLE_JWKS_CACHE_SECONDS` (default `300`)
 
 ### Local Development Notes
 
@@ -205,6 +211,15 @@ You can still simulate identities via headers:
 - `X-Dev-User-Id: dev-user`
 - `X-Dev-Tenant-Id: 00000000-0000-0000-0000-000000000001`
 - `X-Dev-Roles: owner,admin,researcher,viewer`
+
+### Password Reset OTP (Email)
+
+- `POST /auth/password/reset/request` generates a 6-digit OTP for the given email.
+- In `environment=local` the API returns the OTP as `reset_token` (for convenience). If SMTP is configured, it will also email the OTP.
+- SMTP environment variables:
+  - `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM_EMAIL`
+  - optional: `SMTP_USER`, `SMTP_PASSWORD` (if your SMTP server requires auth)
+  - optional: `SMTP_STARTTLS` (default `true`)
 
 ### RBAC Roles
 

@@ -17,9 +17,10 @@ export type AuthState = {
   user: AuthUser | null;
   accessToken: string | null;
   login: (username: string, password: string) => Promise<LoginResult>;
-  loginWithGoogle: (idToken: string) => Promise<LoginResult>;
   verifyMfa: (mfaToken: string, code: string) => Promise<void>;
-  register: (username: string, password: string, tenantId?: string) => Promise<void>;
+  register: (username: string, email: string, password: string, tenantId?: string) => Promise<void>;
+  requestPasswordReset: (username: string) => Promise<{ resetToken?: string }>;
+  confirmPasswordReset: (token: string, password: string) => Promise<void>;
   logout: (opts?: { redirect?: boolean }) => Promise<void>;
   clearSession: () => Promise<void>;
   refreshSession: () => Promise<void>;
@@ -159,33 +160,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { mfaRequired: false };
   }
 
-  async function loginWithGoogle(idToken: string): Promise<LoginResult> {
-    const response = await authFetch("/auth/google", {
-      method: "POST",
-      body: JSON.stringify({ id_token: idToken })
-    });
-    const payload = await parseJson(response);
-    if (!response.ok) {
-      const message =
-        typeof payload.detail === "string"
-          ? payload.detail
-          : "Google login failed. Try again.";
-      throw new Error(message);
-    }
-    const mfaRequired = payload.mfa_required === true;
-    if (mfaRequired) {
-      const token = typeof payload.mfa_token === "string" ? payload.mfa_token : "";
-      if (!token) throw new Error("Missing MFA token");
-      const mfaUser = typeof payload.username === "string" ? payload.username : undefined;
-      return { mfaRequired: true, mfaToken: token, username: mfaUser };
-    }
-    const token = typeof payload.access_token === "string" ? payload.access_token : "";
-    if (!token) throw new Error("Missing access token");
-    setAccessToken(token);
-    setUser(mapAuthUser(payload));
-    return { mfaRequired: false };
-  }
-
   async function verifyMfa(mfaToken: string, code: string): Promise<void> {
     const response = await authFetch("/auth/mfa/verify", {
       method: "POST",
@@ -203,11 +177,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(mapAuthUser(payload));
   }
 
-  async function register(username: string, password: string, tenantId?: string) {
+  async function register(username: string, email: string, password: string, tenantId?: string) {
     const response = await authFetch("/auth/register", {
       method: "POST",
       body: JSON.stringify({
         username,
+        email,
         password,
         ...(tenantId ? { tenant_id: tenantId } : {})
       })
@@ -222,6 +197,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!token) throw new Error("Missing access token");
     setAccessToken(token);
     setUser(mapAuthUser(payload));
+  }
+
+  async function requestPasswordReset(username: string): Promise<{ resetToken?: string }> {
+    const response = await authFetch("/auth/password/reset/request", {
+      method: "POST",
+      body: JSON.stringify({ email: username })
+    });
+    const payload = await parseJson(response);
+    if (!response.ok) {
+      const message =
+        typeof payload.detail === "string" ? payload.detail : "Password reset request failed.";
+      throw new Error(message);
+    }
+    const resetToken = typeof payload.reset_token === "string" ? payload.reset_token : undefined;
+    return { resetToken };
+  }
+
+  async function confirmPasswordReset(token: string, password: string): Promise<void> {
+    const response = await authFetch("/auth/password/reset/confirm", {
+      method: "POST",
+      body: JSON.stringify({ token, password })
+    });
+    const payload = await parseJson(response);
+    if (!response.ok) {
+      const message =
+        typeof payload.detail === "string" ? payload.detail : "Password reset failed.";
+      throw new Error(message);
+    }
   }
 
   async function refreshSession() {
@@ -255,9 +258,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       accessToken,
       login,
-      loginWithGoogle,
       verifyMfa,
       register,
+      requestPasswordReset,
+      confirmPasswordReset,
       logout,
       clearSession,
       refreshSession

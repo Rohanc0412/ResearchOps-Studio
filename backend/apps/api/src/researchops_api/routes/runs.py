@@ -27,7 +27,7 @@ from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
 from db.models.runs import RunStatusDb
 from db.services.truth import (
-    get_run,
+    get_run_for_user,
     list_artifacts,
     list_run_events,
 )
@@ -131,7 +131,12 @@ def _event_to_sse(event) -> str:
 def get_run_by_id(request: Request, run_id: UUID, identity: Identity = IdentityDep) -> WebRunOut:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        run = get_run(session=session, tenant_id=_tenant_uuid(identity), run_id=run_id)
+        run = get_run_for_user(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            run_id=run_id,
+            created_by=identity.user_id,
+        )
         if run is None:
             raise HTTPException(status_code=404, detail="run not found")
         payload = _run_to_web(run)
@@ -185,6 +190,16 @@ def get_run_events(
 
             while True:
                 with session_scope(SessionLocal) as session:
+                    run = get_run_for_user(
+                        session=session,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        created_by=identity.user_id,
+                    )
+                    if run is None:
+                        yield ": run not found\n\n"
+                        break
+
                     # Get new events
                     events = list_run_events(
                         session=session,
@@ -199,8 +214,6 @@ def get_run_events(
                         yield _event_to_sse(event)
                         last_event_number = event.event_number
 
-                    # Check if run is terminal
-                    run = get_run(session=session, tenant_id=tenant_id, run_id=run_id)
                     if run and run.status in terminal_states:
                         if len(events) == 0:
                             polls_since_terminal += 1
@@ -229,6 +242,14 @@ def get_run_events(
 
     # JSON mode: return all events (or events after after_id)
     with session_scope(SessionLocal) as session:
+        run = get_run_for_user(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            created_by=identity.user_id,
+        )
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
         rows = list_run_events(
             session=session,
             tenant_id=tenant_id,
@@ -257,10 +278,20 @@ def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep)
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
+        tenant_id = _tenant_uuid(identity)
+        run = get_run_for_user(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            created_by=identity.user_id,
+        )
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+
         try:
             run = request_cancel(
                 session=session,
-                tenant_id=_tenant_uuid(identity),
+                tenant_id=tenant_id,
                 run_id=run_id,
                 force_immediate=False,
             )
@@ -301,10 +332,20 @@ def retry_run_endpoint(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
+        tenant_id = _tenant_uuid(identity)
+        existing = get_run_for_user(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            created_by=identity.user_id,
+        )
+        if existing is None:
+            raise HTTPException(status_code=404, detail="run not found")
+
         try:
             run = retry_run(
                 session=session,
-                tenant_id=_tenant_uuid(identity),
+                tenant_id=tenant_id,
                 run_id=run_id,
             )
             job_type = None
@@ -314,7 +355,7 @@ def retry_run_endpoint(
                 job_type = RESEARCH_JOB_TYPE
             enqueue_run_job(
                 session=session,
-                tenant_id=_tenant_uuid(identity),
+                tenant_id=tenant_id,
                 run_id=run.id,
                 job_type=job_type,
             )
@@ -340,7 +381,17 @@ def get_artifacts_for_run(
 ) -> list[ArtifactOut]:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        rows = list_artifacts(session=session, tenant_id=_tenant_uuid(identity), run_id=run_id)
+        tenant_id = _tenant_uuid(identity)
+        run = get_run_for_user(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            created_by=identity.user_id,
+        )
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+
+        rows = list_artifacts(session=session, tenant_id=tenant_id, run_id=run_id)
         return [
             ArtifactOut(
                 id=a.id,

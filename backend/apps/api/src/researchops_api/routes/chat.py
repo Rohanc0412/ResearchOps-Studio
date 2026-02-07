@@ -26,13 +26,13 @@ from db.models.runs import RunStatusDb
 from db.services.chat import (
     create_conversation,
     create_message,
-    get_conversation,
+    get_conversation_for_user,
     get_message_by_client_id,
     get_message_by_id,
-    list_conversations,
+    list_conversations_for_user,
     list_messages,
 )
-from db.services.truth import create_run, get_project
+from db.services.truth import create_run, get_project_for_user
 from db.session import session_scope
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -351,7 +351,12 @@ def post_conversation(
     with session_scope(SessionLocal) as session:
         if body.project_id is not None:
             if (
-                get_project(session=session, tenant_id=tenant_id, project_id=body.project_id)
+                get_project_for_user(
+                    session=session,
+                    tenant_id=tenant_id,
+                    project_id=body.project_id,
+                    created_by=identity.user_id,
+                )
                 is None
             ):
                 raise HTTPException(status_code=404, detail="project not found")
@@ -393,9 +398,20 @@ def get_conversations(
     decoded = _decode_cursor(cursor)
 
     with session_scope(SessionLocal) as session:
-        rows = list_conversations(
+        if project_id is not None:
+            project = get_project_for_user(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                created_by=identity.user_id,
+            )
+            if project is None:
+                raise HTTPException(status_code=404, detail="project not found")
+
+        rows = list_conversations_for_user(
             session=session,
             tenant_id=tenant_id,
+            created_by_user_id=identity.user_id,
             project_id=project_id,
             limit=limit + 1,
             cursor=decoded,
@@ -445,8 +461,11 @@ def get_conversation_messages(
     decoded = _decode_cursor(cursor)
 
     with session_scope(SessionLocal) as session:
-        convo = get_conversation(
-            session=session, tenant_id=tenant_id, conversation_id=conversation_id
+        convo = get_conversation_for_user(
+            session=session,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            created_by_user_id=identity.user_id,
         )
         if convo is None:
             raise HTTPException(status_code=404, detail="conversation not found")
@@ -512,13 +531,25 @@ def post_send_chat(
     )
 
     with session_scope(SessionLocal) as session:
-        convo = get_conversation(
-            session=session, tenant_id=tenant_id, conversation_id=body.conversation_id, for_update=True
+        convo = get_conversation_for_user(
+            session=session,
+            tenant_id=tenant_id,
+            conversation_id=body.conversation_id,
+            created_by_user_id=identity.user_id,
+            for_update=True,
         )
         if convo is None:
             raise HTTPException(status_code=404, detail="conversation not found")
 
         if body.project_id is not None:
+            project = get_project_for_user(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=body.project_id,
+                created_by=identity.user_id,
+            )
+            if project is None:
+                raise HTTPException(status_code=404, detail="project not found")
             if convo.project_id is None:
                 convo.project_id = body.project_id
             elif convo.project_id != body.project_id:

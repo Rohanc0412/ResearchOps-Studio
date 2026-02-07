@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -52,8 +52,31 @@ def list_projects(*, session: Session, tenant_id: UUID, limit: int = 200) -> lis
     return list(session.execute(stmt).scalars().all())
 
 
+def list_projects_for_user(
+    *, session: Session, tenant_id: UUID, created_by: str, limit: int = 200
+) -> list[ProjectRow]:
+    stmt = (
+        select(ProjectRow)
+        .where(ProjectRow.tenant_id == tenant_id, ProjectRow.created_by == created_by)
+        .order_by(func.coalesce(ProjectRow.last_activity_at, ProjectRow.created_at).desc())
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars().all())
+
+
 def get_project(*, session: Session, tenant_id: UUID, project_id: UUID) -> ProjectRow | None:
     stmt = select(ProjectRow).where(ProjectRow.tenant_id == tenant_id, ProjectRow.id == project_id)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def get_project_for_user(
+    *, session: Session, tenant_id: UUID, project_id: UUID, created_by: str
+) -> ProjectRow | None:
+    stmt = select(ProjectRow).where(
+        ProjectRow.tenant_id == tenant_id,
+        ProjectRow.id == project_id,
+        ProjectRow.created_by == created_by,
+    )
     return session.execute(stmt).scalar_one_or_none()
 
 
@@ -100,6 +123,27 @@ def get_run(*, session: Session, tenant_id: UUID, run_id: UUID) -> RunRow | None
     stmt = select(RunRow).where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
     run = session.execute(stmt).scalar_one_or_none()
     return run
+
+
+def get_run_for_user(
+    *, session: Session, tenant_id: UUID, run_id: UUID, created_by: str
+) -> RunRow | None:
+    stmt = (
+        select(RunRow)
+        .join(
+            ProjectRow,
+            and_(
+                ProjectRow.tenant_id == RunRow.tenant_id,
+                ProjectRow.id == RunRow.project_id,
+            ),
+        )
+        .where(
+            RunRow.tenant_id == tenant_id,
+            RunRow.id == run_id,
+            ProjectRow.created_by == created_by,
+        )
+    )
+    return session.execute(stmt).scalar_one_or_none()
 
 
 def get_run_by_client_request_id(
