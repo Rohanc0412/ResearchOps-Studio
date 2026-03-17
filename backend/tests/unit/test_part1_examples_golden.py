@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from src.contracts.artifacts import ExperimentPlan, LiteratureMap, StructuredReport
-from src.contracts.errors import ClaimPolicyViolationError
-from src.enforcement.claim_enforcer import ClaimEnforcer, load_system_policy
-from src.enforcement.evidence_validator import EvidenceValidator
+from contracts.artifacts import ExperimentPlan, LiteratureMap, StructuredReport
+from contracts.errors import ClaimPolicyViolationError
+from enforcement.claim_enforcer import ClaimEnforcer, load_system_policy
+from enforcement.evidence_validator import EvidenceValidator
 
 
 def _load_json(path: Path) -> dict:

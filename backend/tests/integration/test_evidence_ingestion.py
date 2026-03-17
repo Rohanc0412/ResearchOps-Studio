@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from db.init_db import init_db
 from db.models import SnapshotRow, SnippetEmbeddingRow, SnippetRow, SourceRow
-from researchops_ingestion import StubEmbeddingProvider, ingest_source
+from ingestion import StubEmbeddingProvider, ingest_source
 
 
 @pytest.fixture

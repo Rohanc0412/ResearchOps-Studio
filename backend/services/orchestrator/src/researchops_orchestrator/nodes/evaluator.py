@@ -18,14 +18,14 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snippets import SnippetRow
 from db.models.snapshots import SnapshotRow
-from researchops_core.observability import emit_run_event, instrument_node
-from researchops_core.orchestrator.state import (
+from core.observability import emit_run_event, instrument_node
+from core.orchestrator.state import (
     EvidenceSnippetRef,
     EvaluatorDecision,
     OrchestratorState,
     OutlineSection,
 )
-from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
+from llm import LLMError, get_llm_client_for_stage, json_response_format
 
 logger = logging.getLogger(__name__)
 

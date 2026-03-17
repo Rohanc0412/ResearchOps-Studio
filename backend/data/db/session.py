@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from researchops_core.settings import Settings
+from core.settings import Settings
 
 
 def create_db_engine(settings: Settings) -> Engine:

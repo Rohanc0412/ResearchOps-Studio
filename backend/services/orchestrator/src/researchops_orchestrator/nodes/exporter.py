@@ -17,8 +17,8 @@ from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.project_runs import get_run_usage_metrics, replace_run_usage_metrics
-from researchops_core.observability import emit_run_event, instrument_node
-from researchops_core.orchestrator.state import OrchestratorState
+from core.observability import emit_run_event, instrument_node
+from core.orchestrator.state import OrchestratorState
 
 
 _CITATION_PATTERN = re.compile(r"\[CITE:([a-f0-9-]+)\]")

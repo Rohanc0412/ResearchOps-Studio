@@ -5,8 +5,8 @@ import logging
 from dotenv import find_dotenv, load_dotenv
 
 from researchops_api import create_app
-from researchops_core import SERVICE_API, get_settings
-from researchops_observability import setup_logging
+from core import SERVICE_API, get_settings
+from observability import setup_logging
 
 
 def main() -> None:

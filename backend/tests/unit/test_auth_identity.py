@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from researchops_core.auth.identity import extract_identity
+from core.auth.identity import extract_identity
 
 
 def test_reject_missing_tenant_id() -> None:

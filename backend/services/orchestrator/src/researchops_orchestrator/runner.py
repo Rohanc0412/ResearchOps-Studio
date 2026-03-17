@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.artifacts import create_artifact, list_artifacts
-from researchops_core.orchestrator.state import OrchestratorState
-from researchops_core.runs.lifecycle import transition_run_status
+from core.orchestrator.state import OrchestratorState
+from core.runs.lifecycle import transition_run_status
 from researchops_orchestrator.checkpoints import PostgresCheckpointSaver
 from researchops_orchestrator.graph import create_orchestrator_graph
 

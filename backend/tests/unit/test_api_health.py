@@ -5,8 +5,8 @@ import os
 from fastapi.testclient import TestClient
 
 from researchops_api import create_app
-from researchops_core.auth.config import get_auth_config
-from researchops_core.settings import get_settings
+from core.auth.config import get_auth_config
+from core.settings import get_settings
 
 
 def test_healthz_ok() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from researchops_ingestion.sanitize import sanitize_text
+from ingestion.sanitize import sanitize_text
 
 
 class TestSanitizeText:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from researchops_ingestion.chunking import chunk_text, rechunk_with_size
+from ingestion.chunking import chunk_text, rechunk_with_size
 
 
 class TestChunkText:

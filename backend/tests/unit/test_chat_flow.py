@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from researchops_api import create_app
-from researchops_core.auth.config import get_auth_config
-from researchops_core.settings import get_settings
+from core.auth.config import get_auth_config
+from core.settings import get_settings
 from db.models.chat_conversations import ChatConversationRow
 from db.models.chat_messages import ChatMessageRow
 from db.models.runs import RunRow

@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 
-from researchops_core.auth.exceptions import AuthExpiredError, AuthInvalidTokenError, AuthIssuerError
-from researchops_core.auth.tokens import issue_access_token, verify_access_token
+from core.auth.exceptions import AuthExpiredError, AuthInvalidTokenError, AuthIssuerError
+from core.auth.tokens import issue_access_token, verify_access_token
 
 
 def test_access_token_round_trip() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import smtplib
 from email.message import EmailMessage
 
-from researchops_core.auth.config import get_auth_config
+from core.auth.config import get_auth_config
 
 
 def send_password_reset_otp(*, to_email: str, otp: str) -> None:

@@ -13,9 +13,9 @@ from db.models import JobRow, RunRow
 from db.models.jobs import JobStatusDb
 from db.models.runs import RunStatusDb
 from db.session import create_db_engine, create_sessionmaker, session_scope
-from researchops_core import get_settings
-from researchops_core.constants import SERVICE_WORKER
-from researchops_observability import setup_logging
+from core import get_settings
+from core.constants import SERVICE_WORKER
+from observability import setup_logging
 from researchops_orchestrator import RESEARCH_JOB_TYPE, process_research_run
 
 

@@ -7,8 +7,8 @@ from fastapi import APIRouter, HTTPException, Request
 from researchops_api.middlewares.auth import IdentityDep
 from researchops_api.schemas.truth import SourceOut
 from researchops_api.services.evidence import get_snippet_payload, get_source_out
-from researchops_core.auth.identity import Identity
-from researchops_core.tenancy import tenant_uuid
+from core.auth.identity import Identity
+from core.tenancy import tenant_uuid
 from db.session import session_scope
 
 router = APIRouter(tags=["evidence"])

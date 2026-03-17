@@ -9,8 +9,8 @@ from fastapi.responses import Response
 from db.session import session_scope
 from researchops_api.middlewares.auth import IdentityDep
 from researchops_api.services.evidence import download_user_artifact
-from researchops_core.auth.identity import Identity
-from researchops_core.tenancy import tenant_uuid
+from core.auth.identity import Identity
+from core.tenancy import tenant_uuid
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 

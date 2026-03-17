@@ -3,17 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request
-from researchops_core.auth.config import get_auth_config
-from researchops_core.auth.exceptions import (
+from core.auth.config import get_auth_config
+from core.auth.exceptions import (
     AuthExpiredError,
     AuthInvalidTokenError,
     AuthIssuerError,
     AuthMissingError,
 )
-from researchops_core.auth.identity import Identity, extract_identity
-from researchops_core.auth.tokens import verify_access_token
-from researchops_observability.context import bind
-from researchops_core.settings import get_settings
+from core.auth.identity import Identity, extract_identity
+from core.auth.tokens import verify_access_token
+from observability.context import bind
+from core.settings import get_settings
 
 
 

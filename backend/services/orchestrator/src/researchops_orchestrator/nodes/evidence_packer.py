@@ -17,9 +17,9 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
 from db.models.snippets import SnippetRow
 from db.models.snapshots import SnapshotRow
-from researchops_core.observability import emit_run_event, instrument_node
-from researchops_core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
-from researchops_retrieval.search import search_snippets
+from core.observability import emit_run_event, instrument_node
+from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
+from retrieval.search import search_snippets
 from researchops_orchestrator.embeddings import (
     get_hf_client,
     get_ollama_client,

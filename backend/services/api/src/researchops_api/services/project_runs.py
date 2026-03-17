@@ -9,10 +9,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from researchops_api.schemas.truth import ArtifactOut, ProjectOut
-from researchops_core.audit.logger import write_audit_log
-from researchops_core.auth.identity import Identity
-from researchops_core.runs import RunNotFoundError, RunTransitionError, request_cancel, retry_run
-from researchops_core.runs.lifecycle import emit_run_event
+from core.audit.logger import write_audit_log
+from core.auth.identity import Identity
+from core.runs import RunNotFoundError, RunTransitionError, request_cancel, retry_run
+from core.runs.lifecycle import emit_run_event
 from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
 from db.models.run_events import RunEventLevelDb

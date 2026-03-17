@@ -16,13 +16,13 @@ from sqlalchemy.orm import Session
 
 from db.models.outline_notes import OutlineNoteRow
 from db.models.run_sections import RunSectionRow
-from researchops_core.observability import emit_run_event, instrument_node
-from researchops_core.orchestrator.state import (
+from core.observability import emit_run_event, instrument_node
+from core.orchestrator.state import (
     OrchestratorState,
     OutlineModel,
     OutlineSection,
 )
-from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
+from llm import LLMError, get_llm_client_for_stage, json_response_format
 
 logger = logging.getLogger(__name__)
 

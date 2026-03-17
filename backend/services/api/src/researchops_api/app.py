@@ -7,8 +7,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
-from researchops_core import SERVICE_API, get_settings
-from researchops_observability import request_id_middleware
+from core import SERVICE_API, get_settings
+from observability import request_id_middleware
 
 from db.init_db import init_db
 from db.session import create_db_engine, create_sessionmaker

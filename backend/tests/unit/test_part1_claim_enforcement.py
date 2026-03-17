@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from src.contracts.artifacts import StructuredReport
-from src.contracts.errors import ClaimPolicyViolationError
-from src.enforcement.claim_enforcer import ClaimEnforcer, load_system_policy
+from contracts.artifacts import StructuredReport
+from contracts.errors import ClaimPolicyViolationError
+from enforcement.claim_enforcer import ClaimEnforcer, load_system_policy
 
 
 def test_report_non_trivial_claim_missing_citations_fails_closed(repo_root: Path) -> None:

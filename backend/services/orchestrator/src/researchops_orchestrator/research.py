@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from db.models.runs import RunRow
 from db.repositories.project_runs import get_run_usage_metrics
-from researchops_observability.context import bind
+from observability.context import bind
 from researchops_orchestrator.runner import run_orchestrator
 
 

@@ -11,7 +11,7 @@ from db.models import SnapshotRow, SnippetRow, SourceRow
 from db.repositories.artifacts import get_artifact_for_user
 from db.repositories.corpus import get_source, source_to_api_payload
 from researchops_api.schemas.truth import SourceOut
-from researchops_retrieval import get_snippet_with_context
+from retrieval import get_snippet_with_context
 
 
 def download_user_artifact(

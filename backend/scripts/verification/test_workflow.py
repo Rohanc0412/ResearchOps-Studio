@@ -9,15 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def _add_path(rel: str) -> None:
     sys.path.insert(0, str(ROOT / rel))
 
-_add_path("packages/ingestion/src")
-_add_path("packages/retrieval/src")
-_add_path("packages/core/src")
-_add_path("packages/observability/src")
-_add_path("packages/citations/src")
-_add_path("packages/connectors/src")
-_add_path("db")
-_add_path("apps/api/src")
-_add_path("apps/orchestrator/src")
+_add_path("libs")
+_add_path("libs/research_rules")
+_add_path("data")
+_add_path("services/api/src")
+_add_path("services/orchestrator/src")
 
 
 def _out(message: str = "") -> None:
@@ -50,7 +46,7 @@ _out()
 # Test 2: Ingestion pipeline
 _out('[2/8] Verifying ingestion pipeline...')
 try:
-    from researchops_ingestion import (
+    from ingestion import (
         sanitize_text, chunk_text, StubEmbeddingProvider,
         ingest_source, IngestionResult
     )
@@ -81,7 +77,7 @@ _out()
 # Test 3: Retrieval module
 _out('[3/8] Verifying retrieval module...')
 try:
-    from researchops_retrieval import search_snippets, get_snippet_with_context
+    from retrieval import search_snippets, get_snippet_with_context
     _out('   [PASS] Search functions import successfully')
     _out('   [PASS] search_snippets available')
     _out('   [PASS] get_snippet_with_context available')
@@ -94,7 +90,7 @@ _out()
 # Test 4: Run lifecycle (Part 5)
 _out('[4/8] Verifying run lifecycle module...')
 try:
-    from researchops_core.runs.lifecycle import (
+    from core.runs.lifecycle import (
         transition_run_status, emit_stage_start, emit_stage_finish,
         check_cancel_requested, request_cancel, retry_run
     )

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Retriever node - generates diverse queries and retrieves sources.
 
 Uses OpenAlex + arXiv to collect candidate sources, deduplicate, rank,
@@ -31,12 +31,12 @@ from db.repositories.corpus import (
     get_source_identifier,
     list_source_author_names,
 )
-from researchops_connectors import ArXivConnector, OpenAlexConnector
-from researchops_connectors.base import RetrievedSource
-from researchops_connectors.dedup import deduplicate_sources
-from researchops_core.observability import emit_run_event, instrument_node
-from researchops_core.orchestrator.state import OrchestratorState, SourceRef
-from researchops_llm import LLMError, get_llm_client_for_stage, json_response_format
+from connectors import ArXivConnector, OpenAlexConnector
+from connectors.base import RetrievedSource
+from connectors.dedup import deduplicate_sources
+from core.observability import emit_run_event, instrument_node
+from core.orchestrator.state import OrchestratorState, SourceRef
+from llm import LLMError, get_llm_client_for_stage, json_response_format
 from researchops_orchestrator.embeddings import (
     get_hf_client,
     get_ollama_client,
@@ -222,7 +222,7 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _clean_query_line(line: str) -> str:
-    cleaned = re.sub(r"^\s*[-*•\d\)\.:\s]+", "", line).strip()
+    cleaned = re.sub(r"^\s*[-*�\d\)\.:\s]+", "", line).strip()
     return cleaned.strip().strip('"').strip("'").strip()
 
 

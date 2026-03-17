@@ -20,13 +20,13 @@ from researchops_api.services.project_runs import (
     retry_user_run,
     run_to_web,
 )
-from researchops_core.runs import (
+from core.runs import (
     RunNotFoundError,
     RunTransitionError,
 )
-from researchops_core.auth.identity import Identity
-from researchops_core.auth.rbac import require_roles
-from researchops_core.tenancy import tenant_uuid
+from core.auth.identity import Identity
+from core.auth.rbac import require_roles
+from core.tenancy import tenant_uuid
 
 from db.models.runs import RunStatusDb
 from db.repositories.project_runs import get_run_usage_metrics, list_run_events

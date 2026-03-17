@@ -9,8 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from db.init_db import init_db
-from researchops_ingestion import StubEmbeddingProvider, ingest_source
-from researchops_retrieval import get_snippet_with_context, search_snippets
+from ingestion import StubEmbeddingProvider, ingest_source
+from retrieval import get_snippet_with_context, search_snippets
 
 
 @pytest.fixture

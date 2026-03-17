@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from src.contracts.budgets import BudgetPolicyConfig, PartialResult
-from src.contracts.errors import BudgetExceededError
-from src.enforcement.budget_guard import BudgetGuard
+from contracts.budgets import BudgetPolicyConfig, PartialResult
+from contracts.errors import BudgetExceededError
+from enforcement.budget_guard import BudgetGuard
 
 
 def test_budget_exhaustion_fail_mode_raises() -> None:

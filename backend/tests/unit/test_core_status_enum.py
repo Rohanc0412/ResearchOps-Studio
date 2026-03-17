@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from researchops_core.models import RunStatus
+from core.models import RunStatus
 
 
 def test_run_status_enum_values() -> None:

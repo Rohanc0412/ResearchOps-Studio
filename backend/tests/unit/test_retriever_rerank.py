@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from db.init_db import init_db
-from researchops_connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
+from connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
 from researchops_orchestrator.nodes import retriever as retriever_module
 
 

@@ -12,7 +12,7 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
 
-from researchops_core.orchestrator.state import EvaluatorDecision, OrchestratorState
+from core.orchestrator.state import EvaluatorDecision, OrchestratorState
 from researchops_orchestrator.nodes import (
     evidence_pack_node,
     evaluator_node,

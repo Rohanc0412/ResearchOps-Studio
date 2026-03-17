@@ -14,7 +14,7 @@ from db.init_db import init_db
 from db.models import ProjectRow, RunRow
 from db.models.runs import RunStatusDb
 from db.repositories.project_runs import create_project, create_run, get_run, list_run_events
-from researchops_core.runs import (
+from core.runs import (
     RunNotFoundError,
     RunTransitionError,
     check_cancel_requested,

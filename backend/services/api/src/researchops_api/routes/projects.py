@@ -17,9 +17,9 @@ from researchops_api.services.project_runs import (
     list_user_projects,
     patch_user_project,
 )
-from researchops_core.auth.identity import Identity
-from researchops_core.auth.rbac import require_roles
-from researchops_core.tenancy import tenant_uuid
+from core.auth.identity import Identity
+from core.auth.rbac import require_roles
+from core.tenancy import tenant_uuid
 
 from db.session import session_scope
 

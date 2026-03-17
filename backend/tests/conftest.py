@@ -15,18 +15,14 @@ def _add_path(p: Path) -> None:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Make monorepo src trees importable without editable installs.
-_add_path(REPO_ROOT / "apps" / "api" / "src")
-_add_path(REPO_ROOT / "apps" / "orchestrator" / "src")
-_add_path(REPO_ROOT / "apps" / "workers" / "src")
-_add_path(REPO_ROOT / "packages" / "core" / "src")
-_add_path(REPO_ROOT / "packages" / "observability" / "src")
-_add_path(REPO_ROOT / "packages" / "citations" / "src")  # placeholder for now
-_add_path(REPO_ROOT / "packages" / "llm" / "src")
-_add_path(REPO_ROOT / "packages" / "connectors" / "src")
-_add_path(REPO_ROOT / "packages" / "ingestion" / "src")
-_add_path(REPO_ROOT / "packages" / "retrieval" / "src")
-_add_path(REPO_ROOT)  # db/ package + legacy src/ Part 1
+# Make monorepo trees importable without editable installs.
+_add_path(REPO_ROOT / "services" / "api" / "src")
+_add_path(REPO_ROOT / "services" / "orchestrator" / "src")
+_add_path(REPO_ROOT / "services" / "workers" / "src")
+_add_path(REPO_ROOT / "libs")
+_add_path(REPO_ROOT / "libs" / "research_rules")
+_add_path(REPO_ROOT / "data")
+_add_path(REPO_ROOT)  # backend-local imports
 
 
 @pytest.fixture()
@@ -36,9 +32,9 @@ def repo_root() -> Path:
 
 @pytest.fixture()
 def evidence_store():
-    from src.contracts.evidence import EvidenceSnapshot, EvidenceSnippet
-    from src.enforcement.evidence_validator import EvidenceStore
-    from src.utils.hash import sha256_hex
+    from contracts.evidence import EvidenceSnapshot, EvidenceSnippet
+    from enforcement.evidence_validator import EvidenceStore
+    from utils.hash import sha256_hex
 
     store = EvidenceStore()
     raw_text = "Example evidence text used for fixtures. It is immutable."

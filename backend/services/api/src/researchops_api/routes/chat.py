@@ -12,12 +12,12 @@ from sqlalchemy import select
 
 from researchops_api.middlewares.auth import IdentityDep
 from researchops_api.services.chat_router import classify_chat_intent, parse_consent_reply
-from researchops_core.audit.logger import write_audit_log
-from researchops_core.auth.identity import Identity
-from researchops_core.auth.rbac import require_roles
-from researchops_core.runs.lifecycle import emit_run_event
-from researchops_core.tenancy import tenant_uuid
-from researchops_llm import LLMError, get_llm_client
+from core.audit.logger import write_audit_log
+from core.auth.identity import Identity
+from core.auth.rbac import require_roles
+from core.runs.lifecycle import emit_run_event
+from core.tenancy import tenant_uuid
+from llm import LLMError, get_llm_client
 from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
 from db.models.chat_messages import ChatMessageRow

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.contracts.evidence import EvidenceRef
-from src.contracts.errors import EvidenceValidationError
+from contracts.evidence import EvidenceRef
+from contracts.errors import EvidenceValidationError
 
 
 def test_evidence_ref_snippet_id_missing_in_store_fails_closed(evidence_store) -> None:

@@ -18,7 +18,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from db.init_db import init_db
-from researchops_core.orchestrator.state import (
+from core.orchestrator.state import (
     EvaluatorDecision,
     OrchestratorState,
 )
@@ -165,7 +165,7 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
 def test_evaluator_stops_on_success(db_session, test_run):
     """Test that evaluator stops when no errors."""
     from researchops_orchestrator.nodes import evaluator_node
-    from researchops_core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
+    from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
 
     tenant_id, run_id = test_run
@@ -228,7 +228,7 @@ def test_evaluator_stops_on_success(db_session, test_run):
 def test_evaluator_continues_on_errors(db_session, test_run):
     """Test that evaluator continues when errors found."""
     from researchops_orchestrator.nodes import evaluator_node
-    from researchops_core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
+    from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
 
     tenant_id, run_id = test_run
@@ -302,7 +302,7 @@ def test_evaluator_continues_on_errors(db_session, test_run):
 def test_exporter_generates_three_artifacts(db_session, test_run):
     """Test that exporter produces all three artifacts."""
     from researchops_orchestrator.nodes import exporter_node
-    from researchops_core.orchestrator.state import (
+    from core.orchestrator.state import (
         OutlineModel,
         OutlineSection,
         SourceRef,
@@ -425,7 +425,7 @@ def test_graph_execution_completes(db_session, test_run):
 def test_repair_agent_modifies_draft(db_session, test_run):
     """Test that repair agent makes targeted edits."""
     from researchops_orchestrator.nodes import repair_agent_node
-    from researchops_core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
+    from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
     from db.models.section_reviews import SectionReviewRow
 

@@ -19,7 +19,7 @@ lint:
 \tpython -m ruff check .
 
 run-api:
-\tPYTHONPATH=./services/api/src:./libs/core/src:./libs/observability/src:./libs/research_rules:./data \
+\tPYTHONPATH=./services/api/src:./libs:./libs/research_rules:./data \
 \tLOG_LEVEL=$${LOG_LEVEL:-INFO} LOG_FORMAT=$${LOG_FORMAT:-pretty} \
 \tpython -m researchops_api.main
 

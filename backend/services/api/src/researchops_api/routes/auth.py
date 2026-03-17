@@ -10,11 +10,11 @@ from sqlalchemy.exc import IntegrityError
 
 from researchops_api.middlewares.auth import get_identity
 from researchops_api.utils.email import send_password_reset_otp
-from researchops_core.auth.config import get_auth_config
-from researchops_core.auth.identity import Identity
-from researchops_core.auth.mfa import build_otpauth_uri, generate_totp_secret, verify_totp
-from researchops_core.auth.passwords import hash_password, verify_password
-from researchops_core.auth.tokens import (
+from core.auth.config import get_auth_config
+from core.auth.identity import Identity
+from core.auth.mfa import build_otpauth_uri, generate_totp_secret, verify_totp
+from core.auth.passwords import hash_password, verify_password
+from core.auth.tokens import (
     generate_refresh_token,
     hash_password_reset_token,
     hash_refresh_token,
@@ -22,8 +22,8 @@ from researchops_core.auth.tokens import (
     issue_mfa_challenge_token,
     verify_mfa_challenge_token,
 )
-from researchops_core.settings import get_settings
-from researchops_core.tenancy import tenant_uuid
+from core.settings import get_settings
+from core.tenancy import tenant_uuid
 
 from db.models.auth_users import AuthUserRow
 from db.repositories.identity import (
