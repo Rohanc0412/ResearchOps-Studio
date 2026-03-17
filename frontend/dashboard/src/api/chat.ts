@@ -1,5 +1,5 @@
 /**
- * frontend/web/src/api/chat.ts
+ * frontend/dashboard/src/api/chat.ts
  *
  * High-level purpose (non technical explanation):
  * This file is the “chat data manager” for your app.

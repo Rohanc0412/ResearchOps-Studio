@@ -15,31 +15,6 @@ export function useRunQuery(runId: string) {
   });
 }
 
-export function useCreateRunMutation(projectId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (input: {
-      prompt: string;
-      output_type?: "report";
-      budget_override?: {
-        token_limit?: number;
-        time_limit?: number;
-        connector_calls_limit?: number;
-      };
-      llm_provider?: "hosted";
-      llm_model?: string;
-    }) =>
-      apiFetchJson(`/projects/${encodeURIComponent(projectId)}/runs`, {
-        method: "POST",
-        body: { ...input, output_type: "report" },
-        schema: RunSchema
-      }),
-    onSuccess: async (run) => {
-      await qc.setQueryData(["runs", run.id], run);
-    }
-  });
-}
-
 export function useCancelRunMutation(runId: string) {
   const qc = useQueryClient();
   return useMutation({

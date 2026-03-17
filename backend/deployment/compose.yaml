@@ -19,7 +19,7 @@ services:
   api:
     build:
       context: ..
-      dockerfile: infra/docker/api.Dockerfile
+      dockerfile: deployment/docker/api.Dockerfile
     env_file:
       - ../.env
       - ../../.env
@@ -48,7 +48,7 @@ services:
   worker:
     build:
       context: ..
-      dockerfile: infra/docker/worker.Dockerfile
+      dockerfile: deployment/docker/worker.Dockerfile
     gpus: all
     env_file:
       - ../.env

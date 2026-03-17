@@ -5,11 +5,11 @@ Production-grade React dashboard for ResearchOps Studio.
 ## Setup
 
 ```powershell
-cd frontend/web
+cd frontend/dashboard
 npm install
 ```
 
-Edit `frontend/web/.env`:
+Edit `frontend/dashboard/.env`:
 
 - `VITE_API_BASE_URL` (e.g. `http://localhost:8000`)
 - Recommended for local dev: set `VITE_API_BASE_URL=/api` (Vite dev proxy forwards to `http://localhost:8000`).

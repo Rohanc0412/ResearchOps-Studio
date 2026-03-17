@@ -1,13 +1,13 @@
 .PHONY: up down logs test fmt lint run-api
 
 up:
-\tdocker compose -f infra/compose.yaml up --build
+\tdocker compose -f deployment/compose.yaml up --build
 
 down:
-\tdocker compose -f infra/compose.yaml down -v
+\tdocker compose -f deployment/compose.yaml down -v
 
 logs:
-\tdocker compose -f infra/compose.yaml logs -f
+\tdocker compose -f deployment/compose.yaml logs -f
 
 test:
 \tpython -m pytest
@@ -19,7 +19,7 @@ lint:
 \tpython -m ruff check .
 
 run-api:
-\tPYTHONPATH=./apps/api/src:./packages/core/src:./packages/observability/src:./db \
+\tPYTHONPATH=./services/api/src:./libraries/core/src:./libraries/observability/src:./libraries/research_rules:./data \
 \tLOG_LEVEL=$${LOG_LEVEL:-INFO} LOG_FORMAT=$${LOG_FORMAT:-pretty} \
 \tpython -m researchops_api.main
 

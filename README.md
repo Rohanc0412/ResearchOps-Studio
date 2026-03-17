@@ -4,25 +4,25 @@ Backend production skeleton for ResearchOps: API + orchestrator + worker + Postg
 
 ## Frontend (Dashboard)
 
-A standalone React + Vite dashboard lives in `frontend/web`.
+A standalone React + Vite dashboard lives in `frontend/dashboard`.
 
 From repo root:
 
 ```powershell
-npm --prefix frontend/web install
-npm --prefix frontend/web run dev
+npm --prefix frontend/dashboard install
+npm --prefix frontend/dashboard run dev
 ```
 
-Or from within `frontend/web`:
+Or from within `frontend/dashboard`:
 
 ```powershell
-cd frontend/web
+cd frontend/dashboard
 npm install
 npm run dev
 ```
 
 Notes:
-- Frontend uses `frontend/web/.env` for `VITE_API_BASE_URL`.
+- Frontend uses `frontend/dashboard/.env` for `VITE_API_BASE_URL`.
 - Backend tuning overrides live in `backend/.env`.
 - The API must allow the web origin (e.g. `http://localhost:5173`) via CORS for browser requests.
 
@@ -49,7 +49,7 @@ Notes:
 From repo root:
 
 ```powershell
-docker compose -f backend/infra/compose.yaml up --build
+docker compose -f backend/deployment/compose.yaml up --build
 ```
 
 Gmail SMTP (for local dev OTP emails):
@@ -66,7 +66,7 @@ Gmail SMTP (for local dev OTP emails):
 Stop and wipe local DB volume:
 
 ```powershell
-docker compose -f backend/infra/compose.yaml down -v
+docker compose -f backend/deployment/compose.yaml down -v
 ```
 
 ## How To Trigger A Research Run (Windows PowerShell)
@@ -120,7 +120,7 @@ Run creation request/response:
 client
   |
   v
-backend/apps/api (FastAPI)
+backend/services/api (FastAPI)
   |   \
   |    \ reads status/artifacts
   |     \
@@ -128,10 +128,10 @@ backend/apps/api (FastAPI)
 db (Postgres + pgvector)
   ^
   |
-backend/apps/workers (polls jobs table)
+backend/services/workers (polls jobs table)
   |
   v
-backend/apps/orchestrator (LangGraph)
+backend/services/orchestrator (LangGraph)
   |
   v
 artifacts table (dummy JSON payload)
@@ -139,7 +139,7 @@ artifacts table (dummy JSON payload)
 
 ## Configuration
 
-All services load the shared repo `.env` via `backend/packages/core` settings (`pydantic-settings`).
+All services load the shared repo `.env` via `backend/libraries/core` settings (`pydantic-settings`).
 
 Important env vars:
 - `DATABASE_URL` (Compose sets this to Postgres service)
@@ -257,12 +257,12 @@ LIMIT 50;
 
 ## Logging
 
-`backend/packages/observability` configures structured JSON logs with correlation fields:
+`backend/libraries/observability` configures structured JSON logs with correlation fields:
 - `service`, `request_id`, `tenant_id`, `run_id`
 
 ## Database (Minimal, Production-Shaped)
 
-SQLAlchemy models in `backend/db/models/`:
+SQLAlchemy models in `backend/data/db/models/`:
 - `projects` (tenant-scoped workspace + last activity)
 - `runs` (status/stage/budgets/errors)
 - `run_events` (timeline stream)
@@ -271,7 +271,7 @@ SQLAlchemy models in `backend/db/models/`:
 - `claim_map` (claim ↔ snippet enforcement storage)
 - `jobs` (Postgres-backed queue, polled by worker)
 
-Local pgvector is enabled via `backend/infra/docker/postgres/init/001_pgvector.sql`.
+Local pgvector is enabled via `backend/deployment/docker/postgres/init/001_pgvector.sql`.
 
 ## Database and Memory Model (Part 4)
 
@@ -284,7 +284,7 @@ This schema is the UI truth layer for:
 - Claim maps for citation enforcement/debugging
 
 Quickstart (local):
-1) Start Postgres (Compose): `docker compose -f backend/infra/compose.yaml up --build`
+1) Start Postgres (Compose): `docker compose -f backend/deployment/compose.yaml up --build`
 2) `cd backend`
 3) Set env vars: `DATABASE_URL` (Postgres) + auth vars as needed
 4) Run migrations: `python -m alembic -c alembic.ini upgrade head`
@@ -303,15 +303,16 @@ Notes:
 
 ## Repo Layout
 
-- `frontend/web` React + Vite dashboard
-- `backend/apps/api/src/researchops_api` FastAPI service
-- `backend/apps/orchestrator/src/researchops_orchestrator` LangGraph research pipeline
-- `backend/apps/workers/src/researchops_workers` job worker loop
-- `backend/packages/core/src/researchops_core` shared models/constants/settings
-- `backend/packages/observability/src/researchops_observability` logging + middleware
-- `backend/packages/citations/src/researchops_citations` facade for Part 1 enforcement
-- `backend/db/` database models + init
-- `backend/infra/` Docker compose + Dockerfiles
+- `frontend/dashboard` React + Vite dashboard
+- `backend/services/api/src/researchops_api` FastAPI service
+- `backend/services/orchestrator/src/researchops_orchestrator` LangGraph research pipeline
+- `backend/services/workers/src/researchops_workers` job worker loop
+- `backend/libraries/core/src/researchops_core` shared models/constants/settings
+- `backend/libraries/observability/src/researchops_observability` logging + middleware
+- `backend/libraries/citations/src/researchops_citations` facade for Part 1 enforcement
+- `backend/libraries/research_rules/src` reusable contracts, enforcement, and utility code
+- `backend/data/db/` database package, models, services, and migrations
+- `backend/deployment/` Compose, Dockerfiles, and local infra
 - `backend/tests/unit` unit tests
 - `backend/tests/integration` end-to-end run test (in-process)
 - `backend/tests/golden` golden JSON fixtures for Part 1
@@ -334,7 +335,7 @@ python -m venv .venv
 
 ## Troubleshooting
 
-- Postgres init races: schema creation uses a Postgres advisory lock (`backend/db/init_db.py`) so `api` and `worker` can start together safely.
+- Postgres init races: schema creation uses a Postgres advisory lock (`backend/data/db/init_db.py`) so `api` and `worker` can start together safely.
 - PowerShell script execution blocked: run scripts with `powershell -NoProfile -ExecutionPolicy Bypass -File ...`.
 - Line endings: `.gitattributes` is configured so `core.autocrlf=true` works on Windows without noisy diffs.
 
