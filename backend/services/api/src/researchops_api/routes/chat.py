@@ -23,16 +23,21 @@ from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 from db.models.chat_messages import ChatMessageRow
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
-from db.services.chat import (
+from db.repositories.chat import (
+    clear_pending_action,
     create_conversation,
     create_message,
     get_conversation_for_user,
+    get_last_action,
     get_message_by_client_id,
     get_message_by_id,
+    get_pending_action,
     list_conversations_for_user,
     list_messages,
+    record_last_action,
+    set_pending_action,
 )
-from db.services.truth import create_run, get_project_for_user
+from db.repositories.project_runs import create_run, get_project_for_user
 from db.session import session_scope
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -158,7 +163,7 @@ def _pending_action_payload(
 
 
 def _extract_pending(conversation) -> dict | None:
-    pending = conversation.pending_action_json
+    pending = get_pending_action(conversation)
     return pending if isinstance(pending, dict) else None
 
 
@@ -633,7 +638,7 @@ def post_send_chat(
                 llm_model=llm_model,
                 created_at=now,
             )
-            convo.pending_action_json = pending
+            set_pending_action(convo, pending)
             decision_override = "yes"
             _log_step("finish", conversation_id=convo.id, step="force_pipeline")
 
@@ -656,7 +661,7 @@ def post_send_chat(
                     if convo.project_id is None:
                         raise ValueError("project_id required for research run")
                     action_hash = _hash_action(f"{pending_prompt}|report")
-                    last_action = convo.last_action_json if isinstance(convo.last_action_json, dict) else {}
+                    last_action = get_last_action(convo) or {}
                     last_started_at = last_action.get("started_at")
                     last_hash = last_action.get("action_hash")
                     last_run_id = last_action.get("run_id")
@@ -675,7 +680,7 @@ def post_send_chat(
                                     client_message_id=None,
                                     metadata_json=None,
                                 )
-                                convo.pending_action_json = None
+                                clear_pending_action(convo)
                                 pending_action = None
                             else:
                                 last_run_id = None
@@ -701,16 +706,16 @@ def post_send_chat(
                             current_stage="retrieve",
                             question=pending_prompt,
                             output_type="report",
-                            budgets_json={},
+                            budgets={},
+                            usage={
+                                "job_type": RESEARCH_JOB_TYPE,
+                                "user_query": pending_prompt,
+                                "output_type": "report",
+                                "research_goal": "report",
+                                "llm_provider": llm_provider,
+                                "llm_model": llm_model,
+                            },
                         )
-                        run.usage_json = {
-                            "job_type": RESEARCH_JOB_TYPE,
-                            "user_query": pending_prompt,
-                            "output_type": "report",
-                            "research_goal": "report",
-                            "llm_provider": llm_provider,
-                            "llm_model": llm_model,
-                        }
                         emit_run_event(
                             session=session,
                             tenant_id=tenant_id,
@@ -756,12 +761,13 @@ def post_send_chat(
                                 "project_id": str(convo.project_id) if convo.project_id else None,
                             },
                         )
-                        convo.last_action_json = {
-                            "action_hash": action_hash,
-                            "run_id": str(run.id),
-                            "started_at": now.isoformat(),
-                        }
-                        convo.pending_action_json = None
+                        record_last_action(
+                            convo,
+                            action_hash=action_hash,
+                            run_id=run.id,
+                            started_at=now,
+                        )
+                        clear_pending_action(convo)
                         pending_action = None
                         assistant_message = create_message(
                             session=session,
@@ -802,7 +808,7 @@ def post_send_chat(
                             request=request,
                         )
                 except PermissionError:
-                    convo.pending_action_json = None
+                    clear_pending_action(convo)
                     pending_action = None
                     assistant_message = create_message(
                         session=session,
@@ -819,7 +825,7 @@ def post_send_chat(
                         metadata_json=None,
                     )
                 except ValueError as exc:
-                    convo.pending_action_json = None
+                    clear_pending_action(convo)
                     pending_action = None
                     assistant_message = create_message(
                         session=session,
@@ -852,7 +858,7 @@ def post_send_chat(
 
             elif decision == "no":
                 _log_step("start", conversation_id=convo.id, step="quick_answer_declined")
-                convo.pending_action_json = None
+                clear_pending_action(convo)
                 pending_action = None
                 answer = _generate_quick_answer(
                     session=session,
@@ -888,7 +894,7 @@ def post_send_chat(
                 _log_step("start", conversation_id=convo.id, step="consent_ambiguous")
                 ambiguous_count = int(pending.get("ambiguous_count") or 0)
                 if ambiguous_count >= 1:
-                    convo.pending_action_json = None
+                    clear_pending_action(convo)
                     pending_action = None
                     answer = _generate_quick_answer(
                         session=session,
@@ -917,7 +923,7 @@ def post_send_chat(
                         created_at=now,
                         ambiguous_count=ambiguous_count + 1,
                     )
-                    convo.pending_action_json = pending_action
+                    set_pending_action(convo, pending_action)
                     assistant_message = create_message(
                         session=session,
                         tenant_id=tenant_id,
@@ -935,14 +941,14 @@ def post_send_chat(
 
             elif decision == "new_topic":
                 _log_step("start", conversation_id=convo.id, step="consent_new_topic")
-                convo.pending_action_json = None
+                clear_pending_action(convo)
                 pending_action = None
                 pending = None
                 _log_step("finish", conversation_id=convo.id, step="consent_new_topic")
 
         if pending is None:
             if action_id == ACTION_RUN_PIPELINE:
-                last_action = convo.last_action_json if isinstance(convo.last_action_json, dict) else {}
+                last_action = get_last_action(convo) or {}
                 last_started_at = last_action.get("started_at")
                 last_run_id = last_action.get("run_id")
                 if last_started_at and last_run_id:
@@ -1021,7 +1027,7 @@ def post_send_chat(
                             llm_model=llm_model,
                             created_at=now,
                         )
-                        convo.pending_action_json = pending_action
+                        set_pending_action(convo, pending_action)
                         assistant_message = create_message(
                             session=session,
                             tenant_id=tenant_id,

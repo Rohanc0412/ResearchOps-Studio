@@ -26,6 +26,11 @@ from db.models.run_checkpoints import RunCheckpointRow
 from db.models.run_sources import RunSourceRow
 from db.models.source_embeddings import SourceEmbeddingRow
 from db.models.sources import SourceRow
+from db.repositories.corpus import (
+    create_or_get_source,
+    get_source_identifier,
+    list_source_author_names,
+)
 from researchops_connectors import ArXivConnector, OpenAlexConnector
 from researchops_connectors.base import RetrievedSource
 from researchops_connectors.dedup import deduplicate_sources
@@ -909,83 +914,23 @@ def _upsert_source(
     source: RetrievedSource,
     origin: str,
 ) -> SourceRow:
-    canonical_id = source.to_canonical_string()
-    row = (
-        session.query(SourceRow)
-        .filter(SourceRow.tenant_id == tenant_id, SourceRow.canonical_id == canonical_id)
-        .one_or_none()
-    )
-    now = datetime.utcnow()
     metadata = _build_metadata(source)
-
-    doi = source.canonical_id.doi
-    arxiv_id = source.canonical_id.arxiv_id
-
-    if row:
-        updated = False
-        if source.title and row.title != source.title:
-            row.title = source.title
-            updated = True
-        if source.authors and row.authors_json != source.authors:
-            row.authors_json = source.authors
-            updated = True
-        if source.year and row.year != source.year:
-            row.year = source.year
-            updated = True
-        if source.venue and row.venue != source.venue:
-            row.venue = source.venue
-            updated = True
-        if doi and row.doi != doi:
-            row.doi = doi
-            updated = True
-        if arxiv_id and row.arxiv_id != arxiv_id:
-            row.arxiv_id = arxiv_id
-            updated = True
-        if source.url and row.url != source.url:
-            row.url = source.url
-            updated = True
-        if origin and row.origin != origin:
-            row.origin = origin
-            updated = True
-        if source.citations_count is not None:
-            if row.cited_by_count is None or source.citations_count > row.cited_by_count:
-                row.cited_by_count = source.citations_count
-                updated = True
-        if metadata:
-            merged = dict(row.metadata_json or {})
-            for key, value in metadata.items():
-                if value is None:
-                    continue
-                if key not in merged or merged[key] in (None, "", [], {}):
-                    merged[key] = value
-            if merged != row.metadata_json:
-                row.metadata_json = merged
-                updated = True
-        if updated:
-            row.updated_at = now
-            session.flush()
-        return row
-
-    row = SourceRow(
+    return create_or_get_source(
+        session=session,
         tenant_id=tenant_id,
-        canonical_id=canonical_id,
+        canonical_id=source.to_canonical_string(),
         source_type=str(source.source_type.value),
         title=source.title,
-        authors_json=source.authors or [],
+        authors=source.authors or [],
         year=source.year,
         venue=source.venue,
-        doi=doi,
-        arxiv_id=arxiv_id,
-        url=source.url,
         origin=origin,
         cited_by_count=source.citations_count,
-        metadata_json=metadata,
-        created_at=now,
-        updated_at=now,
+        url=source.url,
+        doi=source.canonical_id.doi,
+        arxiv_id=source.canonical_id.arxiv_id,
+        metadata=metadata,
     )
-    session.add(row)
-    session.flush()
-    return row
 
 
 def _upsert_run_source(
@@ -1187,12 +1132,12 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
                     source_id=row.id,
                     canonical_id=row.canonical_id,
                     title=row.title or source.title,
-                    authors=list(row.authors_json or source.authors or []),
+                    authors=list_source_author_names(row) or source.authors or [],
                     abstract=source.abstract,
                     year=row.year or source.year,
                     venue=row.venue,
-                    doi=row.doi,
-                arxiv_id=row.arxiv_id,
+                    doi=get_source_identifier(row, "doi"),
+                arxiv_id=get_source_identifier(row, "arxiv_id"),
                 url=row.url or source.url,
                 pdf_url=source.pdf_url,
                 connector=origin,

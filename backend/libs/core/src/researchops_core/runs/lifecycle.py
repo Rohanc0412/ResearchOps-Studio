@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from db.models.run_events import RunEventLevelDb, RunEventRow
 from db.models.runs import RunRow, RunStatusDb
-from db.services.truth import append_run_event
+from db.repositories.project_runs import append_run_event
 
 if TYPE_CHECKING:
     pass

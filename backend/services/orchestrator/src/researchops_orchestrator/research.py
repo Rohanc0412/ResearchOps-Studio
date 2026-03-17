@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models.runs import RunRow
+from db.repositories.project_runs import get_run_usage_metrics
 from researchops_observability.context import bind
 from researchops_orchestrator.runner import run_orchestrator
 
@@ -25,7 +26,7 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
     if run is None:
         raise ValueError("run not found")
 
-    inputs = run.usage_json or {}
+    inputs = get_run_usage_metrics(run)
     user_query = inputs.get("user_query") or inputs.get("prompt")
     research_goal = inputs.get("research_goal") or inputs.get("output_type")
     llm_provider = inputs.get("llm_provider")

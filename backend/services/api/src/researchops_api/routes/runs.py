@@ -13,24 +13,23 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from researchops_api.middlewares.auth import IdentityDep
 from researchops_api.schemas.truth import ArtifactOut, RunEventOut
+from researchops_api.services.project_runs import (
+    cancel_user_run,
+    get_user_run_or_404,
+    list_user_run_artifacts,
+    retry_user_run,
+    run_to_web,
+)
 from researchops_core.runs import (
     RunNotFoundError,
     RunTransitionError,
-    request_cancel,
-    retry_run,
 )
-from researchops_core.audit.logger import write_audit_log
 from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
 from researchops_core.tenancy import tenant_uuid
-from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
 from db.models.runs import RunStatusDb
-from db.services.truth import (
-    get_run_for_user,
-    list_artifacts,
-    list_run_events,
-)
+from db.repositories.project_runs import get_run_usage_metrics, list_run_events
 from db.session import session_scope
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -64,27 +63,6 @@ class WebRunOut(BaseModel):
     error_code: str | None = None
     budgets: dict = Field(default_factory=dict)
     usage: dict = Field(default_factory=dict)
-
-
-def _run_to_web(run) -> WebRunOut:
-    return WebRunOut(
-        id=run.id,
-        tenant_id=run.tenant_id,
-        project_id=run.project_id,
-        status=run.status.value,
-        current_stage=run.current_stage,
-        created_at=run.created_at,
-        updated_at=run.updated_at,
-        started_at=run.started_at,
-        finished_at=run.finished_at,
-        cancel_requested_at=run.cancel_requested_at,
-        retry_count=run.retry_count,
-        error_message=run.failure_reason,
-        error_code=run.error_code,
-        budgets=run.budgets_json or {},
-        usage=run.usage_json or {},
-    )
-
 
 _ALLOWED_STAGES = {"retrieve", "ingest", "outline", "draft", "validate", "factcheck", "export"}
 
@@ -131,16 +109,10 @@ def _event_to_sse(event) -> str:
 def get_run_by_id(request: Request, run_id: UUID, identity: Identity = IdentityDep) -> WebRunOut:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        run = get_run_for_user(
-            session=session,
-            tenant_id=_tenant_uuid(identity),
-            run_id=run_id,
-            created_by=identity.user_id,
+        run = get_user_run_or_404(
+            session=session, tenant_id=_tenant_uuid(identity), run_id=run_id, user_id=identity.user_id
         )
-        if run is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        payload = _run_to_web(run)
-        return payload
+        return WebRunOut.model_validate(run_to_web(run))
 
 
 @router.get("/{run_id}/events")
@@ -190,13 +162,11 @@ def get_run_events(
 
             while True:
                 with session_scope(SessionLocal) as session:
-                    run = get_run_for_user(
-                        session=session,
-                        tenant_id=tenant_id,
-                        run_id=run_id,
-                        created_by=identity.user_id,
-                    )
-                    if run is None:
+                    try:
+                        run = get_user_run_or_404(
+                            session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
+                        )
+                    except HTTPException:
                         yield ": run not found\n\n"
                         break
 
@@ -242,14 +212,7 @@ def get_run_events(
 
     # JSON mode: return all events (or events after after_id)
     with session_scope(SessionLocal) as session:
-        run = get_run_for_user(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            created_by=identity.user_id,
-        )
-        if run is None:
-            raise HTTPException(status_code=404, detail="run not found")
+        get_user_run_or_404(session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id)
         rows = list_run_events(
             session=session,
             tenant_id=tenant_id,
@@ -278,35 +241,13 @@ def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep)
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        tenant_id = _tenant_uuid(identity)
-        run = get_run_for_user(
+        cancel_user_run(
+            request=request,
             session=session,
-            tenant_id=tenant_id,
+            tenant_id=_tenant_uuid(identity),
             run_id=run_id,
-            created_by=identity.user_id,
+            identity=identity,
         )
-        if run is None:
-            raise HTTPException(status_code=404, detail="run not found")
-
-        try:
-            run = request_cancel(
-                session=session,
-                tenant_id=tenant_id,
-                run_id=run_id,
-                force_immediate=False,
-            )
-            write_audit_log(
-                db=session,
-                identity=identity,
-                action="run.cancel",
-                target_type="run",
-                target_id=str(run_id),
-                metadata={"status": run.status.value},
-                request=request,
-            )
-        except RunNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-
         return OkResponse()
 
 
@@ -332,47 +273,14 @@ def retry_run_endpoint(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        tenant_id = _tenant_uuid(identity)
-        existing = get_run_for_user(
+        run = retry_user_run(
+            request=request,
             session=session,
-            tenant_id=tenant_id,
+            tenant_id=_tenant_uuid(identity),
             run_id=run_id,
-            created_by=identity.user_id,
+            identity=identity,
         )
-        if existing is None:
-            raise HTTPException(status_code=404, detail="run not found")
-
-        try:
-            run = retry_run(
-                session=session,
-                tenant_id=tenant_id,
-                run_id=run_id,
-            )
-            job_type = None
-            if isinstance(run.usage_json, dict):
-                job_type = run.usage_json.get("job_type")
-            if not isinstance(job_type, str) or not job_type:
-                job_type = RESEARCH_JOB_TYPE
-            enqueue_run_job(
-                session=session,
-                tenant_id=tenant_id,
-                run_id=run.id,
-                job_type=job_type,
-            )
-            write_audit_log(
-                db=session,
-                identity=identity,
-                action="run.retry",
-                target_type="run",
-                target_id=str(run_id),
-                metadata={"retry_count": run.retry_count},
-                request=request,
-            )
-
-        except (RunNotFoundError, RunTransitionError) as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
-        return _run_to_web(run)
+        return WebRunOut.model_validate(run_to_web(run))
 
 
 @router.get("/{run_id}/artifacts", response_model=list[ArtifactOut], response_model_by_alias=True)
@@ -381,31 +289,11 @@ def get_artifacts_for_run(
 ) -> list[ArtifactOut]:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        tenant_id = _tenant_uuid(identity)
-        run = get_run_for_user(
+        return list_user_run_artifacts(
             session=session,
-            tenant_id=tenant_id,
+            tenant_id=_tenant_uuid(identity),
             run_id=run_id,
-            created_by=identity.user_id,
+            user_id=identity.user_id,
         )
-        if run is None:
-            raise HTTPException(status_code=404, detail="run not found")
-
-        rows = list_artifacts(session=session, tenant_id=tenant_id, run_id=run_id)
-        return [
-            ArtifactOut(
-                id=a.id,
-                tenant_id=a.tenant_id,
-                project_id=a.project_id,
-                run_id=a.run_id,
-                type=a.artifact_type,
-                blob_ref=a.blob_ref,
-                mime_type=a.mime_type,
-                size_bytes=a.size_bytes,
-                metadata_json=a.metadata_json,
-                created_at=a.created_at,
-            )
-            for a in rows
-        ]
 
 

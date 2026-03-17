@@ -8,18 +8,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy.exc import IntegrityError
 from researchops_api.middlewares.auth import IdentityDep
 from researchops_api.schemas.truth import ProjectCreate, ProjectOut
+from researchops_api.services.project_runs import (
+    create_project_run,
+    create_user_project,
+    get_user_project,
+    list_user_projects,
+    patch_user_project,
+)
 from researchops_core.auth.identity import Identity
 from researchops_core.auth.rbac import require_roles
-from researchops_core.runs.lifecycle import emit_run_event
 from researchops_core.tenancy import tenant_uuid
-from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
-from db.models.run_events import RunEventLevelDb
-from db.models.runs import RunStatusDb
-from db.services.truth import create_project, create_run, get_project_for_user, get_run_by_client_request_id, list_projects_for_user
 from db.session import session_scope
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -69,20 +70,14 @@ def patch_project(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        p = get_project_for_user(
+        return patch_user_project(
             session=session,
             tenant_id=_tenant_uuid(identity),
             project_id=project_id,
-            created_by=identity.user_id,
+            user_id=identity.user_id,
+            name=body.name,
+            description=body.description,
         )
-        if p is None:
-            raise HTTPException(status_code=404, detail="project not found")
-        if body.name is not None:
-            p.name = body.name
-        if body.description is not None:
-            p.description = body.description
-        session.flush()
-        return ProjectOut.model_validate(p)
 
 
 @router.post("", response_model=ProjectOut, response_model_exclude_none=True)
@@ -96,26 +91,24 @@ def post_project(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        row = create_project(
+        return create_user_project(
             session=session,
             tenant_id=_tenant_uuid(identity),
+            user_id=identity.user_id,
             name=body.name,
             description=body.description,
-            created_by=identity.user_id,
         )
-        return ProjectOut.model_validate(row)
 
 
 @router.get("", response_model=list[ProjectOut], response_model_exclude_none=True)
 def get_projects(request: Request, identity: Identity = IdentityDep) -> list[ProjectOut]:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        rows = list_projects_for_user(
+        return list_user_projects(
             session=session,
             tenant_id=_tenant_uuid(identity),
-            created_by=identity.user_id,
+            user_id=identity.user_id,
         )
-        return [ProjectOut.model_validate(p) for p in rows]
 
 
 @router.get("/{project_id}", response_model=ProjectOut, response_model_exclude_none=True)
@@ -124,11 +117,11 @@ def get_project_by_id(
 ) -> ProjectOut:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        p = get_project_for_user(
+        p = get_user_project(
             session=session,
             tenant_id=_tenant_uuid(identity),
             project_id=project_id,
-            created_by=identity.user_id,
+            user_id=identity.user_id,
         )
         if p is None:
             raise HTTPException(status_code=404, detail="project not found")
@@ -146,18 +139,7 @@ def post_run_for_project(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        p = get_project_for_user(
-            session=session,
-            tenant_id=_tenant_uuid(identity),
-            project_id=project_id,
-            created_by=identity.user_id,
-        )
-        if p is None:
-            raise HTTPException(status_code=404, detail="project not found")
-
         question = (body.question or body.prompt or "").strip()
-        if not question:
-            raise HTTPException(status_code=400, detail="question is required")
         logger.info(
             "Research pipeline request received",
             extra={
@@ -170,120 +152,27 @@ def post_run_for_project(
                 "llm_model": body.llm_model,
             },
         )
-
-        if body.client_request_id:
-            existing = get_run_by_client_request_id(
-                session=session,
-                tenant_id=_tenant_uuid(identity),
-                project_id=project_id,
-                client_request_id=body.client_request_id,
-            )
-            if existing is not None:
-                logger.info(
-                    "Research pipeline request reused existing run",
-                    extra={
-                        "event": "pipeline.request.replay",
-                        "project_id": str(project_id),
-                        "run_id": str(existing.id),
-                        "status": existing.status.value,
-                        "client_request_id": body.client_request_id,
-                    },
-                )
-                return RunSetupResponse(
-                    run_id=str(existing.id),
-                    status=existing.status.value,
-                )
-
-        try:
-            budgets = body.budget_override or {}
-            llm_provider = body.llm_provider or os.getenv("LLM_PROVIDER", "hosted")
-            if llm_provider != "hosted":
-                raise HTTPException(status_code=400, detail="Only hosted LLM provider is supported.")
-            llm_model = body.llm_model or os.getenv("HOSTED_LLM_MODEL")
-            run = create_run(
-                session=session,
-                tenant_id=_tenant_uuid(identity),
-                project_id=project_id,
-                status=RunStatusDb.queued,
-                current_stage="retrieve",
-                question=question,
-                output_type="report",
-                client_request_id=body.client_request_id,
-                budgets_json=budgets,
-            )
-            run.usage_json = {
-                "job_type": RESEARCH_JOB_TYPE,
-                "user_query": question,
-                "output_type": "report",
-                "research_goal": "report",
-                "llm_provider": llm_provider,
-                "llm_model": llm_model,
-            }
-            emit_run_event(
-                session=session,
-                tenant_id=_tenant_uuid(identity),
-                run_id=run.id,
-                event_type="run.created",
-                level=RunEventLevelDb.info,
-                message="Run created",
-                stage="retrieve",
-                payload={"run_id": str(run.id)},
-            )
-            emit_run_event(
-                session=session,
-                tenant_id=_tenant_uuid(identity),
-                run_id=run.id,
-                event_type="run.queued",
-                level=RunEventLevelDb.info,
-                message="Run queued",
-                stage="retrieve",
-                payload={"run_id": str(run.id)},
-            )
-            enqueue_run_job(
-                session=session,
-                tenant_id=_tenant_uuid(identity),
-                run_id=run.id,
-                job_type=RESEARCH_JOB_TYPE,
-            )
-        except IntegrityError:
-            session.rollback()
-            if body.client_request_id:
-                existing = get_run_by_client_request_id(
-                    session=session,
-                    tenant_id=_tenant_uuid(identity),
-                    project_id=project_id,
-                    client_request_id=body.client_request_id,
-                )
-                if existing is not None:
-                    logger.info(
-                        "Research pipeline request reused existing run after conflict",
-                        extra={
-                            "event": "pipeline.request.replay",
-                            "project_id": str(project_id),
-                            "run_id": str(existing.id),
-                            "status": existing.status.value,
-                            "client_request_id": body.client_request_id,
-                        },
-                    )
-                    return RunSetupResponse(
-                        run_id=str(existing.id),
-                        status=existing.status.value,
-                    )
-            raise HTTPException(status_code=409, detail="run already exists")
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
+        run_id, status = create_project_run(
+            request=request,
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            project_id=project_id,
+            identity=identity,
+            question=question,
+            client_request_id=body.client_request_id,
+            budget_override=body.budget_override,
+            llm_provider=body.llm_provider,
+            llm_model=body.llm_model,
+        )
         logger.info(
             "Research pipeline response sent",
             extra={
                 "event": "pipeline.response",
                 "project_id": str(project_id),
-                "run_id": str(run.id),
-                "status": run.status.value,
+                "run_id": run_id,
+                "status": status,
             },
         )
-        return RunSetupResponse(
-            run_id=str(run.id),
-            status=run.status.value,
-        )
+        return RunSetupResponse(run_id=run_id, status=status)
 
 

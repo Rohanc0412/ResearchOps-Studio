@@ -26,6 +26,6 @@ PY
 
 COPY . /app
 
-ENV PYTHONPATH=/app/services/api/src:/app/services/orchestrator/src:/app/services/workers/src:/app/libraries/core/src:/app/libraries/observability/src:/app/libraries/citations/src:/app/libraries/connectors/src:/app/libraries/ingestion/src:/app/libraries/retrieval/src:/app/libraries/llm/src:/app/libraries/research_rules:/app/data
+ENV PYTHONPATH=/app/services/api/src:/app/services/orchestrator/src:/app/services/workers/src:/app/libs/core/src:/app/libs/observability/src:/app/libs/citations/src:/app/libs/connectors/src:/app/libs/ingestion/src:/app/libs/retrieval/src:/app/libs/llm/src:/app/libs/research_rules:/app/data
 
 CMD ["python", "-m", "researchops_workers.main"]

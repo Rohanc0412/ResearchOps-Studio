@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from db.models.base import Base
 from db.models.projects import ProjectRow
 from db.models.runs import RunRow, RunStatusDb
-from db.services.truth import (
+from db.repositories.project_runs import (
     create_project,
     create_run,
     get_project_for_user,

@@ -139,7 +139,7 @@ artifacts table (dummy JSON payload)
 
 ## Configuration
 
-All services load the shared repo `.env` via `backend/libraries/core` settings (`pydantic-settings`).
+All services load the shared repo `.env` via `backend/libs/core` settings (`pydantic-settings`).
 
 Important env vars:
 - `DATABASE_URL` (Compose sets this to Postgres service)
@@ -257,7 +257,7 @@ LIMIT 50;
 
 ## Logging
 
-`backend/libraries/observability` configures structured JSON logs with correlation fields:
+`backend/libs/observability` configures structured JSON logs with correlation fields:
 - `service`, `request_id`, `tenant_id`, `run_id`
 
 ## Database (Minimal, Production-Shaped)
@@ -307,10 +307,10 @@ Notes:
 - `backend/services/api/src/researchops_api` FastAPI service
 - `backend/services/orchestrator/src/researchops_orchestrator` LangGraph research pipeline
 - `backend/services/workers/src/researchops_workers` job worker loop
-- `backend/libraries/core/src/researchops_core` shared models/constants/settings
-- `backend/libraries/observability/src/researchops_observability` logging + middleware
-- `backend/libraries/citations/src/researchops_citations` facade for Part 1 enforcement
-- `backend/libraries/research_rules/src` reusable contracts, enforcement, and utility code
+- `backend/libs/core/src/researchops_core` shared models/constants/settings
+- `backend/libs/observability/src/researchops_observability` logging + middleware
+- `backend/libs/citations/src/researchops_citations` facade for Part 1 enforcement
+- `backend/libs/research_rules/src` reusable contracts, enforcement, and utility code
 - `backend/data/db/` database package, models, services, and migrations
 - `backend/deployment/` Compose, Dockerfiles, and local infra
 - `backend/tests/unit` unit tests

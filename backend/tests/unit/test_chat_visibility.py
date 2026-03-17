@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from db.models.chat_conversations import ChatConversationRow
-from db.services.chat import create_conversation, get_conversation_for_user, list_conversations_for_user
+from db.repositories.chat import create_conversation, get_conversation_for_user, list_conversations_for_user
 
 
 def test_chat_conversation_visibility_is_scoped_to_user() -> None:

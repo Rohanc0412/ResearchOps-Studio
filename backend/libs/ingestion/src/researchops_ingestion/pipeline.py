@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from db.models import SnapshotRow, SnippetEmbeddingRow, SnippetRow, SourceRow
+from db.repositories.corpus import create_or_get_source as repo_create_or_get_source
 from researchops_ingestion.chunking import chunk_text
 from researchops_ingestion.embeddings import EmbeddingProvider
 from researchops_ingestion.sanitize import sanitize_text
@@ -107,53 +108,20 @@ def create_or_get_source(
     Returns:
         SourceRow (existing or newly created)
     """
-    # Try to find existing source
-    existing = (
-        session.query(SourceRow)
-        .filter(
-            SourceRow.tenant_id == tenant_id,
-            SourceRow.canonical_id == canonical_id,
-        )
-        .first()
-    )
-
-    if existing:
-        updated = False
-        if url and not existing.url:
-            existing.url = url
-            updated = True
-        if pdf_url:
-            existing_meta = dict(existing.metadata_json or {})
-            if existing_meta.get("pdf_url") != pdf_url:
-                existing_meta["pdf_url"] = pdf_url
-                existing.metadata_json = existing_meta
-                updated = True
-        if updated:
-            existing.updated_at = _now_utc()
-            session.flush()
-        return existing
-
-    # Create new source
-    now = _now_utc()
     metadata_json = dict(metadata or {})
     if pdf_url:
         metadata_json.setdefault("pdf_url", pdf_url)
-
-    source = SourceRow(
+    return repo_create_or_get_source(
+        session=session,
         tenant_id=tenant_id,
         canonical_id=canonical_id,
         source_type=source_type,
         title=title,
-        authors_json=authors or [],
+        authors=authors,
         year=year,
         url=url,
-        metadata_json=metadata_json,
-        created_at=now,
-        updated_at=now,
+        metadata=metadata_json,
     )
-    session.add(source)
-    session.flush()
-    return source
 
 
 def create_snapshot(

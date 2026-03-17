@@ -4,7 +4,7 @@ from uuid import UUID
 
 from db.init_db import init_db
 from db.models.run_events import RunEventLevelDb
-from db.services.truth import append_run_event, create_project, create_run, list_projects
+from db.repositories.project_runs import append_run_event, create_project, create_run, list_projects
 from db.session import create_sessionmaker, session_scope
 
 

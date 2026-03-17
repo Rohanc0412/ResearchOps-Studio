@@ -27,23 +27,23 @@ This repository is now organized by responsibility instead of by mixed technical
 - `backend/services/workers/`
   - Background job worker.
 
-- `backend/libraries/`
+- `backend/libs/`
   - Reusable Python libraries shared by services.
-- `backend/libraries/core/`
+- `backend/libs/core/`
   - Settings, auth, run lifecycle, shared models, tenancy.
-- `backend/libraries/observability/`
+- `backend/libs/observability/`
   - Logging, request IDs, runtime context.
-- `backend/libraries/connectors/`
+- `backend/libs/connectors/`
   - External source connectors such as OpenAlex and arXiv.
-- `backend/libraries/ingestion/`
+- `backend/libs/ingestion/`
   - Sanitization, chunking, embedding, ingestion pipeline.
-- `backend/libraries/retrieval/`
+- `backend/libs/retrieval/`
   - Retrieval and snippet lookup helpers.
-- `backend/libraries/llm/`
+- `backend/libs/llm/`
   - LLM client and response-format helpers.
-- `backend/libraries/citations/`
+- `backend/libs/citations/`
   - Citation and enforcement facade.
-- `backend/libraries/research_rules/`
+- `backend/libs/research_rules/`
   - Contracts, enforcement rules, and low-level shared utilities.
 
 - `backend/data/`
@@ -66,6 +66,6 @@ This repository is now organized by responsibility instead of by mixed technical
 ## Why This Layout
 
 - `services` answers: "What can I run?"
-- `libraries` answers: "What code is shared?"
+- `libs` answers: "What code is shared?"
 - `data` answers: "Where is the database layer?"
 - `deployment` answers: "How do I start the stack?"

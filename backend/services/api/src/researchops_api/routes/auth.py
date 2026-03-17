@@ -25,10 +25,24 @@ from researchops_core.auth.tokens import (
 from researchops_core.settings import get_settings
 from researchops_core.tenancy import tenant_uuid
 
-from db.models.auth_mfa_factors import AuthMfaFactorRow
-from db.models.auth_password_resets import AuthPasswordResetRow
-from db.models.auth_refresh_tokens import AuthRefreshTokenRow
 from db.models.auth_users import AuthUserRow
+from db.repositories.identity import (
+    create_password_reset,
+    create_refresh_token,
+    create_user,
+    delete_mfa_factor,
+    get_mfa_factor,
+    get_password_reset_by_hash,
+    get_refresh_token_by_hash,
+    get_user_by_email,
+    get_user_by_id,
+    get_user_by_identity,
+    get_user_by_username_or_email,
+    list_role_names,
+    revoke_refresh_token,
+    revoke_refresh_tokens_for_user,
+    upsert_mfa_factor,
+)
 from db.session import session_scope
 
 router = APIRouter(tags=["auth"])
@@ -47,7 +61,7 @@ class RegisterIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     username: str = Field(min_length=3, max_length=120)
-    email: str = Field(min_length=3, max_length=200)
+    email: str | None = Field(default=None, min_length=3, max_length=200)
     password: str = Field(min_length=8, max_length=200)
     tenant_id: str | None = None
 
@@ -142,6 +156,12 @@ def _normalize_email(value: str) -> str:
     return value.strip().lower()
 
 
+def _default_email_for_username(username: str) -> str:
+    if "@" in username:
+        return _normalize_email(username)
+    return f"{username}@local.invalid"
+
+
 def _refresh_secret(cfg) -> str:
     return (cfg.auth_refresh_token_secret or cfg.auth_jwt_secret or "").strip()
 
@@ -190,7 +210,7 @@ def _issue_tokens(user: AuthUserRow) -> tuple[str, str, datetime, int]:
     access_token = issue_access_token(
         username=user.username,
         tenant_id=str(user.tenant_id),
-        roles=user.roles_json or [],
+        roles=list_role_names(user),
         secret=cfg.auth_jwt_secret,
         issuer=cfg.auth_jwt_issuer,
         expires_minutes=cfg.auth_access_token_minutes,
@@ -212,26 +232,17 @@ def _persist_refresh_token(
     if not secret:
         raise HTTPException(status_code=500, detail="Refresh token secret not configured")
     token_hash = hash_refresh_token(refresh_token, secret=secret)
-    session.add(
-        AuthRefreshTokenRow(
-            tenant_id=user.tenant_id,
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=refresh_expires,
-        )
+    create_refresh_token(
+        session,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=refresh_expires,
     )
 
 
 def _mfa_factor(session, *, user_id) -> AuthMfaFactorRow | None:
-    return (
-        session.query(AuthMfaFactorRow)
-        .filter(
-            AuthMfaFactorRow.user_id == user_id,
-            AuthMfaFactorRow.factor_type == "totp",
-            AuthMfaFactorRow.enabled_at.isnot(None),
-        )
-        .one_or_none()
-    )
+    return get_mfa_factor(session, user_id=user_id, enabled_only=True)
 
 
 def _issue_mfa_challenge(user: AuthUserRow) -> AuthTokensOut:
@@ -251,7 +262,7 @@ def _issue_mfa_challenge(user: AuthUserRow) -> AuthTokensOut:
         user_id=user.username,
         username=user.username,
         tenant_id=str(user.tenant_id),
-        roles=user.roles_json or [],
+        roles=list_role_names(user),
     )
 
 
@@ -260,11 +271,7 @@ def _get_user_from_identity(session, identity: Identity) -> AuthUserRow | None:
         tenant = tenant_uuid(identity.tenant_id)
     except Exception:
         return None
-    return (
-        session.query(AuthUserRow)
-        .filter(AuthUserRow.username == identity.user_id, AuthUserRow.tenant_id == tenant)
-        .one_or_none()
-    )
+    return get_user_by_identity(session, tenant_id=tenant, username=identity.user_id)
 
 
 @router.post("/auth/register", response_model=AuthTokensOut)
@@ -274,21 +281,21 @@ def register(request: Request, response: Response, body: RegisterIn) -> AuthToke
         raise HTTPException(status_code=403, detail="Registration disabled")
 
     username = _normalize_username(body.username)
-    email = _normalize_email(body.email)
+    email = _normalize_email(body.email) if body.email else _default_email_for_username(username)
     tenant_id = tenant_uuid(body.tenant_id) if body.tenant_id else uuid4()
     password_hash = hash_password(body.password)
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        user = AuthUserRow(
+        user = create_user(
+            session=session,
             tenant_id=tenant_id,
             username=username,
             email=email,
             password_hash=password_hash,
-            roles_json=["owner"],
+            role_names=["owner"],
             is_active=True,
         )
-        session.add(user)
         try:
             session.flush()
         except IntegrityError as e:
@@ -310,7 +317,7 @@ def register(request: Request, response: Response, body: RegisterIn) -> AuthToke
             user_id=user.username,
             username=user.username,
             tenant_id=str(user.tenant_id),
-            roles=user.roles_json or [],
+            roles=list_role_names(user),
         )
 
 
@@ -319,10 +326,7 @@ def login(request: Request, response: Response, body: LoginIn) -> AuthTokensOut:
     raw = _normalize_username(body.username)
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        if "@" in raw:
-            user = session.query(AuthUserRow).filter(AuthUserRow.email == raw).one_or_none()
-        else:
-            user = session.query(AuthUserRow).filter(AuthUserRow.username == raw).one_or_none()
+        user = get_user_by_username_or_email(session, value=raw)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         if not verify_password(body.password, user.password_hash):
@@ -348,7 +352,7 @@ def login(request: Request, response: Response, body: LoginIn) -> AuthTokensOut:
             user_id=user.username,
             username=user.username,
             tenant_id=str(user.tenant_id),
-            roles=user.roles_json or [],
+            roles=list_role_names(user),
         )
 
 
@@ -366,22 +370,17 @@ def refresh(request: Request, response: Response) -> AuthTokensOut:
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        token_row = (
-            session.query(AuthRefreshTokenRow)
-            .filter(AuthRefreshTokenRow.token_hash == token_hash)
-            .one_or_none()
-        )
+        token_row = get_refresh_token_by_hash(session, token_hash=token_hash)
         if token_row is None or token_row.revoked_at is not None:
             raise HTTPException(status_code=401, detail="Invalid refresh token")
         if token_row.expires_at <= now:
             raise HTTPException(status_code=401, detail="Refresh token expired")
 
-        user = session.query(AuthUserRow).filter(AuthUserRow.id == token_row.user_id).one_or_none()
+        user = get_user_by_id(session, user_id=token_row.user_id)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-        token_row.revoked_at = now
-        token_row.last_used_at = now
+        revoke_refresh_token(token_row, now=now)
 
         access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
         _persist_refresh_token(
@@ -399,7 +398,7 @@ def refresh(request: Request, response: Response) -> AuthTokensOut:
             user_id=user.username,
             username=user.username,
             tenant_id=str(user.tenant_id),
-            roles=user.roles_json or [],
+            roles=list_role_names(user),
         )
 
 
@@ -424,7 +423,7 @@ def password_reset_request(request: Request, body: PasswordResetRequestIn) -> Pa
     reset_token: str | None = None
 
     with session_scope(SessionLocal) as session:
-        user = session.query(AuthUserRow).filter(AuthUserRow.email == email).one_or_none()
+        user = get_user_by_email(session, email=email)
         if user is None or not user.is_active:
             logger.info(
                 "Password reset request ignored (user not found/inactive)",
@@ -439,13 +438,12 @@ def password_reset_request(request: Request, body: PasswordResetRequestIn) -> Pa
         token_hash = hash_password_reset_token(reset_token, secret=secret)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=cfg.auth_password_reset_minutes)
 
-        session.add(
-            AuthPasswordResetRow(
-                tenant_id=user.tenant_id,
-                user_id=user.id,
-                token_hash=token_hash,
-                expires_at=expires_at,
-            )
+        create_password_reset(
+            session,
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=expires_at,
         )
 
     try:
@@ -501,11 +499,7 @@ def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> di
     now = datetime.now(timezone.utc)
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        reset_row = (
-            session.query(AuthPasswordResetRow)
-            .filter(AuthPasswordResetRow.token_hash == token_hash)
-            .one_or_none()
-        )
+        reset_row = get_password_reset_by_hash(session, token_hash=token_hash)
         if reset_row is None or reset_row.used_at is not None or reset_row.expires_at <= now:
             logger.warning(
                 "Password reset confirm rejected (invalid/expired token)",
@@ -517,7 +511,7 @@ def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> di
             )
             raise HTTPException(status_code=401, detail="Invalid or expired reset token")
 
-        user = session.query(AuthUserRow).filter(AuthUserRow.id == reset_row.user_id).one_or_none()
+        user = get_user_by_id(session, user_id=reset_row.user_id)
         if user is None or not user.is_active:
             logger.warning(
                 "Password reset confirm rejected (invalid user)",
@@ -532,10 +526,7 @@ def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> di
         user.password_hash = hash_password(body.password)
         reset_row.used_at = now
 
-        session.query(AuthRefreshTokenRow).filter(
-            AuthRefreshTokenRow.user_id == user.id,
-            AuthRefreshTokenRow.revoked_at.is_(None),
-        ).update({AuthRefreshTokenRow.revoked_at: now})
+        revoke_refresh_tokens_for_user(session, user_id=user.id, now=now)
 
         logger.info(
             "Password reset confirmed",
@@ -556,14 +547,7 @@ def mfa_status(request: Request, identity: Identity = Depends(get_identity)) -> 
         user = _get_user_from_identity(session, identity)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid account")
-        factor = (
-            session.query(AuthMfaFactorRow)
-            .filter(
-                AuthMfaFactorRow.user_id == user.id,
-                AuthMfaFactorRow.factor_type == "totp",
-            )
-            .one_or_none()
-        )
+        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
         enabled = bool(factor and factor.enabled_at)
         pending = bool(factor and not factor.enabled_at)
         return MfaStatusOut(enabled=enabled, pending=pending)
@@ -579,30 +563,12 @@ def mfa_enroll_start(
         user = _get_user_from_identity(session, identity)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid account")
-        factor = (
-            session.query(AuthMfaFactorRow)
-            .filter(
-                AuthMfaFactorRow.user_id == user.id,
-                AuthMfaFactorRow.factor_type == "totp",
-            )
-            .one_or_none()
-        )
+        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
         if factor is not None and factor.enabled_at is not None:
             raise HTTPException(status_code=409, detail="MFA already enabled")
 
         secret = generate_totp_secret()
-        if factor is None:
-            factor = AuthMfaFactorRow(
-                tenant_id=user.tenant_id,
-                user_id=user.id,
-                factor_type="totp",
-                secret=secret,
-            )
-            session.add(factor)
-        else:
-            factor.secret = secret
-            factor.enabled_at = None
-            factor.last_used_at = None
+        factor = upsert_mfa_factor(session, user=user, secret=secret)
 
         otpauth_uri = build_otpauth_uri(
             secret=secret,
@@ -631,14 +597,7 @@ def mfa_enroll_verify(
         user = _get_user_from_identity(session, identity)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid account")
-        factor = (
-            session.query(AuthMfaFactorRow)
-            .filter(
-                AuthMfaFactorRow.user_id == user.id,
-                AuthMfaFactorRow.factor_type == "totp",
-            )
-            .one_or_none()
-        )
+        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
         if factor is None:
             raise HTTPException(status_code=404, detail="MFA enrollment not found")
         if factor.enabled_at is not None:
@@ -667,14 +626,7 @@ def mfa_disable(
         user = _get_user_from_identity(session, identity)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid account")
-        factor = (
-            session.query(AuthMfaFactorRow)
-            .filter(
-                AuthMfaFactorRow.user_id == user.id,
-                AuthMfaFactorRow.factor_type == "totp",
-            )
-            .one_or_none()
-        )
+        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
         if factor is None or factor.enabled_at is None:
             return {"enabled": False}
         if not verify_totp(
@@ -685,7 +637,7 @@ def mfa_disable(
             window=cfg.auth_mfa_totp_window,
         ):
             raise HTTPException(status_code=401, detail="Invalid MFA code")
-        session.delete(factor)
+        delete_mfa_factor(session, factor)
         return {"enabled": False}
 
 
@@ -714,7 +666,7 @@ def mfa_verify(request: Request, response: Response, body: MfaChallengeIn) -> Au
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        user = session.query(AuthUserRow).filter(AuthUserRow.id == user_uuid).one_or_none()
+        user = get_user_by_id(session, user_id=user_uuid)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid MFA token")
         tenant_claim = claims.get("tenant_id")
@@ -751,7 +703,7 @@ def mfa_verify(request: Request, response: Response, body: MfaChallengeIn) -> Au
             user_id=user.username,
             username=user.username,
             tenant_id=str(user.tenant_id),
-            roles=user.roles_json or [],
+            roles=list_role_names(user),
         )
 
 
@@ -764,11 +716,7 @@ def logout(request: Request, response: Response) -> dict[str, str]:
         token_hash = hash_refresh_token(raw, secret=secret)
         SessionLocal = request.app.state.SessionLocal
         with session_scope(SessionLocal) as session:
-            token_row = (
-                session.query(AuthRefreshTokenRow)
-                .filter(AuthRefreshTokenRow.token_hash == token_hash)
-                .one_or_none()
-            )
+            token_row = get_refresh_token_by_hash(session, token_hash=token_hash)
             if token_row is not None and token_row.revoked_at is None:
                 token_row.revoked_at = datetime.now(timezone.utc)
     _clear_refresh_cookie(response)

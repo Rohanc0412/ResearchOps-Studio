@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from db.models import SnippetEmbeddingRow, SnippetRow, SnapshotRow, SourceRow
 from db.models.source_authors import SourceAuthorRow
+from db.repositories.corpus import list_source_author_names
 
 
 
@@ -392,7 +393,7 @@ def get_snippet_with_context(
             "canonical_id": source.canonical_id,
             "type": source.source_type,
             "title": source.title,
-            "authors": source.authors_json,
+            "authors": list_source_author_names(source),
             "year": source.year,
             "url": source.url,
         },
