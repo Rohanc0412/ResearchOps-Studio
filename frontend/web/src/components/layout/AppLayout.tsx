@@ -1,24 +1,15 @@
-import type { ReactNode } from "react";
-import { useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 
 import { Sidebar } from "./Sidebar";
-import { Topbar } from "./Topbar";
 import { cx } from "../../utils/format";
 
-export type TopbarActionsContext = {
-  setTopbarActions: (actions: ReactNode | null) => void;
-};
-
 export function AppLayout() {
-  const [topbarActions, setTopbarActions] = useState<ReactNode | null>(null);
   const location = useLocation();
   const isFullBleed = location.pathname.includes("/chats/");
 
   return (
     <div className="min-h-screen bg-slate-950 p-4 md:p-6">
-      <div className="flex h-[calc(100vh-2rem)] flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-soft md:h-[calc(100vh-3rem)]">
-        <Topbar actions={topbarActions} />
+      <div className="flex h-[calc(100vh-2rem)] overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-soft md:h-[calc(100vh-3rem)]">
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <Sidebar />
           <main
@@ -27,11 +18,10 @@ export function AppLayout() {
               isFullBleed ? "p-0" : "px-6 py-6"
             )}
           >
-            <Outlet context={{ setTopbarActions }} />
+            <Outlet />
           </main>
         </div>
       </div>
     </div>
   );
 }
-

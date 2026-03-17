@@ -134,3 +134,9 @@ def hash_refresh_token(token: str, *, secret: str) -> str:
     if not token:
         raise ValueError("Refresh token required")
     return hmac.new(secret.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def hash_password_reset_token(token: str, *, secret: str) -> str:
+    if not token:
+        raise ValueError("Password reset token required")
+    return hmac.new(secret.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()

@@ -1,28 +1,16 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
-def _resolve_env_file() -> str | None:
-    cwd = Path.cwd().resolve()
-    for base in (cwd, *cwd.parents):
-        candidate = base / ".env"
-        if candidate.exists():
-            return str(candidate)
-    for base in Path(__file__).resolve().parents:
-        candidate = base / ".env"
-        if candidate.exists():
-            return str(candidate)
-    return None
+from researchops_core.env import resolve_env_file
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=_resolve_env_file() or ".env",
+        env_file=resolve_env_file() or ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )

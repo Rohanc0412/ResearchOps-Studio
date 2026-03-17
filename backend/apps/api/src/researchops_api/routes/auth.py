@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -7,20 +8,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
-from db.models.auth_external_identities import AuthExternalIdentityRow
-from db.models.auth_mfa_factors import AuthMfaFactorRow
-from db.models.auth_refresh_tokens import AuthRefreshTokenRow
-from db.models.auth_users import AuthUserRow
-from db.session import session_scope
 from researchops_api.middlewares.auth import get_identity
+from researchops_api.utils.email import send_password_reset_otp
 from researchops_core.auth.config import get_auth_config
 from researchops_core.auth.identity import Identity
-from researchops_core.auth.google import verify_google_id_token
-from researchops_core.auth.jwks_cache import JWKSCache
 from researchops_core.auth.mfa import build_otpauth_uri, generate_totp_secret, verify_totp
 from researchops_core.auth.passwords import hash_password, verify_password
 from researchops_core.auth.tokens import (
     generate_refresh_token,
+    hash_password_reset_token,
     hash_refresh_token,
     issue_access_token,
     issue_mfa_challenge_token,
@@ -29,13 +25,29 @@ from researchops_core.auth.tokens import (
 from researchops_core.settings import get_settings
 from researchops_core.tenancy import tenant_uuid
 
+from db.models.auth_mfa_factors import AuthMfaFactorRow
+from db.models.auth_password_resets import AuthPasswordResetRow
+from db.models.auth_refresh_tokens import AuthRefreshTokenRow
+from db.models.auth_users import AuthUserRow
+from db.session import session_scope
+
 router = APIRouter(tags=["auth"])
+logger = logging.getLogger(__name__)
+
+
+def _email_domain(value: str) -> str | None:
+    value = (value or "").strip().lower()
+    if "@" not in value:
+        return None
+    domain = value.split("@", 1)[1].strip()
+    return domain or None
 
 
 class RegisterIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     username: str = Field(min_length=3, max_length=120)
+    email: str = Field(min_length=3, max_length=200)
     password: str = Field(min_length=8, max_length=200)
     tenant_id: str | None = None
 
@@ -43,7 +55,7 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    username: str = Field(min_length=3, max_length=120)
+    username: str = Field(min_length=3, max_length=200)
     password: str = Field(min_length=1, max_length=200)
 
 
@@ -59,13 +71,6 @@ class AuthTokensOut(BaseModel):
     roles: list[str] = []
     mfa_required: bool = False
     mfa_token: str | None = None
-
-
-class GoogleLoginIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id_token: str = Field(min_length=1, max_length=4096)
-    tenant_id: str | None = None
 
 
 class MfaEnrollStartOut(BaseModel):
@@ -99,6 +104,26 @@ class MfaStatusOut(BaseModel):
     pending: bool
 
 
+class PasswordResetRequestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=200)
+
+
+class PasswordResetConfirmIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=6, max_length=10)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class PasswordResetRequestOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str = "ok"
+    reset_token: str | None = None
+
+
 @router.get("/me")
 def me(identity: Identity = Depends(get_identity)) -> dict[str, object]:
     return {
@@ -113,8 +138,16 @@ def _normalize_username(value: str) -> str:
     return value.strip().lower()
 
 
+def _normalize_email(value: str) -> str:
+    return value.strip().lower()
+
+
 def _refresh_secret(cfg) -> str:
     return (cfg.auth_refresh_token_secret or cfg.auth_jwt_secret or "").strip()
+
+
+def _password_reset_secret(cfg) -> str:
+    return (cfg.auth_password_reset_secret or cfg.auth_jwt_secret or "").strip()
 
 
 def _refresh_cookie_settings() -> dict[str, object]:
@@ -189,18 +222,6 @@ def _persist_refresh_token(
     )
 
 
-_GOOGLE_JWKS_CACHES: dict[str, JWKSCache] = {}
-
-
-def _google_jwks_cache(cfg) -> JWKSCache:
-    issuer = cfg.auth_google_issuer.rstrip("/")
-    cache = _GOOGLE_JWKS_CACHES.get(issuer)
-    if cache is None:
-        cache = JWKSCache(issuer=issuer, cache_seconds=cfg.auth_google_jwks_cache_seconds)
-        _GOOGLE_JWKS_CACHES[issuer] = cache
-    return cache
-
-
 def _mfa_factor(session, *, user_id) -> AuthMfaFactorRow | None:
     return (
         session.query(AuthMfaFactorRow)
@@ -253,6 +274,7 @@ def register(request: Request, response: Response, body: RegisterIn) -> AuthToke
         raise HTTPException(status_code=403, detail="Registration disabled")
 
     username = _normalize_username(body.username)
+    email = _normalize_email(body.email)
     tenant_id = tenant_uuid(body.tenant_id) if body.tenant_id else uuid4()
     password_hash = hash_password(body.password)
 
@@ -261,6 +283,7 @@ def register(request: Request, response: Response, body: RegisterIn) -> AuthToke
         user = AuthUserRow(
             tenant_id=tenant_id,
             username=username,
+            email=email,
             password_hash=password_hash,
             roles_json=["owner"],
             is_active=True,
@@ -293,14 +316,13 @@ def register(request: Request, response: Response, body: RegisterIn) -> AuthToke
 
 @router.post("/auth/login", response_model=AuthTokensOut)
 def login(request: Request, response: Response, body: LoginIn) -> AuthTokensOut:
-    username = _normalize_username(body.username)
+    raw = _normalize_username(body.username)
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        user = (
-            session.query(AuthUserRow)
-            .filter(AuthUserRow.username == username)
-            .one_or_none()
-        )
+        if "@" in raw:
+            user = session.query(AuthUserRow).filter(AuthUserRow.email == raw).one_or_none()
+        else:
+            user = session.query(AuthUserRow).filter(AuthUserRow.username == raw).one_or_none()
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         if not verify_password(body.password, user.password_hash):
@@ -318,126 +340,6 @@ def login(request: Request, response: Response, body: LoginIn) -> AuthTokensOut:
             response,
             refresh_token,
             max_age_seconds=int((refresh_expires - datetime.now(timezone.utc)).total_seconds()),
-        )
-
-        return AuthTokensOut(
-            access_token=access_token,
-            expires_in=expires_in,
-            user_id=user.username,
-            username=user.username,
-            tenant_id=str(user.tenant_id),
-            roles=user.roles_json or [],
-        )
-
-
-@router.post("/auth/google", response_model=AuthTokensOut)
-def google_login(request: Request, response: Response, body: GoogleLoginIn) -> AuthTokensOut:
-    cfg = get_auth_config()
-    if not cfg.auth_google_client_id:
-        raise HTTPException(status_code=500, detail="Google login not configured")
-    issuer = cfg.auth_google_issuer.rstrip("/")
-    try:
-        claims = verify_google_id_token(
-            token=body.id_token,
-            client_id=cfg.auth_google_client_id,
-            issuer=issuer,
-            clock_skew_seconds=cfg.auth_clock_skew_seconds,
-            jwks_cache=_google_jwks_cache(cfg),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid Google token") from e
-
-    email = claims.get("email")
-    email_verified = claims.get("email_verified")
-    sub = claims.get("sub")
-    if not isinstance(email, str) or not email.strip():
-        raise HTTPException(status_code=400, detail="Google token missing email")
-    if email_verified is False:
-        raise HTTPException(status_code=401, detail="Google email not verified")
-    if not isinstance(sub, str) or not sub.strip():
-        raise HTTPException(status_code=401, detail="Google token missing subject")
-
-    SessionLocal = request.app.state.SessionLocal
-    now = datetime.now(timezone.utc)
-    with session_scope(SessionLocal) as session:
-        identity = (
-            session.query(AuthExternalIdentityRow)
-            .filter(
-                AuthExternalIdentityRow.provider == "google",
-                AuthExternalIdentityRow.provider_user_id == sub,
-            )
-            .one_or_none()
-        )
-        user = None
-        if identity is not None:
-            user = (
-                session.query(AuthUserRow)
-                .filter(AuthUserRow.id == identity.user_id)
-                .one_or_none()
-            )
-            if user is None or not user.is_active:
-                raise HTTPException(status_code=401, detail="Invalid account")
-            identity.last_used_at = now
-        else:
-            username = _normalize_username(email)
-            user = (
-                session.query(AuthUserRow)
-                .filter(AuthUserRow.username == username)
-                .one_or_none()
-            )
-            if user is not None:
-                if not cfg.auth_google_allow_link_existing:
-                    raise HTTPException(status_code=409, detail="Account already exists")
-                if not user.is_active:
-                    raise HTTPException(status_code=401, detail="Invalid account")
-                identity = AuthExternalIdentityRow(
-                    tenant_id=user.tenant_id,
-                    user_id=user.id,
-                    provider="google",
-                    provider_user_id=sub,
-                    email=username,
-                    last_used_at=now,
-                )
-                session.add(identity)
-            else:
-                if not cfg.auth_allow_register:
-                    raise HTTPException(status_code=403, detail="Registration disabled")
-                tenant_id = tenant_uuid(body.tenant_id) if body.tenant_id else uuid4()
-                password_hash = hash_password(generate_refresh_token())
-                user = AuthUserRow(
-                    tenant_id=tenant_id,
-                    username=username,
-                    password_hash=password_hash,
-                    roles_json=["owner"],
-                    is_active=True,
-                )
-                session.add(user)
-                session.flush()
-                identity = AuthExternalIdentityRow(
-                    tenant_id=user.tenant_id,
-                    user_id=user.id,
-                    provider="google",
-                    provider_user_id=sub,
-                    email=username,
-                    last_used_at=now,
-                )
-                session.add(identity)
-
-        if user is None:
-            raise HTTPException(status_code=401, detail="Invalid account")
-
-        mfa_factor = _mfa_factor(session, user_id=user.id)
-        if mfa_factor is not None:
-            return _issue_mfa_challenge(user)
-
-        access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
-        _persist_refresh_token(
-            session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
-        )
-        _set_refresh_cookie(
-            response,
-            refresh_token,
-            max_age_seconds=int((refresh_expires - now).total_seconds()),
         )
 
         return AuthTokensOut(
@@ -499,6 +401,152 @@ def refresh(request: Request, response: Response) -> AuthTokensOut:
             tenant_id=str(user.tenant_id),
             roles=user.roles_json or [],
         )
+
+
+@router.post("/auth/password/reset/request", response_model=PasswordResetRequestOut)
+def password_reset_request(request: Request, body: PasswordResetRequestIn) -> PasswordResetRequestOut:
+    cfg = get_auth_config()
+    settings = get_settings()
+    secret = _password_reset_secret(cfg)
+    if not secret:
+        raise HTTPException(status_code=500, detail="Password reset secret not configured")
+
+    email = _normalize_email(body.email)
+    logger.info(
+        "Password reset requested",
+        extra={
+            "event": "auth.password_reset.request",
+            "email_domain": _email_domain(email),
+            "environment": settings.environment,
+        },
+    )
+    SessionLocal = request.app.state.SessionLocal
+    reset_token: str | None = None
+
+    with session_scope(SessionLocal) as session:
+        user = session.query(AuthUserRow).filter(AuthUserRow.email == email).one_or_none()
+        if user is None or not user.is_active:
+            logger.info(
+                "Password reset request ignored (user not found/inactive)",
+                extra={
+                    "event": "auth.password_reset.request.ignored",
+                    "email_domain": _email_domain(email),
+                },
+            )
+            return PasswordResetRequestOut(status="ok")
+
+        reset_token = f"{uuid4().int % 1000000:06d}"
+        token_hash = hash_password_reset_token(reset_token, secret=secret)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=cfg.auth_password_reset_minutes)
+
+        session.add(
+            AuthPasswordResetRow(
+                tenant_id=user.tenant_id,
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+            )
+        )
+
+    try:
+        send_password_reset_otp(to_email=user.email, otp=reset_token)
+        logger.info(
+            "Password reset OTP email sent",
+            extra={
+                "event": "auth.password_reset.otp.sent",
+                "email_domain": _email_domain(user.email),
+                "environment": settings.environment,
+            },
+        )
+    except RuntimeError as e:
+        logger.exception(
+            "Password reset OTP email failed",
+            extra={
+                "event": "auth.password_reset.otp.failed",
+                "email_domain": _email_domain(user.email),
+                "environment": settings.environment,
+                "reason": str(e),
+            },
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    except Exception as e:
+        logger.exception(
+            "Password reset OTP email failed",
+            extra={
+                "event": "auth.password_reset.otp.failed",
+                "email_domain": _email_domain(user.email),
+                "environment": settings.environment,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Failed to send reset email") from e
+    return PasswordResetRequestOut(status="ok")
+
+
+@router.post("/auth/password/reset/confirm")
+def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> dict[str, str]:
+    cfg = get_auth_config()
+    secret = _password_reset_secret(cfg)
+    if not secret:
+        raise HTTPException(status_code=500, detail="Password reset secret not configured")
+
+    token_hash = hash_password_reset_token(body.token, secret=secret)
+    logger.info(
+        "Password reset confirm attempted",
+        extra={
+            "event": "auth.password_reset.confirm",
+            "token_len": len(body.token or ""),
+            "token_hash_prefix": token_hash[:8],
+        },
+    )
+    now = datetime.now(timezone.utc)
+    SessionLocal = request.app.state.SessionLocal
+    with session_scope(SessionLocal) as session:
+        reset_row = (
+            session.query(AuthPasswordResetRow)
+            .filter(AuthPasswordResetRow.token_hash == token_hash)
+            .one_or_none()
+        )
+        if reset_row is None or reset_row.used_at is not None or reset_row.expires_at <= now:
+            logger.warning(
+                "Password reset confirm rejected (invalid/expired token)",
+                extra={
+                    "event": "auth.password_reset.confirm.rejected",
+                    "token_hash_prefix": token_hash[:8],
+                    "reason": "invalid_or_expired_token",
+                },
+            )
+            raise HTTPException(status_code=401, detail="Invalid or expired reset token")
+
+        user = session.query(AuthUserRow).filter(AuthUserRow.id == reset_row.user_id).one_or_none()
+        if user is None or not user.is_active:
+            logger.warning(
+                "Password reset confirm rejected (invalid user)",
+                extra={
+                    "event": "auth.password_reset.confirm.rejected",
+                    "token_hash_prefix": token_hash[:8],
+                    "reason": "invalid_user",
+                },
+            )
+            raise HTTPException(status_code=401, detail="Invalid or expired reset token")
+
+        user.password_hash = hash_password(body.password)
+        reset_row.used_at = now
+
+        session.query(AuthRefreshTokenRow).filter(
+            AuthRefreshTokenRow.user_id == user.id,
+            AuthRefreshTokenRow.revoked_at.is_(None),
+        ).update({AuthRefreshTokenRow.revoked_at: now})
+
+        logger.info(
+            "Password reset confirmed",
+            extra={
+                "event": "auth.password_reset.confirmed",
+                "tenant_id": str(user.tenant_id),
+                "user_id": str(user.id),
+            },
+        )
+
+    return {"status": "ok"}
 
 
 @router.get("/auth/mfa/status", response_model=MfaStatusOut)

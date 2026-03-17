@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 
 import { ChatViewPage } from "../ChatViewPage";
 
@@ -16,11 +16,16 @@ vi.mock("../../api/projects", () => ({
   useProjectQuery: (...args: unknown[]) => mockUseProjectQuery(...args)
 }));
 
-vi.mock("../../api/chat", () => ({
-  useChatConversationsQuery: (...args: unknown[]) => mockUseChatConversationsQuery(...args),
-  useChatMessagesInfiniteQuery: (...args: unknown[]) => mockUseChatMessagesInfiniteQuery(...args),
-  useSendChatMessageMutationInfinite: (...args: unknown[]) => mockUseSendChatMessageMutationInfinite(...args)
-}));
+vi.mock("../../api/chat", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/chat")>();
+  return {
+    ...actual,
+    useChatConversationsQuery: (...args: unknown[]) => mockUseChatConversationsQuery(...args),
+    useChatMessagesInfiniteQuery: (...args: unknown[]) => mockUseChatMessagesInfiniteQuery(...args),
+    useSendChatMessageMutationInfinite: (...args: unknown[]) =>
+      mockUseSendChatMessageMutationInfinite(...args)
+  };
+});
 
 vi.mock("../../api/runs", () => ({
   useCancelRunMutation: (...args: unknown[]) => mockUseCancelRunMutation(...args),
@@ -31,11 +36,17 @@ vi.mock("../../hooks/useSSE", () => ({
   useSSE: (...args: unknown[]) => mockUseSSE(...args)
 }));
 
+function TestLayout() {
+  return <Outlet />;
+}
+
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={["/projects/proj-1/chats/chat-1"]}>
       <Routes>
-        <Route path="/projects/:projectId/chats/:chatId" element={<ChatViewPage />} />
+        <Route element={<TestLayout />}>
+          <Route path="/projects/:projectId/chats/:chatId" element={<ChatViewPage />} />
+        </Route>
       </Routes>
     </MemoryRouter>
   );
@@ -144,7 +155,8 @@ describe("ChatViewPage", () => {
 
     renderPage();
 
-    fireEvent.click(screen.getByText("Run research report"));
+    const runButtons = screen.getAllByText("Run research report");
+    fireEvent.click(runButtons[0]!);
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(

@@ -55,6 +55,24 @@ def get_conversation(
     return session.execute(stmt).scalar_one_or_none()
 
 
+def get_conversation_for_user(
+    *,
+    session: Session,
+    tenant_id: UUID,
+    conversation_id: UUID,
+    created_by_user_id: str,
+    for_update: bool = False,
+) -> ChatConversationRow | None:
+    stmt = select(ChatConversationRow).where(
+        ChatConversationRow.tenant_id == tenant_id,
+        ChatConversationRow.id == conversation_id,
+        ChatConversationRow.created_by_user_id == created_by_user_id,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return session.execute(stmt).scalar_one_or_none()
+
+
 def list_conversations(
     *,
     session: Session,
@@ -66,6 +84,32 @@ def list_conversations(
     sort_ts = func.coalesce(ChatConversationRow.last_message_at, ChatConversationRow.created_at)
     stmt: Select[tuple[ChatConversationRow]] = select(ChatConversationRow).where(
         ChatConversationRow.tenant_id == tenant_id
+    )
+    if project_id is not None:
+        stmt = stmt.where(ChatConversationRow.project_id == project_id)
+    if cursor is not None:
+        cursor_ts, cursor_id = cursor
+        stmt = stmt.where(
+            (sort_ts < cursor_ts)
+            | ((sort_ts == cursor_ts) & (ChatConversationRow.id < cursor_id))
+        )
+    stmt = stmt.order_by(sort_ts.desc(), ChatConversationRow.id.desc()).limit(limit)
+    return list(session.execute(stmt).scalars().all())
+
+
+def list_conversations_for_user(
+    *,
+    session: Session,
+    tenant_id: UUID,
+    created_by_user_id: str,
+    project_id: UUID | None,
+    limit: int,
+    cursor: tuple[datetime, UUID] | None,
+) -> list[ChatConversationRow]:
+    sort_ts = func.coalesce(ChatConversationRow.last_message_at, ChatConversationRow.created_at)
+    stmt: Select[tuple[ChatConversationRow]] = select(ChatConversationRow).where(
+        ChatConversationRow.tenant_id == tenant_id,
+        ChatConversationRow.created_by_user_id == created_by_user_id,
     )
     if project_id is not None:
         stmt = stmt.where(ChatConversationRow.project_id == project_id)

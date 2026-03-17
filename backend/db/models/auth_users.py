@@ -15,12 +15,14 @@ class AuthUserRow(Base):
     __tablename__ = "auth_users"
     __table_args__ = (
         UniqueConstraint("username", name="uq_auth_users_username"),
+        UniqueConstraint("email", name="uq_auth_users_email"),
         Index("ix_auth_users_tenant_id", "tenant_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
     username: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(200), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     roles_json: Mapped[list[str]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]"

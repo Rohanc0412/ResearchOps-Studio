@@ -1,10 +1,10 @@
 // TECH: React hooks used for component lifecycle, memoization, refs (DOM access), and local UI state.
 // PLAIN: Tools React gives us to remember values, react to changes, and update what the user sees.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // TECH: React Router helpers for navigation and reading URL parameters/state.
 // PLAIN: Lets the page know which chat/project to show and lets us move to other pages.
-import { Link, useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 // TECH: Icon components (SVG) from lucide-react for consistent UI icons.
 // PLAIN: Small pictures (icons) used on buttons like back, download, send, etc.
@@ -53,7 +53,6 @@ import { apiFetchJson } from "../api/client";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
 import { Button } from "../components/ui/Button";
-import type { TopbarActionsContext } from "../components/layout/AppLayout";
 
 // TECH: SSE (Server-Sent Events) hook for real-time streaming updates from the server.
 // PLAIN: Lets the page receive live progress updates while a report is being created.
@@ -231,6 +230,16 @@ function buildFinalResponse(artifacts: Artifact[]): string {
   // TECH: Fallback string when no artifact text is available.
   // PLAIN: A default message when the system finished but didn???t return text here.
   return "Run completed. Output is available in artifacts.";
+}
+
+function extractLatestRunId(messages: ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message || message.type !== "run_started") continue;
+    const runId = message.content_json?.["run_id"];
+    if (typeof runId === "string" && runId.trim()) return runId;
+  }
+  return null;
 }
 
 /**
@@ -1037,10 +1046,6 @@ export function ChatViewPage() {
   // PLAIN: Lets us jump to another page when a button is clicked.
   const navigate = useNavigate();
 
-  // TECH: useOutletContext provides access to topbar action controls from AppLayout.
-  // PLAIN: Lets this page put buttons in the top bar.
-  const { setTopbarActions } = useOutletContext<TopbarActionsContext>();
-
   // TECH: Normalize project ID to empty string if undefined for hook usage.
   // PLAIN: Make sure we always have a string ID to use.
   const id = projectId ?? "";
@@ -1154,41 +1159,14 @@ export function ChatViewPage() {
   // TECH: Flatten paginated pages into one list for rendering.
   // PLAIN: Turn pages into a single message list.
   const messages = flattenInfiniteMessages(messagesQuery.data);
+  const latestRunId = useMemo(() => extractLatestRunId(messages), [messages]);
+  const runHydrationRef = useRef<{ chatId: string | null; runId: string | null }>({
+    chatId: null,
+    runId: null
+  });
 
   // TECH: Build topbar actions for share/export.
   // PLAIN: Put Share and Export buttons in the header.
-  const topbarActions = useMemo(
-    () => (
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          onClick={() => setShowShareModal(true)}
-          disabled={report.sections.length === 0}
-        >
-          Share
-        </Button>
-        <Button
-          type="button"
-          onClick={() => setShowExportModal(true)}
-          disabled={report.sections.length === 0}
-        >
-          Export
-        </Button>
-      </div>
-    ),
-    [report.sections.length, setShowExportModal, setShowShareModal]
-  );
-
-  // TECH: Sync topbar actions when report state changes.
-  // PLAIN: Keep header buttons in sync with this chat.
-  useEffect(() => {
-    setTopbarActions(topbarActions);
-  }, [setTopbarActions, topbarActions]);
-
-  // TECH: Clear topbar actions when leaving this page.
-  // PLAIN: Remove chat-specific buttons on navigation.
-  useEffect(() => () => setTopbarActions(null), [setTopbarActions]);
-
   // TECH: Restore saved report whenever the conversation changes.
   // PLAIN: When you open a chat, bring back its last report.
   useEffect(() => {
@@ -1370,6 +1348,32 @@ export function ChatViewPage() {
 
   // TECH (Function Summary): Handles end-of-run logic: fetches artifacts, parses markdown, updates report, resets run state.
   // PLAIN (Function Summary): When the job finishes, it grabs the final result and adds it into the report view.
+  const hydrateReportFromArtifacts = useCallback(
+    async (runId: string) => {
+      const artifacts = await apiFetchJson(`/runs/${encodeURIComponent(runId)}/artifacts`, {
+        schema: ArtifactsSchema
+      }).catch(() => [] as Artifact[]);
+
+      const response = buildFinalResponse(artifacts);
+      if (!response || response === "Run completed. Output is available in artifacts.") return;
+
+      const parsedSections = parseMarkdownToSections(response);
+      if (parsedSections.length === 0) return;
+
+      setReport((prev) => ({
+        ...prev,
+        sections: [...prev.sections, ...parsedSections]
+      }));
+
+      const firstSection = parsedSections[0];
+      if (firstSection) {
+        setHighlightedSection(firstSection.id);
+        setTimeout(() => setHighlightedSection(null), 2000);
+      }
+    },
+    [setHighlightedSection, setReport]
+  );
+
   async function handleRunCompletion(status: ActiveRunStatus) {
     // TECH: Must have an activeRun to know runId.
     // PLAIN: If there???s no job, there???s nothing to finish.
@@ -1390,41 +1394,7 @@ export function ChatViewPage() {
     // TECH: On success, fetch artifacts for this run from the server.
     // PLAIN: If it finished, download the result files from the system.
     if (status === "succeeded") {
-      // TECH: API call expects Artifact[] response; schema validation protects against malformed data.
-      // PLAIN: Ask the server for the run???s outputs, and make sure they look correct.
-      const artifacts = await apiFetchJson(`/runs/${encodeURIComponent(runId)}/artifacts`, {
-        schema: ArtifactsSchema
-      }).catch(() => [] as Artifact[]);
-
-      // TECH: Build final response text from artifact metadata.
-      // PLAIN: Pick the best text output to show in the report.
-      const response = buildFinalResponse(artifacts);
-
-      // Add sections to the report based on the response
-      // TECH: Parse markdown into structured sections so the right panel can render consistently.
-      // PLAIN: Convert the text into organized report sections.
-      if (response && response !== "Run completed. Output is available in artifacts.") {
-        const parsedSections = parseMarkdownToSections(response);
-
-        // TECH: Only update report if parser produced sections with content.
-        // PLAIN: Only add something if we actually got useful sections.
-        if (parsedSections.length > 0) {
-          // TECH: Append sections to existing report, preserving previous content.
-          // PLAIN: Add new sections without deleting the old ones.
-          setReport((prev) => ({
-            ...prev,
-            sections: [...prev.sections, ...parsedSections]
-          }));
-
-          // TECH: Highlight first newly inserted section for UX ???new content??? indication.
-          // PLAIN: Briefly highlight the new section so you can spot it.
-          const firstSection = parsedSections[0];
-          if (firstSection) {
-            setHighlightedSection(firstSection.id);
-            setTimeout(() => setHighlightedSection(null), 2000);
-          }
-        }
-      }
+      await hydrateReportFromArtifacts(runId);
     }
 
     // TECH: Cleanup: clear active run and reset last event id so next run starts clean.
@@ -1489,6 +1459,56 @@ export function ChatViewPage() {
       );
     }
   }
+
+  // TECH: If the user reloads/reopens the chat while a run is running (or finished), try to recover it.
+  // PLAIN: If you come back later, the page should still show the report (or resume progress).
+  useEffect(() => {
+    if (!chatId) return;
+    if (!latestRunId) return;
+    if (activeRun) return;
+    if (report.sections.length > 0) return;
+
+    if (runHydrationRef.current.chatId === chatId && runHydrationRef.current.runId === latestRunId) return;
+    runHydrationRef.current = { chatId, runId: latestRunId };
+
+    void (async () => {
+      const run = await apiFetchJson(`/runs/${encodeURIComponent(latestRunId)}`, {
+        schema: RunSchema
+      }).catch(() => null as Run | null);
+
+      if (!run) return;
+
+      if (run.status === "succeeded") {
+        await hydrateReportFromArtifacts(latestRunId);
+        return;
+      }
+
+      if (run.status === "failed") {
+        const message = run.error_message ?? "The run failed.";
+        setActiveRun({
+          runId: latestRunId,
+          status: "failed",
+          primaryText: "Something went wrong",
+          secondaryText: message,
+          startedAt: run.created_at ?? new Date().toISOString(),
+          error: message
+        });
+        return;
+      }
+
+      if (run.status === "canceled") return;
+
+      // queued/created/running/blocked => resume progress banner + SSE
+      setActiveRun({
+        runId: latestRunId,
+        status: "running",
+        primaryText: "Resuming report generation…",
+        secondaryText: "Checking progress…",
+        startedAt: run.created_at ?? new Date().toISOString()
+      });
+      lastEventIdRef.current = 0;
+    })();
+  }, [activeRun, chatId, hydrateReportFromArtifacts, latestRunId, report.sections.length]);
 
   // TECH (Function Summary): Sends a user message to backend, starts run tracking if assistant responds with run_started.
   // PLAIN (Function Summary): Sends the chat message and starts tracking the report job if one begins.

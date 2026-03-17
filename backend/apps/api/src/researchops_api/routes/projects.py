@@ -19,11 +19,7 @@ from researchops_orchestrator import RESEARCH_JOB_TYPE, enqueue_run_job
 
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
-from db.services.truth import create_project, create_run, list_projects
-from db.services.truth import (
-    get_project as get_project_row,
-    get_run_by_client_request_id,
-)
+from db.services.truth import create_project, create_run, get_project_for_user, get_run_by_client_request_id, list_projects_for_user
 from db.session import session_scope
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -73,7 +69,12 @@ def patch_project(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        p = get_project_row(session=session, tenant_id=_tenant_uuid(identity), project_id=project_id)
+        p = get_project_for_user(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            project_id=project_id,
+            created_by=identity.user_id,
+        )
         if p is None:
             raise HTTPException(status_code=404, detail="project not found")
         if body.name is not None:
@@ -109,7 +110,11 @@ def post_project(
 def get_projects(request: Request, identity: Identity = IdentityDep) -> list[ProjectOut]:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        rows = list_projects(session=session, tenant_id=_tenant_uuid(identity))
+        rows = list_projects_for_user(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            created_by=identity.user_id,
+        )
         return [ProjectOut.model_validate(p) for p in rows]
 
 
@@ -119,8 +124,11 @@ def get_project_by_id(
 ) -> ProjectOut:
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        p = get_project_row(
-            session=session, tenant_id=_tenant_uuid(identity), project_id=project_id
+        p = get_project_for_user(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            project_id=project_id,
+            created_by=identity.user_id,
         )
         if p is None:
             raise HTTPException(status_code=404, detail="project not found")
@@ -138,6 +146,15 @@ def post_run_for_project(
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
+        p = get_project_for_user(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            project_id=project_id,
+            created_by=identity.user_id,
+        )
+        if p is None:
+            raise HTTPException(status_code=404, detail="project not found")
+
         question = (body.question or body.prompt or "").strip()
         if not question:
             raise HTTPException(status_code=400, detail="question is required")

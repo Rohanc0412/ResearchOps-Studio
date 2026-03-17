@@ -1,28 +1,16 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
-def _resolve_env_file() -> str | None:
-    cwd = Path.cwd().resolve()
-    for base in (cwd, *cwd.parents):
-        candidate = base / ".env"
-        if candidate.exists():
-            return str(candidate)
-    for base in Path(__file__).resolve().parents:
-        candidate = base / ".env"
-        if candidate.exists():
-            return str(candidate)
-    return None
+from researchops_core.env import resolve_env_file
 
 
 class AuthConfig(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=_resolve_env_file() or ".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=resolve_env_file() or ".env", env_file_encoding="utf-8", extra="ignore"
     )
 
     auth_required: bool = Field(default=True, validation_alias="AUTH_REQUIRED")
@@ -67,19 +55,21 @@ class AuthConfig(BaseSettings):
     auth_mfa_totp_window: int = Field(
         default=1, ge=0, le=5, validation_alias="AUTH_MFA_TOTP_WINDOW"
     )
+    auth_password_reset_minutes: int = Field(
+        default=30, ge=5, validation_alias="AUTH_PASSWORD_RESET_MINUTES"
+    )
+    auth_password_reset_secret: str | None = Field(
+        default=None, validation_alias="AUTH_PASSWORD_RESET_SECRET"
+    )
 
-    auth_google_client_id: str | None = Field(
-        default=None, validation_alias="AUTH_GOOGLE_CLIENT_ID"
-    )
-    auth_google_issuer: str = Field(
-        default="https://accounts.google.com", validation_alias="AUTH_GOOGLE_ISSUER"
-    )
-    auth_google_allow_link_existing: bool = Field(
-        default=True, validation_alias="AUTH_GOOGLE_ALLOW_LINK_EXISTING"
-    )
-    auth_google_jwks_cache_seconds: int = Field(
-        default=300, ge=30, validation_alias="AUTH_GOOGLE_JWKS_CACHE_SECONDS"
-    )
+    smtp_host: str | None = Field(default=None, validation_alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, validation_alias="SMTP_PORT")
+    smtp_user: str | None = Field(default=None, validation_alias="SMTP_USER")
+    smtp_password: str | None = Field(default=None, validation_alias="SMTP_PASSWORD")
+    smtp_starttls: bool = Field(default=True, validation_alias="SMTP_STARTTLS")
+    smtp_from_name: str = Field(default="noreply researchstudio", validation_alias="SMTP_FROM_NAME")
+    smtp_from_email: str | None = Field(default=None, validation_alias="SMTP_FROM_EMAIL")
+
 
     def validate_for_startup(self, *, environment: str) -> None:
         if self.dev_bypass_auth and environment != "local":
