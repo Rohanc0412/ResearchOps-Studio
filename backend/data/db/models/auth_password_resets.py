@@ -11,12 +11,7 @@ from db.models.base import Base
 
 class AuthPasswordResetRow(Base):
     __tablename__ = "auth_password_resets"
-    __table_args__ = (
-        UniqueConstraint("token_hash", name="uq_auth_password_resets_hash"),
-        Index("ix_auth_password_resets_user_id", "user_id"),
-        Index("ix_auth_password_resets_tenant_id", "tenant_id"),
-        Index("ix_auth_password_resets_expires_at", "expires_at"),
-    )
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_auth_password_resets_hash"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)

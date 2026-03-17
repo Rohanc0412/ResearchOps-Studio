@@ -37,8 +37,8 @@ class SectionEvidenceRow(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
 
-    run: Mapped[RunRow] = relationship("RunRow", overlaps="section_evidence")
-    snippet: Mapped[SnippetRow] = relationship("SnippetRow", overlaps="evidence_sections")
+    run: Mapped[RunRow] = relationship("RunRow", overlaps="section_evidence,snippet")
+    snippet: Mapped[SnippetRow] = relationship("SnippetRow", overlaps="evidence_sections,run")
 
 
 SectionEvidenceRow.__table__.append_constraint(

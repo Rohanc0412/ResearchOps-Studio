@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import enum
 from typing import TYPE_CHECKING
 from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     DateTime,
-    Enum,
     ForeignKeyConstraint,
     Index,
     String,
@@ -26,22 +24,13 @@ if TYPE_CHECKING:
     from db.models.runs import RunRow
 
 
-class ProjectLastRunStatusDb(str, enum.Enum):
-    created = "created"
-    queued = "queued"
-    running = "running"
-    failed = "failed"
-    succeeded = "succeeded"
-    canceled = "canceled"
-
-
 class ProjectRow(Base):
     __tablename__ = "projects"
     __table_args__ = (
         UniqueConstraint("tenant_id", "name", name="uq_projects_tenant_name"),
         UniqueConstraint("tenant_id", "id", name="uq_projects_tenant_id_id"),
         Index("ix_projects_tenant_created_at", "tenant_id", "created_at"),
-        Index("ix_projects_tenant_last_activity_at", "tenant_id", "last_activity_at"),
+        Index("ix_projects_tenant_updated_at", "tenant_id", "updated_at"),
         Index("ix_projects_tenant_name", "tenant_id", "name"),
     )
 
@@ -61,14 +50,6 @@ class ProjectRow(Base):
         index=True,
     )
 
-    last_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
-    last_run_status: Mapped[ProjectLastRunStatusDb | None] = mapped_column(
-        Enum(ProjectLastRunStatusDb, name="project_last_run_status"), nullable=True
-    )
-    last_activity_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-
     runs: Mapped[list[RunRow]] = relationship(
         "RunRow",
         back_populates="project",
@@ -86,13 +67,25 @@ class ProjectRow(Base):
         "ClaimMapRow", back_populates="project", cascade="all, delete-orphan", overlaps="run"
     )
 
+    @property
+    def last_run(self) -> RunRow | None:  # type: ignore[name-defined]
+        if not self.runs:
+            return None
+        return max(self.runs, key=lambda row: row.created_at)
 
-ProjectRow.__table__.append_constraint(
-    ForeignKeyConstraint(
-        ["tenant_id", "last_run_id"],
-        ["runs.tenant_id", "runs.id"],
-        ondelete="SET NULL",
-        name="fk_projects_last_run",
-        use_alter=True,
-    )
-)
+    @property
+    def last_run_id(self) -> UUID | None:
+        row = self.last_run
+        return row.id if row else None
+
+    @property
+    def last_run_status(self) -> str | None:
+        row = self.last_run
+        return row.status.value if row else None
+
+    @property
+    def last_activity_at(self) -> datetime | None:
+        row = self.last_run
+        if row and row.updated_at:
+            return row.updated_at
+        return self.updated_at

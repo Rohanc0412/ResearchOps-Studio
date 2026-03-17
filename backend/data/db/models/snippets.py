@@ -22,6 +22,7 @@ from sqlalchemy.sql.sqltypes import JSON
 from db.models.base import Base
 
 if TYPE_CHECKING:
+    from db.models.snippet_flags import SnippetFlagRow
     from db.models.snapshots import SnapshotRow
     from db.models.snippet_embeddings import SnippetEmbeddingRow
 
@@ -47,9 +48,6 @@ class SnippetRow(Base):
     char_end: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    risk_flags_json: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict, server_default="{}"
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
@@ -58,6 +56,26 @@ class SnippetRow(Base):
     embeddings: Mapped[list[SnippetEmbeddingRow]] = relationship(
         "SnippetEmbeddingRow", back_populates="snippet", cascade="all, delete-orphan"
     )
+    flags: Mapped[list[SnippetFlagRow]] = relationship(
+        "SnippetFlagRow", back_populates="snippet", cascade="all, delete-orphan"
+    )
+
+    @property
+    def risk_flags_json(self) -> dict[str, str]:
+        return {row.flag_name: row.flag_value for row in self.flags}
+
+    @risk_flags_json.setter
+    def risk_flags_json(self, values: dict | None) -> None:
+        from db.models.snippet_flags import SnippetFlagRow
+
+        self.flags = [
+            SnippetFlagRow(
+                tenant_id=self.tenant_id,
+                flag_name=str(name),
+                flag_value=str(value),
+            )
+            for name, value in (values or {}).items()
+        ]
 
 
 SnippetRow.__table__.append_constraint(

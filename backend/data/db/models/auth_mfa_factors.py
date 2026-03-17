@@ -13,8 +13,6 @@ class AuthMfaFactorRow(Base):
     __tablename__ = "auth_mfa_factors"
     __table_args__ = (
         UniqueConstraint("user_id", "factor_type", name="uq_auth_mfa_factors_user_type"),
-        Index("ix_auth_mfa_factors_user_id", "user_id"),
-        Index("ix_auth_mfa_factors_tenant_id", "tenant_id"),
         Index("ix_auth_mfa_factors_enabled_at", "enabled_at"),
     )
 

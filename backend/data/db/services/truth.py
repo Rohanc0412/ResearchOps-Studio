@@ -8,9 +8,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.models import ArtifactRow, ProjectRow, RunEventRow, RunRow
-from db.models.projects import ProjectLastRunStatusDb
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
+from db.models.run_status_transitions import RunStatusTransitionRow
 
 
 
@@ -26,13 +26,11 @@ def create_project(
     description: str | None,
     created_by: str,
 ) -> ProjectRow:
-    now = _now_utc()
     row = ProjectRow(
         tenant_id=tenant_id,
         name=name,
         description=description,
         created_by=created_by,
-        last_activity_at=now,
     )
     session.add(row)
     try:
@@ -46,7 +44,7 @@ def list_projects(*, session: Session, tenant_id: UUID, limit: int = 200) -> lis
     stmt = (
         select(ProjectRow)
         .where(ProjectRow.tenant_id == tenant_id)
-        .order_by(func.coalesce(ProjectRow.last_activity_at, ProjectRow.created_at).desc())
+        .order_by(ProjectRow.updated_at.desc(), ProjectRow.created_at.desc())
         .limit(limit)
     )
     return list(session.execute(stmt).scalars().all())
@@ -58,7 +56,7 @@ def list_projects_for_user(
     stmt = (
         select(ProjectRow)
         .where(ProjectRow.tenant_id == tenant_id, ProjectRow.created_by == created_by)
-        .order_by(func.coalesce(ProjectRow.last_activity_at, ProjectRow.created_at).desc())
+        .order_by(ProjectRow.updated_at.desc(), ProjectRow.created_at.desc())
         .limit(limit)
     )
     return list(session.execute(stmt).scalars().all())
@@ -105,13 +103,22 @@ def create_run(
         question=question,
         output_type=output_type,
         client_request_id=client_request_id,
-        budgets_json=budgets_json or {},
-        usage_json={},
         created_at=now,
         updated_at=now,
     )
     session.add(run)
     session.flush()
+    run.budgets_json = budgets_json or {}
+    run.usage_json = {}
+    if _table_exists(session, "run_status_transitions"):
+        _record_status_transition(
+            session=session,
+            tenant_id=tenant_id,
+            run=run,
+            from_status=None,
+            to_status=run.status.value,
+            stage=current_stage,
+        )
 
     _touch_project_from_run(
         session=session, project_id=project_id, tenant_id=tenant_id, run=run, now=now
@@ -301,10 +308,34 @@ def _touch_project_from_run(
     session.execute(
         update(ProjectRow)
         .where(ProjectRow.tenant_id == tenant_id, ProjectRow.id == project_id)
-        .values(
-            last_run_id=run.id,
-            last_run_status=ProjectLastRunStatusDb(run.status.value),
-            last_activity_at=now,
-            updated_at=now,
+        .values(updated_at=now)
+    )
+
+
+def _record_status_transition(
+    *,
+    session: Session,
+    tenant_id: UUID,
+    run: RunRow,
+    from_status: str | None,
+    to_status: str,
+    stage: str | None,
+    reason: str | None = None,
+) -> None:
+    session.add(
+        RunStatusTransitionRow(
+            tenant_id=tenant_id,
+            run_id=run.id,
+            from_status=from_status,
+            to_status=to_status,
+            stage=stage,
+            reason=reason,
         )
     )
+
+
+def _table_exists(session: Session, table_name: str) -> bool:
+    bind = session.get_bind()
+    if bind is None:
+        return False
+    return bind.dialect.has_table(bind.connect(), table_name)

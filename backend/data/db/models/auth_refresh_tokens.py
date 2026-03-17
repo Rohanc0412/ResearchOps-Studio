@@ -11,12 +11,7 @@ from db.models.base import Base
 
 class AuthRefreshTokenRow(Base):
     __tablename__ = "auth_refresh_tokens"
-    __table_args__ = (
-        UniqueConstraint("token_hash", name="uq_auth_refresh_tokens_hash"),
-        Index("ix_auth_refresh_tokens_user_id", "user_id"),
-        Index("ix_auth_refresh_tokens_tenant_id", "tenant_id"),
-        Index("ix_auth_refresh_tokens_expires_at", "expires_at"),
-    )
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_auth_refresh_tokens_hash"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)

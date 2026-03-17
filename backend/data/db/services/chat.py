@@ -28,8 +28,6 @@ def create_conversation(
         project_id=project_id,
         created_by_user_id=created_by_user_id,
         title=title,
-        pending_action_json=None,
-        last_action_json=None,
         created_at=now,
         updated_at=now,
         last_message_at=None,

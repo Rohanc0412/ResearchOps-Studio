@@ -1,3 +1,3 @@
-__all__ = ["truth"]
+from db.services import chat, truth
 
-from db.services import truth
+__all__ = ["chat", "truth"]

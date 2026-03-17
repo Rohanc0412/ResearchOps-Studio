@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.models import SnippetEmbeddingRow, SnippetRow, SnapshotRow, SourceRow
+from db.models.source_authors import SourceAuthorRow
 
 
 
@@ -68,6 +69,27 @@ class SearchResult(TypedDict):
 
     snapshot_version: int
     """Snapshot version number."""
+
+
+def _load_source_authors(session: Session, *, tenant_id: UUID, source_ids: list[UUID]) -> dict[UUID, list[str]]:
+    if not source_ids:
+        return {}
+    rows = session.execute(
+        select(
+            SourceAuthorRow.source_id,
+            SourceAuthorRow.author_name,
+            SourceAuthorRow.author_order,
+        )
+        .where(
+            SourceAuthorRow.tenant_id == tenant_id,
+            SourceAuthorRow.source_id.in_(source_ids),
+        )
+        .order_by(SourceAuthorRow.source_id.asc(), SourceAuthorRow.author_order.asc())
+    ).all()
+    payload: dict[UUID, list[str]] = {}
+    for row in rows:
+        payload.setdefault(row.source_id, []).append(row.author_name)
+    return payload
 
 
 def search_snippets(
@@ -157,7 +179,6 @@ def search_snippets(
                 SourceRow.source_type,
                 SourceRow.canonical_id.label("source_canonical_id"),
                 SourceRow.year.label("source_year"),
-                SourceRow.authors_json.label("source_authors"),
                 SourceRow.url.label("source_url"),
                 SnapshotRow.id.label("snapshot_id"),
                 SnapshotRow.snapshot_version,
@@ -175,6 +196,11 @@ def search_snippets(
             query = query.where(SourceRow.id.in_(source_ids))
 
         rows = session.execute(query).all()
+        authors_by_source = _load_source_authors(
+            session,
+            tenant_id=tenant_id,
+            source_ids=list({row.source_id for row in rows}),
+        )
         scored = []
         for row in rows:
             similarity = _cosine_sim(row.embedding or [], query_embedding)
@@ -197,7 +223,7 @@ def search_snippets(
                     source_type=row.source_type,
                     source_canonical_id=row.source_canonical_id,
                     source_year=row.source_year,
-                    source_authors=row.source_authors,
+                    source_authors=authors_by_source.get(row.source_id, []),
                     source_url=row.source_url,
                     snapshot_id=row.snapshot_id,
                     snapshot_version=row.snapshot_version,
@@ -219,7 +245,6 @@ def search_snippets(
             SourceRow.source_type,
             SourceRow.canonical_id.label("source_canonical_id"),
             SourceRow.year.label("source_year"),
-            SourceRow.authors_json.label("source_authors"),
             SourceRow.url.label("source_url"),
             SnapshotRow.id.label("snapshot_id"),
             SnapshotRow.snapshot_version,
@@ -240,6 +265,11 @@ def search_snippets(
 
     # Execute query
     rows = session.execute(query).all()
+    authors_by_source = _load_source_authors(
+        session,
+        tenant_id=tenant_id,
+        source_ids=list({row.source_id for row in rows}),
+    )
 
     # Convert to SearchResult dicts
     results: list[SearchResult] = []
@@ -261,7 +291,7 @@ def search_snippets(
                 source_type=row.source_type,
                 source_canonical_id=row.source_canonical_id,
                 source_year=row.source_year,
-                source_authors=row.source_authors,
+                source_authors=authors_by_source.get(row.source_id, []),
                 source_url=row.source_url,
                 snapshot_id=row.snapshot_id,
                 snapshot_version=row.snapshot_version,

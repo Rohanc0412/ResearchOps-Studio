@@ -15,11 +15,16 @@ from sqlalchemy import (
     Uuid,
     func,
 )
+from typing import TYPE_CHECKING
+
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.sqltypes import JSON
 
 from db.models.base import Base
+
+if TYPE_CHECKING:
+    from db.models.claim_evidence import ClaimEvidenceRow
 
 
 class ClaimVerdictDb(str, enum.Enum):
@@ -44,9 +49,6 @@ class ClaimMapRow(Base):
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
     claim_text: Mapped[str] = mapped_column(Text(), nullable=False)
     claim_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    snippet_ids_json: Mapped[list] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]"
-    )
     verdict: Mapped[ClaimVerdictDb] = mapped_column(
         Enum(ClaimVerdictDb, name="claim_verdict"), nullable=False
     )
@@ -64,6 +66,25 @@ class ClaimMapRow(Base):
     run: Mapped["RunRow"] = relationship(  # type: ignore[name-defined]
         "RunRow", back_populates="claim_map_entries", overlaps="project"
     )
+    evidence_links: Mapped[list[ClaimEvidenceRow]] = relationship(
+        "ClaimEvidenceRow",
+        back_populates="claim",
+        cascade="all, delete-orphan",
+        overlaps="snippet",
+    )
+
+    @property
+    def snippet_ids_json(self) -> list[str]:
+        return [str(link.snippet_id) for link in self.evidence_links]
+
+    @snippet_ids_json.setter
+    def snippet_ids_json(self, values: list[str]) -> None:
+        from db.models.claim_evidence import ClaimEvidenceRow
+
+        self.evidence_links = [
+            ClaimEvidenceRow(tenant_id=self.tenant_id, snippet_id=UUID(str(snippet_id)))
+            for snippet_id in (values or [])
+        ]
 
 
 ClaimMapRow.__table__.append_constraint(

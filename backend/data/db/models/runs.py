@@ -16,9 +16,8 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql.sqltypes import JSON
 
 from db.models.base import Base
 
@@ -26,7 +25,10 @@ if TYPE_CHECKING:
     from db.models.artifacts import ArtifactRow
     from db.models.claim_map import ClaimMapRow
     from db.models.projects import ProjectRow
+    from db.models.run_budget_limits import RunBudgetLimitRow
     from db.models.run_events import RunEventRow
+    from db.models.run_status_transitions import RunStatusTransitionRow
+    from db.models.run_usage_metrics import RunUsageMetricRow
 
 
 class RunStatusDb(str, enum.Enum):
@@ -71,12 +73,6 @@ class RunRow(Base):
         String(50), nullable=False, server_default="report"
     )
     client_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    budgets_json: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict, server_default="{}"
-    )
-    usage_json: Mapped[dict] = mapped_column(
-        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict, server_default="{}"
-    )
     failure_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -115,6 +111,62 @@ class RunRow(Base):
         cascade="all, delete-orphan",
         overlaps="project,claim_map_entries",
     )
+    budget_limits: Mapped[list[RunBudgetLimitRow]] = relationship(
+        "RunBudgetLimitRow", back_populates="run", cascade="all, delete-orphan"
+    )
+    usage_metrics: Mapped[list[RunUsageMetricRow]] = relationship(
+        "RunUsageMetricRow", back_populates="run", cascade="all, delete-orphan"
+    )
+    status_transitions: Mapped[list[RunStatusTransitionRow]] = relationship(
+        "RunStatusTransitionRow", back_populates="run", cascade="all, delete-orphan"
+    )
+
+    @property
+    def budgets_json(self) -> dict[str, int]:
+        return {row.budget_name: int(row.limit_value) for row in self.budget_limits}
+
+    @budgets_json.setter
+    def budgets_json(self, values: dict | None) -> None:
+        from db.models.run_budget_limits import RunBudgetLimitRow
+
+        rows: list[RunBudgetLimitRow] = []
+        for key, value in (values or {}).items():
+            if value is None:
+                continue
+            rows.append(
+                RunBudgetLimitRow(
+                    tenant_id=self.tenant_id,
+                    budget_name=str(key),
+                    limit_value=int(value),
+                )
+            )
+        set_committed_value(self, "budget_limits", rows)
+
+    @property
+    def usage_json(self) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        for row in self.usage_metrics:
+            if row.metric_text is not None:
+                payload[row.metric_name] = row.metric_text
+            elif row.metric_number is not None:
+                payload[row.metric_name] = int(row.metric_number)
+        return payload
+
+    @usage_json.setter
+    def usage_json(self, values: dict | None) -> None:
+        from db.models.run_usage_metrics import RunUsageMetricRow
+
+        rows: list[RunUsageMetricRow] = []
+        for key, value in (values or {}).items():
+            metric = RunUsageMetricRow(tenant_id=self.tenant_id, metric_name=str(key))
+            if isinstance(value, bool):
+                metric.metric_text = "true" if value else "false"
+            elif isinstance(value, int):
+                metric.metric_number = value
+            elif value is not None:
+                metric.metric_text = str(value)
+            rows.append(metric)
+        set_committed_value(self, "usage_metrics", rows)
 
 
 RunRow.__table__.append_constraint(
