@@ -49,6 +49,14 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
         },
     )
     try:
+        logger.info(
+            "Research pipeline invoking orchestrator",
+            extra={
+                "event": "pipeline.run.invoke",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+            },
+        )
         asyncio.run(
             run_orchestrator(
                 session=session,

@@ -37,6 +37,9 @@ class ArXivConnector(BaseConnector):
     def __init__(self, **kwargs):
         """Initialize arXiv connector."""
         # Respect arXiv rate limit: 1 request per 3 seconds
+        kwargs.setdefault("max_retries", 1)
+        kwargs.setdefault("retry_on_rate_limit", False)
+        kwargs.setdefault("timeout_seconds", 20.0)
         super().__init__(max_requests_per_second=0.3, **kwargs)
 
     @property

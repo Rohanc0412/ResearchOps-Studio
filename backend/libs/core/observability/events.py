@@ -43,6 +43,11 @@ def _event_session(session: Session) -> Session:
         future=True,
     )
 
+
+def _should_use_current_session(session: Session) -> bool:
+    bind = session.get_bind()
+    return bind is not None and bind.dialect.name == "sqlite"
+
 def _state_summary(state: Any) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     if state is None:
@@ -207,7 +212,26 @@ def emit_run_event(
     """
     from sqlalchemy import select
 
-    # Use a short-lived session so run events are visible immediately.
+    from db.models.run_events import RunEventLevelDb
+    from db.repositories.project_runs import append_run_event
+
+    # SQLite cannot safely interleave a second writer connection while the
+    # worker's main transaction is still active. Reuse the current session there.
+    if _should_use_current_session(session):
+        return append_run_event(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            level=RunEventLevelDb.info,
+            message=f"{event_type}: {stage or 'unknown'}",
+            stage=stage or "unknown",
+            event_type=event_type,
+            payload_json=data or {},
+            allow_finished=True,
+        )
+
+    # Use a short-lived session on databases that support concurrent writers so
+    # run events become visible before the enclosing transaction commits.
     event_session = _event_session(session)
     try:
         # Get the next event number for this run
@@ -220,9 +244,6 @@ def emit_run_event(
         )
         last_event = result.scalar_one_or_none()
         next_event_number = (last_event or 0) + 1
-
-        # Import the level enum
-        from db.models.run_events import RunEventLevelDb
 
         # Create event
         event = RunEventRow(

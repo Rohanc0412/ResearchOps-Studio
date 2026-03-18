@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-import uvicorn
 import logging
-from dotenv import find_dotenv, load_dotenv
+import uvicorn
+from dotenv import load_dotenv
 
 from researchops_api import create_app
 from core import SERVICE_API, get_settings
+from core.env import resolve_env_files
 from observability import setup_logging
 
 
 def main() -> None:
-    load_dotenv(find_dotenv(usecwd=True))
+    for env_file in resolve_env_files():
+        load_dotenv(env_file, override=False)
     settings = get_settings()
     setup_logging(SERVICE_API)
     logging.getLogger(__name__).info(

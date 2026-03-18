@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 class SectionReviewIssueRow(Base):
     __tablename__ = "section_review_issues"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_section_review_issues_tenant_id_id"),
         UniqueConstraint("tenant_id", "review_id", "issue_order", name="uq_section_review_issues_order"),
         Index("ix_section_review_issues_tenant_review", "tenant_id", "review_id"),
     )

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 class AuthUserRow(Base):
     __tablename__ = "auth_users"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_auth_users_tenant_id_id"),
         UniqueConstraint("username", name="uq_auth_users_username"),
         UniqueConstraint("email", name="uq_auth_users_email"),
     )

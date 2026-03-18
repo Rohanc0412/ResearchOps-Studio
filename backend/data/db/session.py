@@ -11,7 +11,15 @@ from core.settings import Settings
 
 
 def create_db_engine(settings: Settings) -> Engine:
-    return create_engine(settings.database_url, pool_pre_ping=True, future=True)
+    connect_args: dict[str, object] = {}
+    if settings.database_url.startswith("sqlite"):
+        connect_args["timeout"] = 30
+    return create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        future=True,
+        connect_args=connect_args,
+    )
 
 
 def create_sessionmaker(engine: Engine) -> sessionmaker[Session]:

@@ -136,11 +136,12 @@ class RunRow(Base):
             rows.append(
                 RunBudgetLimitRow(
                     tenant_id=self.tenant_id,
+                    run_id=self.id,
                     budget_name=str(key),
                     limit_value=int(value),
                 )
             )
-        set_committed_value(self, "budget_limits", rows)
+        self.budget_limits = rows
 
     @property
     def usage_json(self) -> dict[str, object]:
@@ -158,7 +159,9 @@ class RunRow(Base):
 
         rows: list[RunUsageMetricRow] = []
         for key, value in (values or {}).items():
-            metric = RunUsageMetricRow(tenant_id=self.tenant_id, metric_name=str(key))
+            metric = RunUsageMetricRow(
+                tenant_id=self.tenant_id, run_id=self.id, metric_name=str(key)
+            )
             if isinstance(value, bool):
                 metric.metric_text = "true" if value else "false"
             elif isinstance(value, int):
@@ -166,7 +169,7 @@ class RunRow(Base):
             elif value is not None:
                 metric.metric_text = str(value)
             rows.append(metric)
-        set_committed_value(self, "usage_metrics", rows)
+        self.usage_metrics = rows
 
 
 RunRow.__table__.append_constraint(

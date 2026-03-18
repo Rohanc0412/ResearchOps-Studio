@@ -5,12 +5,14 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from core.env import resolve_env_file
+from core.env import resolve_env_file, resolve_env_files
 
 
 class AuthConfig(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=resolve_env_file() or ".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=resolve_env_files() or (resolve_env_file() or ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     auth_required: bool = Field(default=True, validation_alias="AUTH_REQUIRED")

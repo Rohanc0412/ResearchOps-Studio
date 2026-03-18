@@ -3,15 +3,30 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def resolve_env_file() -> str | None:
+def resolve_env_files() -> tuple[str, ...]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        resolved = str(path.resolve())
+        if resolved in seen or not path.exists():
+            return
+        seen.add(resolved)
+        candidates.append(resolved)
+
     cwd = Path.cwd().resolve()
-    for base in (cwd, *cwd.parents):
-        candidate = base / ".env"
-        if candidate.exists():
-            return str(candidate)
-    for base in Path(__file__).resolve().parents:
-        candidate = base / ".env"
-        if candidate.exists():
-            return str(candidate)
-    return None
+    parent_candidates = [cwd, *cwd.parents]
+    for base in reversed(parent_candidates):
+        add(base / ".env")
+
+    module_parents = list(Path(__file__).resolve().parents)
+    for base in reversed(module_parents):
+        add(base / ".env")
+
+    return tuple(candidates)
+
+
+def resolve_env_file() -> str | None:
+    files = resolve_env_files()
+    return files[-1] if files else None
 

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 class SectionReviewRow(Base):
     __tablename__ = "section_reviews"
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_section_reviews_tenant_id_id"),
         UniqueConstraint(
             "tenant_id",
             "run_id",

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from threading import Event
 from uuid import UUID
 
+from dotenv import load_dotenv
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,7 @@ from db.models.runs import RunStatusDb
 from db.session import create_db_engine, create_sessionmaker, session_scope
 from core import get_settings
 from core.constants import SERVICE_WORKER
+from core.env import resolve_env_files
 from observability import setup_logging
 from researchops_orchestrator import RESEARCH_JOB_TYPE, process_research_run
 
@@ -96,21 +98,28 @@ def run_once(*, SessionLocal) -> bool:
         run_id = job.run_id
         tenant_id = job.tenant_id
         job_type = job.job_type
-        try:
+
+    try:
+        with session_scope(SessionLocal) as session:
             if job_type == RESEARCH_JOB_TYPE:
                 process_research_run(session=session, run_id=run_id, tenant_id=tenant_id)
             else:
                 raise RuntimeError(f"Unknown job_type: {job_type}")
+
+        with session_scope(SessionLocal) as session:
             _mark_job_done(session, job_id)
-        except Exception as e:
-            err = str(e)
-            session.rollback()
+    except Exception as e:
+        err = str(e)
+        with session_scope(SessionLocal) as session:
             _mark_job_failed(session, job_id, err)
             _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
-        return True
+
+    return True
 
 
 def main() -> None:
+    for env_file in resolve_env_files():
+        load_dotenv(env_file, override=False)
     setup_logging(SERVICE_WORKER)
     settings = get_settings()
     run_forever(poll_seconds=settings.worker_poll_seconds)

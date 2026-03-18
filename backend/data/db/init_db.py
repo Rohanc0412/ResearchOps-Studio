@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import sqlalchemy as sa
 from sqlalchemy import text
@@ -13,6 +14,9 @@ from db.models.roles import RoleRow
 
 def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) -> None:
     if engine.dialect.name == "sqlite":
+        with engine.begin() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.execute(text("PRAGMA busy_timeout=30000"))
         import db.models  # noqa: F401
         Base.metadata.create_all(engine)
         _seed_reference_data(engine)
@@ -26,9 +30,15 @@ def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) ->
                 from alembic import command
                 from alembic.config import Config
 
+                backend_root = Path(__file__).resolve().parents[2]
+                alembic_ini = backend_root / "alembic.ini"
+                alembic_dir = backend_root / "data" / "db" / "alembic"
+
                 with engine.begin() as conn:
                     conn.execute(text("SELECT pg_advisory_xact_lock(42424242)"))
-                    cfg = Config("alembic.ini")
+                    cfg = Config(str(alembic_ini))
+                    cfg.set_main_option("script_location", str(alembic_dir))
+                    cfg.set_main_option("prepend_sys_path", str(backend_root))
                     cfg.attributes["connection"] = conn
                     command.upgrade(cfg, "head")
                 _seed_reference_data(engine)

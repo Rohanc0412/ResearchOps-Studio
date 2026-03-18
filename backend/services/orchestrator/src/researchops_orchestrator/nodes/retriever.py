@@ -222,7 +222,7 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _clean_query_line(line: str) -> str:
-    cleaned = re.sub(r"^\s*[-*•\d\)\.:\s]+", "", line).strip()
+    cleaned = re.sub(r"^\s*[-*\d\)\.:\s]+", "", line).strip()
     return cleaned.strip().strip('"').strip("'").strip()
 
 

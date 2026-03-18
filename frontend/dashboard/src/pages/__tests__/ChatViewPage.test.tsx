@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 
@@ -11,6 +11,7 @@ const mockUseSendChatMessageMutationInfinite = vi.fn();
 const mockUseCancelRunMutation = vi.fn();
 const mockUseRetryRunMutation = vi.fn();
 const mockUseSSE = vi.fn();
+const mockApiFetchJson = vi.fn();
 
 vi.mock("../../api/projects", () => ({
   useProjectQuery: (...args: unknown[]) => mockUseProjectQuery(...args)
@@ -35,6 +36,14 @@ vi.mock("../../api/runs", () => ({
 vi.mock("../../hooks/useSSE", () => ({
   useSSE: (...args: unknown[]) => mockUseSSE(...args)
 }));
+
+vi.mock("../../api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/client")>();
+  return {
+    ...actual,
+    apiFetchJson: (...args: unknown[]) => mockApiFetchJson(...args)
+  };
+});
 
 function TestLayout() {
   return <Outlet />;
@@ -80,9 +89,14 @@ function setupBaseMocks() {
     latestStage: null,
     reset: vi.fn()
   });
+  mockApiFetchJson.mockReset();
 }
 
 describe("ChatViewPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("loads chat history and renders message types", () => {
     setupBaseMocks();
     mockUseChatMessagesInfiniteQuery.mockReturnValue({
@@ -165,13 +179,26 @@ describe("ChatViewPage", () => {
     });
   });
 
-  it("renders run started message with link", () => {
+  it("renders the inline research progress card and expands live updates", async () => {
     setupBaseMocks();
+    mockApiFetchJson.mockResolvedValue({
+      id: "run-1",
+      status: "running",
+      created_at: new Date().toISOString()
+    });
     mockUseChatMessagesInfiniteQuery.mockReturnValue({
       data: {
         pages: [
           {
             items: [
+              {
+                id: "user-1",
+                role: "user",
+                type: "chat",
+                content_text: "Effects of DHT on hair fall",
+                content_json: null,
+                created_at: new Date().toISOString()
+              },
               {
                 id: "run-start",
                 role: "assistant",
@@ -187,11 +214,46 @@ describe("ChatViewPage", () => {
         pageParams: [undefined]
       }
     });
+    mockUseSSE.mockReturnValue({
+      events: [
+        {
+          id: 1,
+          ts: new Date().toISOString(),
+          level: "info",
+          stage: "retrieve",
+          message: "retrieve.plan_created",
+          payload: { query_count: 12 }
+        },
+        {
+          id: 2,
+          ts: new Date().toISOString(),
+          level: "info",
+          stage: "draft",
+          message: "draft.section_started",
+          payload: { section_id: "clinical evidence", snippet_count: 20 }
+        }
+      ],
+      state: "open",
+      lastError: null,
+      latestStage: "draft",
+      reset: vi.fn()
+    });
     mockUseSendChatMessageMutationInfinite.mockReturnValue({ mutateAsync: vi.fn(), isPending: false });
 
     renderPage();
 
-    const link = screen.getByRole("link", { name: /open run viewer/i });
-    expect(link.getAttribute("href")).toBe("/runs/run-1");
+    await waitFor(() => {
+      expect(screen.getByText("Effects of DHT on hair fall")).toBeTruthy();
+    });
+
+    expect(screen.queryByText(/open run viewer/i)).toBeNull();
+    expect(screen.getByText(/collect recent evidence on effects of dht on hair fall/i)).toBeTruthy();
+    expect(screen.getByText(/drafting Clinical evidence\./i)).toBeTruthy();
+    expect(screen.getByText("20 snippets")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /update/i }));
+
+    expect(screen.getByText(/recent updates/i)).toBeTruthy();
+    expect(screen.getByText(/planning the search strategy\./i)).toBeTruthy();
   });
 });

@@ -232,6 +232,8 @@ class BaseConnector(ABC):
         max_requests_per_second: float = 1.0,
         timeout_seconds: float = 30.0,
         max_retries: int = 3,
+        retry_on_rate_limit: bool = True,
+        max_retry_after_seconds: int = 10,
     ):
         """
         Initialize base connector.
@@ -255,6 +257,8 @@ class BaseConnector(ABC):
         )
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        self.retry_on_rate_limit = retry_on_rate_limit
+        self.max_retry_after_seconds = max_retry_after_seconds
         self.client = httpx.Client(timeout=timeout_seconds)
 
     @property
@@ -295,9 +299,14 @@ class BaseConnector(ABC):
 
                 # Check for rate limit response
                 if response.status_code == 429:
-                    retry_after = int(response.headers.get("Retry-After", 60))
-                    if attempt < self.max_retries - 1:
-                        time.sleep(retry_after)
+                    retry_after_header = response.headers.get("Retry-After", "60")
+                    try:
+                        retry_after = int(retry_after_header)
+                    except (TypeError, ValueError):
+                        retry_after = 60
+
+                    if self.retry_on_rate_limit and attempt < self.max_retries - 1:
+                        time.sleep(min(retry_after, self.max_retry_after_seconds))
                         continue
                     raise RateLimitError(f"Rate limit exceeded for {url}")
 

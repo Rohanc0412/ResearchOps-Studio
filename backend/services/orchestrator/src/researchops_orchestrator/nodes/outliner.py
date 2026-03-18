@@ -1,7 +1,7 @@
 """
 Outliner node - creates a structured outline for the report.
 
-Generates an LLM-driven outline and enforces hard constraints.
+Generates an LLM-driven outline and enforces structural sanity checks.
 """
 
 from __future__ import annotations
@@ -197,8 +197,8 @@ def _generate_outline_with_llm(
         '  "run_id": "...",\n'
         '  "sections": [\n'
         "    {\n"
-        '      "section_id": "intro",\n'
-        '      "title": "Introduction",\n'
+        '      "section_id": "section_slug",\n'
+        '      "title": "Section Title",\n'
         '      "goal": "Describe the section objective.",\n'
         '      "key_points": ["...", "..."],\n'
         '      "suggested_evidence_themes": ["..."],\n'
@@ -213,14 +213,14 @@ def _generate_outline_with_llm(
         + "\n\n"
         "Rules:\n"
         f"- Total sections should be {min_sections} to {max_sections}\n"
-        "- Introduction must be first and Conclusion must be last\n"
         "- Section titles must be unique\n"
+        "- section_id values should be short stable slugs derived from the section title\n"
         "- suggested_evidence_themes should be keywords/topics\n"
-        "- The outline MUST read as a connected narrative from Introduction to Conclusion\n"
-        "- Each section goal MUST explicitly connect to the previous section and set up the next\n"
-        "- Use a logical arc: context -> methods/approach -> findings/evidence -> implications/risks -> conclusion\n"
+        "- The outline MUST read as a connected narrative from opening context through final synthesis\n"
+        "- Each section goal should connect naturally to the surrounding sections\n"
+        "- Use a logical arc: context -> methods/approach -> findings/evidence -> implications/risks -> synthesis\n"
         "- Avoid random or disconnected section titles; ensure continuity between adjacent sections\n"
-        "- If too few sources, use fewer sections but keep intro+conclusion\n"
+        "- If too few sources, use fewer sections while keeping a coherent beginning and ending\n"
         "- Do not include markdown, no backticks, no commentary\n"
     )
     system = "You design grounded report outlines as strict JSON."
@@ -299,15 +299,8 @@ def _validate_outline(outline: OutlineModel, vetted_sources: list) -> list[str]:
     if orders != expected_orders:
         errors.append("Sections must be ordered by section_order.")
 
-    first = sections[0]
-    last = sections[-1]
-    if first.section_id != "intro" or first.title.strip().lower() != "introduction":
-        errors.append("Introduction must be the first section with section_id=\"intro\".")
-    if last.section_id != "conclusion" or last.title.strip().lower() != "conclusion":
-        errors.append("Conclusion must be the last section with section_id=\"conclusion\".")
-
-    if len(sections) - 2 < 2:
-        errors.append("Outline must include at least two middle sections.")
+    if len(sections) < 3:
+        errors.append("Outline must include at least three sections.")
 
     titles = [section.title.strip().lower() for section in sections]
     if len(titles) != len(set(titles)):
@@ -604,8 +597,8 @@ def _repair_outline_with_llm(
         '  "run_id": "...",\n'
         '  "sections": [\n'
         "    {\n"
-        '      "section_id": "intro",\n'
-        '      "title": "Introduction",\n'
+        '      "section_id": "section_slug",\n'
+        '      "title": "Section Title",\n'
         '      "goal": "Describe the section objective.",\n'
         '      "key_points": ["...", "..."],\n'
         '      "suggested_evidence_themes": ["..."],\n'
@@ -616,7 +609,7 @@ def _repair_outline_with_llm(
         f"Run ID: {run_id}\n"
         f"Question: {user_query}\n"
         f"Required section count: {min_sections} to {max_sections}\n\n"
-        "Flow requirement: ensure sections form a connected narrative from Introduction to Conclusion.\n"
+        "Flow requirement: ensure sections form a connected narrative from opening context to final synthesis.\n"
         "Previous JSON:\n"
         + payload_json
         + "\n\n"

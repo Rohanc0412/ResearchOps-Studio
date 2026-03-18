@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useSearchParams, useParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useParams } from "react-router-dom";
 import { Download, FileText } from "lucide-react";
 
 import { downloadArtifact, useRunArtifactsQuery } from "../api/artifacts";
@@ -13,6 +13,7 @@ import type { Artifact } from "../types/dto";
 export function ArtifactsPage() {
   const { runId } = useParams();
   const id = runId ?? "";
+  const navigate = useNavigate();
   const [sp] = useSearchParams();
   const focus = sp.get("focus");
 
@@ -43,9 +44,9 @@ export function ArtifactsPage() {
             Run <span className="text-slate-300">{id}</span>
           </div>
         </div>
-        <Link to={`/runs/${encodeURIComponent(id)}`}>
-          <Button variant="secondary">Back to Run</Button>
-        </Link>
+        <Button variant="secondary" onClick={() => navigate(-1)}>
+          Back
+        </Button>
       </div>
 
       {artifacts.isLoading ? (

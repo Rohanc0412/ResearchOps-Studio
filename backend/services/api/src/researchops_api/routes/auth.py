@@ -57,6 +57,12 @@ def _email_domain(value: str) -> str | None:
     return domain or None
 
 
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class RegisterIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -373,7 +379,7 @@ def refresh(request: Request, response: Response) -> AuthTokensOut:
         token_row = get_refresh_token_by_hash(session, token_hash=token_hash)
         if token_row is None or token_row.revoked_at is not None:
             raise HTTPException(status_code=401, detail="Invalid refresh token")
-        if token_row.expires_at <= now:
+        if _utc(token_row.expires_at) <= now:
             raise HTTPException(status_code=401, detail="Refresh token expired")
 
         user = get_user_by_id(session, user_id=token_row.user_id)
@@ -500,7 +506,11 @@ def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> di
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
         reset_row = get_password_reset_by_hash(session, token_hash=token_hash)
-        if reset_row is None or reset_row.used_at is not None or reset_row.expires_at <= now:
+        if (
+            reset_row is None
+            or reset_row.used_at is not None
+            or _utc(reset_row.expires_at) <= now
+        ):
             logger.warning(
                 "Password reset confirm rejected (invalid/expired token)",
                 extra={

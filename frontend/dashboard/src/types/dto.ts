@@ -136,7 +136,18 @@ export const RunEventSchema = z
   .object({
     ts: z.string().min(1),
     level: z.enum(["info", "warn", "error"]),
-    stage: z.enum(["retrieve", "ingest", "outline", "draft", "validate", "factcheck", "export"]),
+    stage: z.enum([
+      "retrieve",
+      "ingest",
+      "outline",
+      "evidence_pack",
+      "draft",
+      "evaluate",
+      "validate",
+      "repair",
+      "factcheck",
+      "export"
+    ]),
     message: z.string(),
     payload: z.record(z.unknown()).optional()
   })

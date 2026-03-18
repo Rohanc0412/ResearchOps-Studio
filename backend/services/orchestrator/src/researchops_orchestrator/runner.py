@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
+import logging
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,8 @@ from core.orchestrator.state import OrchestratorState
 from core.runs.lifecycle import transition_run_status
 from researchops_orchestrator.checkpoints import PostgresCheckpointSaver
 from researchops_orchestrator.graph import create_orchestrator_graph
+
+logger = logging.getLogger(__name__)
 
 
 def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
@@ -137,6 +140,15 @@ async def run_orchestrator(
         current_stage="retrieve",
     )
     session.commit()
+    logger.info(
+        "Run transitioned to running",
+        extra={
+            "event": "pipeline.run.transitioned",
+            "run_id": str(run_id),
+            "tenant_id": str(tenant_id),
+            "current_stage": "retrieve",
+        },
+    )
 
     max_iterations = _env_int("ORCHESTRATOR_MAX_ITERATIONS", max_iterations, min_value=1)
 
@@ -156,9 +168,26 @@ async def run_orchestrator(
     checkpoint_saver = PostgresCheckpointSaver(
         session=session, tenant_id=tenant_id, run_id=run_id
     )
+    logger.info(
+        "Checkpoint saver initialized",
+        extra={
+            "event": "pipeline.run.checkpoint_init",
+            "run_id": str(run_id),
+            "tenant_id": str(tenant_id),
+            "checkpoint_saver": checkpoint_saver.__class__.__name__,
+        },
+    )
 
     # Create graph
     graph = create_orchestrator_graph(session)
+    logger.info(
+        "Orchestrator graph compiled",
+        extra={
+            "event": "pipeline.run.graph_ready",
+            "run_id": str(run_id),
+            "tenant_id": str(tenant_id),
+        },
+    )
 
     # Configure graph execution
     config = {
@@ -170,8 +199,24 @@ async def run_orchestrator(
     }
 
     try:
+        logger.info(
+            "Invoking orchestrator graph",
+            extra={
+                "event": "pipeline.run.graph_invoke",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+            },
+        )
         # Execute graph (synchronous for now, can be made async)
         final_state_dict = graph.invoke(initial_state.dict(), config=config)
+        logger.info(
+            "Orchestrator graph returned",
+            extra={
+                "event": "pipeline.run.graph_return",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+            },
+        )
 
         # Convert back to OrchestratorState
         final_state = OrchestratorState(**final_state_dict)

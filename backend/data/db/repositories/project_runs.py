@@ -84,13 +84,14 @@ def replace_run_budget_limits(run: RunRow, budgets: dict | None) -> None:
     rows = [
         RunBudgetLimitRow(
             tenant_id=run.tenant_id,
+            run_id=run.id,
             budget_name=str(key),
             limit_value=int(value),
         )
         for key, value in (budgets or {}).items()
         if value is not None
     ]
-    set_committed_value(run, "budget_limits", rows)
+    run.budget_limits = rows
 
 
 def get_run_budget_limits(run: RunRow) -> dict[str, int]:
@@ -100,7 +101,7 @@ def get_run_budget_limits(run: RunRow) -> dict[str, int]:
 def replace_run_usage_metrics(run: RunRow, usage: dict | None) -> None:
     rows: list[RunUsageMetricRow] = []
     for key, value in (usage or {}).items():
-        metric = RunUsageMetricRow(tenant_id=run.tenant_id, metric_name=str(key))
+        metric = RunUsageMetricRow(tenant_id=run.tenant_id, run_id=run.id, metric_name=str(key))
         if isinstance(value, bool):
             metric.metric_text = "true" if value else "false"
         elif isinstance(value, int):
@@ -108,7 +109,7 @@ def replace_run_usage_metrics(run: RunRow, usage: dict | None) -> None:
         elif value is not None:
             metric.metric_text = str(value)
         rows.append(metric)
-    set_committed_value(run, "usage_metrics", rows)
+    run.usage_metrics = rows
 
 
 def patch_run_usage_metrics(run: RunRow, updates: dict | None) -> None:
