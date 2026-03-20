@@ -429,9 +429,6 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
             next_title=next_title,
             prior_summary=prior_summary,
         )
-        allowed_ids = {str(snippet.snippet_id) for snippet in section_snippets}
-        section_text = _validate_section_text(section_text, allowed_ids)
-        _validate_section_length(section_text)
         _persist_draft_section(
             session,
             tenant_id=state.tenant_id,

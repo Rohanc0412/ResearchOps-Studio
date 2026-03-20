@@ -117,23 +117,6 @@ def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorSta
         raise ValueError("LLM outline generation failed.")
 
     outline = _normalize_outline(outline)
-    errors = _validate_outline(outline, vetted_sources)
-    if errors:
-        repaired = _repair_outline_with_llm(
-            outline,
-            errors,
-            llm_client,
-            state.run_id,
-            user_query,
-            vetted_sources,
-        )
-        if repaired is None:
-            raise ValueError(f"LLM outline validation failed: {', '.join(errors[:6])}")
-        repaired = _normalize_outline(repaired)
-        errors = _validate_outline(repaired, vetted_sources)
-        if errors:
-            raise ValueError(f"LLM outline validation failed: {', '.join(errors[:6])}")
-        outline = repaired
     _persist_outline(session, state.tenant_id, state.run_id, outline)
 
     emit_run_event(

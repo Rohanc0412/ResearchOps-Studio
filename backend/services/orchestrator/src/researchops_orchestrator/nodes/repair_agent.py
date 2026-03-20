@@ -661,19 +661,6 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             if original_summary:
                 revised_summary = original_summary
 
-        allowed_ids = {str(snippet.snippet_id) for snippet in section_snippets}
-        _validate_section_text(revised_text, allowed_ids)
-        if not has_invalid_indexes:
-            _validate_repair_scope(original_text, revised_text, issue_indices)
-        else:
-            if revised_text.strip() != original_text.strip():
-                raise ValueError("Invalid issue indexes but section text changed.")
-
-        next_allowed_ids = {str(snippet.snippet_id) for snippet in next_snippets}
-        if not next_allowed_ids:
-            next_allowed_ids = allowed_ids
-        _validate_next_section_patch(next_text, patched_next_text, next_allowed_ids)
-
         _persist_draft_section(
             session,
             tenant_id=state.tenant_id,

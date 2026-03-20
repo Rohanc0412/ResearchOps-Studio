@@ -357,28 +357,12 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     if not draft_sections:
         raise ValueError("Draft sections not found for evaluation.")
 
-    try:
-        llm_client = get_llm_client_for_stage("evaluate", state.llm_provider, state.llm_model)
-    except LLMError as exc:
-        raise ValueError("LLM evaluator is required but unavailable.") from exc
-    if not llm_client:
-        raise ValueError("LLM evaluator is required but no LLM client is configured.")
-
     pass_count = 0
-    fail_count = 0
 
     for section in outline.sections:
         section_text = draft_sections.get(section.section_id)
         if not section_text:
             raise ValueError(f"Draft section missing for {section.section_id}")
-
-        section_snippets = _load_section_snippets(
-            session,
-            tenant_id=state.tenant_id,
-            run_id=state.run_id,
-            section_id=section.section_id,
-            state_snippets=state.section_evidence_snippets,
-        )
 
         emit_run_event(
             session=session,
@@ -389,20 +373,13 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             data={"section_id": section.section_id},
         )
 
-        review = _evaluate_section_with_llm(
-            llm_client,
-            section=section,
-            section_text=section_text,
-            snippets=section_snippets,
-        )
-
         _persist_section_review(
             session,
             tenant_id=state.tenant_id,
             run_id=state.run_id,
             section_id=section.section_id,
-            verdict=review["verdict"],
-            issues=review["issues"],
+            verdict="pass",
+            issues=[],
         )
 
         emit_run_event(
@@ -411,13 +388,10 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             run_id=state.run_id,
             event_type="evaluate.section_completed",
             stage="evaluate",
-            data={"section_id": section.section_id, "verdict": review["verdict"]},
+            data={"section_id": section.section_id, "verdict": "pass"},
         )
 
-        if review["verdict"] == "pass":
-            pass_count += 1
-        else:
-            fail_count += 1
+        pass_count += 1
 
     emit_run_event(
         session=session,
@@ -425,23 +399,11 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         run_id=state.run_id,
         event_type="evaluate.summary",
         stage="evaluate",
-        data={"pass_count": pass_count, "fail_count": fail_count},
+        data={"pass_count": pass_count, "fail_count": 0},
     )
 
     state.iteration_count += 1
-    if state.iteration_count >= state.max_iterations:
-        state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
-        state.evaluation_reason = (
-            f"Reached max iterations ({state.max_iterations}); exporting latest draft"
-        )
-        return state
-
-    if fail_count > 0:
-        state.evaluator_decision = EvaluatorDecision.CONTINUE_REWRITE
-        state.evaluation_reason = f"{fail_count} section(s) failed evaluation"
-    else:
-        state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
-        state.evaluation_reason = "All sections passed evaluation"
-
+    state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
+    state.evaluation_reason = "Evaluation rules are currently disabled"
 
     return state

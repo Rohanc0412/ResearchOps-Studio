@@ -1,15 +1,16 @@
 """
 Retriever node - generates diverse queries and retrieves sources.
 
-Uses OpenAlex + arXiv to collect candidate sources, deduplicate, rank,
-and select a diverse set of sources for the run.
+Uses Scientific Papers MCP to collect candidate sources across multiple
+academic databases, deduplicate, rank, and select a diverse set of
+sources for the run.
 """
 
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import hashlib
 import json
 import logging
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from db.models.run_checkpoints import RunCheckpointRow
 from db.models.run_sources import RunSourceRow
+from db.models.snapshots import SnapshotRow
 from db.models.source_embeddings import SourceEmbeddingRow
 from db.models.sources import SourceRow
 from db.repositories.corpus import (
@@ -31,11 +33,12 @@ from db.repositories.corpus import (
     get_source_identifier,
     list_source_author_names,
 )
-from connectors import ArXivConnector, OpenAlexConnector
+from connectors import ScientificPapersMCPConnector
 from connectors.base import RetrievedSource
 from connectors.dedup import deduplicate_sources
 from core.observability import emit_run_event, instrument_node
 from core.orchestrator.state import OrchestratorState, SourceRef
+from ingestion import ingest_source
 from llm import LLMError, get_llm_client_for_stage, json_response_format
 from researchops_orchestrator.embeddings import (
     get_hf_client,
@@ -412,6 +415,7 @@ class EmbedError(RuntimeError):
 
 class EmbeddingClient(Protocol):
     model_name: str
+    dimensions: int
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
 
@@ -678,7 +682,7 @@ def _upsert_source_embedding(
 ) -> tuple[SourceEmbeddingRow, bool]:
     if existing and existing.text_hash == text_hash:
         return existing, False
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     if existing:
         existing.embedding_json = embedding_vector
         existing.embedding_dim = len(embedding_vector)
@@ -705,7 +709,7 @@ def _upsert_source_embedding(
 def _recency_score(year: int | None) -> float:
     if not year:
         return 0.0
-    current_year = datetime.utcnow().year
+    current_year = datetime.now(UTC).year
     years_old = max(0, current_year - year)
     return max(0.0, min(1.0, 1.0 - (years_old / 10.0)))
 
@@ -971,6 +975,186 @@ def _upsert_run_source(
     return row
 
 
+class _EmbeddingProviderAdapter:
+    """Adapt retriever embedding clients to the ingestion pipeline protocol."""
+
+    def __init__(self, client: EmbeddingClient):
+        self._client = client
+        self._dimensions: int | None = getattr(client, "dimensions", None)
+
+    @property
+    def model_name(self) -> str:
+        return self._client.model_name
+
+    @property
+    def dimensions(self) -> int:
+        if self._dimensions is None:
+            raise ValueError("Embedding dimensions are unknown until at least one batch is embedded.")
+        return self._dimensions
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._client.embed_texts(texts)
+        if vectors and self._dimensions is None:
+            self._dimensions = len(vectors[0])
+        return vectors
+
+
+def _snapshot_exists_for_source(session: Session, *, tenant_id, source_id) -> bool:
+    row = (
+        session.query(SnapshotRow.id)
+        .filter(SnapshotRow.tenant_id == tenant_id, SnapshotRow.source_id == source_id)
+        .first()
+    )
+    return row is not None
+
+
+def _latest_snapshot_sha(session: Session, *, tenant_id, source_id) -> str | None:
+    row = (
+        session.query(SnapshotRow.sha256)
+        .filter(SnapshotRow.tenant_id == tenant_id, SnapshotRow.source_id == source_id)
+        .order_by(SnapshotRow.snapshot_version.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _content_for_ingestion(source: RetrievedSource) -> tuple[str | None, str]:
+    full_text = (source.full_text or "").strip()
+    if full_text:
+        return full_text, "full_text"
+    abstract = (source.abstract or "").strip()
+    if abstract:
+        return abstract, "abstract"
+    title = (source.title or "").strip()
+    if title:
+        return title, "title"
+    return None, "missing"
+
+
+def _fetch_selected_source_content(
+    connector: ScientificPapersMCPConnector,
+    source: RetrievedSource,
+) -> RetrievedSource | None:
+    identifier = source.to_canonical_string()
+    try:
+        fetched = connector.get_by_id(identifier)
+    except Exception as exc:
+        logger.warning("MCP content fetch failed for '%s': %s", identifier, exc)
+        return None
+    if not fetched:
+        return None
+
+    # Preserve search-time metadata when fetch-time payload does not include it.
+    if not fetched.abstract:
+        fetched.abstract = source.abstract
+    if not fetched.pdf_url:
+        fetched.pdf_url = source.pdf_url
+    if not fetched.url:
+        fetched.url = source.url
+    if not fetched.authors:
+        fetched.authors = source.authors
+    if not fetched.year:
+        fetched.year = source.year
+    if source.citations_count is not None and fetched.citations_count is None:
+        fetched.citations_count = source.citations_count
+
+    merged_extra = dict(source.extra_metadata or {})
+    merged_extra.update(fetched.extra_metadata or {})
+    fetched.extra_metadata = merged_extra or None
+    return fetched
+
+
+def _ingest_selected_sources(
+    *,
+    session: Session,
+    tenant_id,
+    llm_provider: str | None,
+    connector: ScientificPapersMCPConnector,
+    selected: list[RankedCandidate],
+) -> dict[str, int]:
+    stats = {
+        "attempted": 0,
+        "ingested": 0,
+        "skipped_existing": 0,
+        "fallback_only": 0,
+        "failed": 0,
+    }
+    if not selected:
+        return stats
+
+    embed_client = _get_embed_client(llm_provider)
+    embedding_provider = _EmbeddingProviderAdapter(embed_client)
+
+    for candidate in selected:
+        stats["attempted"] += 1
+        source = candidate.source
+        fetched = _fetch_selected_source_content(connector, source)
+        content_source = fetched or source
+        content, content_origin = _content_for_ingestion(content_source)
+        if not content:
+            stats["failed"] += 1
+            continue
+
+        canonical_id = source.to_canonical_string()
+        row = create_or_get_source(
+            session=session,
+            tenant_id=tenant_id,
+            canonical_id=canonical_id,
+            source_type=str(source.source_type.value),
+            title=content_source.title,
+            authors=content_source.authors or [],
+            year=content_source.year,
+            venue=content_source.venue,
+            origin=source.connector,
+            cited_by_count=content_source.citations_count,
+            url=content_source.url,
+            doi=content_source.canonical_id.doi,
+            arxiv_id=content_source.canonical_id.arxiv_id,
+            metadata=_build_metadata(content_source),
+        )
+
+        current_sha = _sha256_text(content)
+        latest_sha = _latest_snapshot_sha(session, tenant_id=tenant_id, source_id=row.id)
+        if latest_sha == current_sha:
+            stats["skipped_existing"] += 1
+            continue
+
+        had_existing = _snapshot_exists_for_source(session, tenant_id=tenant_id, source_id=row.id)
+        metadata = dict(content_source.extra_metadata or {})
+        metadata.update(
+            {
+                "content_origin": content_origin,
+                "ingested_via": "retriever",
+            }
+        )
+        blob_ref = f"mcp:{canonical_id}:{content_origin}"
+        ingest_source(
+            session=session,
+            tenant_id=tenant_id,
+            canonical_id=canonical_id,
+            source_type=str(content_source.source_type.value),
+            raw_content=content,
+            embedding_provider=embedding_provider,
+            title=content_source.title,
+            authors=content_source.authors or [],
+            year=content_source.year,
+            url=content_source.url,
+            pdf_url=content_source.pdf_url,
+            content_type="text/plain",
+            blob_ref=blob_ref,
+            metadata=metadata,
+        )
+        stats["ingested"] += 1
+        if content_origin != "full_text":
+            stats["fallback_only"] += 1
+        if had_existing:
+            logger.info("Created new snapshot version for updated source '%s'", canonical_id)
+
+
 def _create_run_checkpoint(session: Session, *, tenant_id, run_id, stage: str, payload: dict) -> None:
     row = RunCheckpointRow(
         tenant_id=tenant_id,
@@ -1006,57 +1190,37 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         },
     )
 
-    openalex = OpenAlexConnector(email=os.getenv("OPENALEX_EMAIL"))
-    arxiv = ArXivConnector()
-
-    openalex_max = _env_int("RETRIEVER_OPENALEX_MAX", 5, min_value=1)
-    arxiv_max = _env_int("RETRIEVER_ARXIV_MAX", 5, min_value=1)
-
-    openalex_sources: list[RetrievedSource] = []
-    arxiv_sources: list[RetrievedSource] = []
+    mcp_connector = ScientificPapersMCPConnector()
+    mcp_max_per_source = _env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
+    retrieved_by_source: dict[str, list[RetrievedSource]] = {}
 
     for plan in query_plan:
         try:
-            sources = openalex.search(query=plan.query, max_results=openalex_max)
+            sources = mcp_connector.search(query=plan.query, max_results=mcp_max_per_source)
             for src in sources:
                 meta = dict(src.extra_metadata or {})
                 meta.update({"intent": plan.intent, "query": plan.query})
                 src.extra_metadata = meta
-            openalex_sources.extend(sources)
+                retrieved_by_source.setdefault(src.connector, []).append(src)
         except Exception as exc:
-            pass
+            logger.warning("MCP retrieval failed for query '%s': %s", plan.query, exc)
 
-        try:
-            sources = arxiv.search(query=plan.query, max_results=arxiv_max)
-            for src in sources:
-                meta = dict(src.extra_metadata or {})
-                meta.update({"intent": plan.intent, "query": plan.query})
-                src.extra_metadata = meta
-            arxiv_sources.extend(sources)
-        except Exception as exc:
-            pass
-
-    all_sources = openalex_sources + arxiv_sources
+    all_sources = [source for sources in retrieved_by_source.values() for source in sources]
     deduped_sources, dedup_stats = deduplicate_sources(all_sources, prefer_connector="openalex")
-
-    kept_openalex = sum(1 for s in deduped_sources if s.connector == "openalex")
-    kept_arxiv = sum(1 for s in deduped_sources if s.connector == "arxiv")
+    found_by_source = {source: len(items) for source, items in retrieved_by_source.items()}
+    kept_by_source = {source: count for source, count in dedup_stats.connectors_merged.items()}
 
     emit_run_event(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
-        event_type="retrieve.openalex_completed",
+        event_type="retrieve.mcp_completed",
         stage="retrieve",
-        data={"found": len(openalex_sources), "kept": kept_openalex},
-    )
-    emit_run_event(
-        session=session,
-        tenant_id=state.tenant_id,
-        run_id=state.run_id,
-        event_type="retrieve.arxiv_completed",
-        stage="retrieve",
-        data={"found": len(arxiv_sources), "kept": kept_arxiv},
+        data={
+            "sources": mcp_connector.sources,
+            "found_by_source": found_by_source,
+            "kept_by_source": kept_by_source,
+        },
     )
 
     candidate_count = len(deduped_sources)
@@ -1113,6 +1277,22 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
 
     per_intent_cap = max(1, math.ceil(target_count / max(len(ALLOWED_INTENTS), 1)))
     selected = _select_diverse(ranked, target_count, per_intent_cap)
+    ingestion_stats = _ingest_selected_sources(
+        session=session,
+        tenant_id=state.tenant_id,
+        llm_provider=state.llm_provider,
+        connector=mcp_connector,
+        selected=selected,
+    )
+
+    emit_run_event(
+        session=session,
+        tenant_id=state.tenant_id,
+        run_id=state.run_id,
+        event_type="retrieve.ingestion.completed",
+        stage="retrieve",
+        data=ingestion_stats,
+    )
 
     selected_refs: list[SourceRef] = []
     for candidate in selected:
@@ -1128,15 +1308,15 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             origin=origin,
         )
         selected_refs.append(
-                SourceRef(
-                    source_id=row.id,
-                    canonical_id=row.canonical_id,
-                    title=row.title or source.title,
-                    authors=list_source_author_names(row) or source.authors or [],
-                    abstract=source.abstract,
-                    year=row.year or source.year,
-                    venue=row.venue,
-                    doi=get_source_identifier(row, "doi"),
+            SourceRef(
+                source_id=row.id,
+                canonical_id=row.canonical_id,
+                title=row.title or source.title,
+                authors=list_source_author_names(row) or source.authors or [],
+                abstract=source.abstract,
+                year=row.year or source.year,
+                venue=row.venue,
+                doi=get_source_identifier(row, "doi"),
                 arxiv_id=get_source_identifier(row, "arxiv_id"),
                 url=row.url or source.url,
                 pdf_url=source.pdf_url,
@@ -1160,12 +1340,13 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             "query_count": len(query_plan),
             "queries": [{"intent": p.intent, "query": p.query} for p in query_plan],
             "llm_used": llm_used,
-            "found_openalex": len(openalex_sources),
-            "found_arxiv": len(arxiv_sources),
-            "kept_openalex": kept_openalex,
-            "kept_arxiv": kept_arxiv,
+            "retrieval_backend": "scientific-papers-mcp",
+            "mcp_sources": mcp_connector.sources,
+            "found_by_source": found_by_source,
+            "kept_by_source": kept_by_source,
             "deduped_sources": len(deduped_sources),
             "selected_sources": len(selected_refs),
+            "ingestion": ingestion_stats,
             "intent_counts": intent_counts,
         },
     )

@@ -3,14 +3,12 @@ Academic source connectors for ResearchOps Studio.
 
 Provides:
 - Base connector interface with rate limiting
-- OpenAlex connector (free, comprehensive)
-- arXiv connector (preprints)
+- Scientific Papers MCP connector for multi-source retrieval
 - Deduplication with canonical ID priority
 """
 
 from __future__ import annotations
 
-from connectors.arxiv import ArXivConnector
 from connectors.base import (
     BaseConnector,
     CanonicalIdentifier,
@@ -27,7 +25,7 @@ from connectors.dedup import (
     deduplicate_sources,
     filter_by_existing_ids,
 )
-from connectors.openalex import OpenAlexConnector
+from connectors.scientific_papers_mcp import ScientificPapersMCPConnector
 
 __all__ = [
     # Base classes
@@ -42,8 +40,7 @@ __all__ = [
     "RateLimitError",
     "TimeoutError",
     # Connectors
-    "OpenAlexConnector",
-    "ArXivConnector",
+    "ScientificPapersMCPConnector",
     # Deduplication
     "deduplicate_sources",
     "filter_by_existing_ids",
