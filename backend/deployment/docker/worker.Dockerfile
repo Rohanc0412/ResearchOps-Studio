@@ -32,7 +32,7 @@ PY
 
 COPY . /app
 
-ENV PYTHONPATH=/app/services/api/src:/app/services/orchestrator/src:/app/services/workers/src:/app/libs:/app/libs/research_rules:/app/data
+ENV PYTHONPATH=/app/services/workers:/app/services/orchestrator:/app/services/api:/app/libs:/app/data
 ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
 
-CMD ["python", "-m", "researchops_workers.main"]
+CMD ["python", "/app/services/workers/main.py"]

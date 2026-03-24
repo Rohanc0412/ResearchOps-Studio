@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-
-from researchops_api.utils.email import send_password_reset_otp
+from utils.email import send_password_reset_otp
 
 
 @dataclass(frozen=True)
@@ -44,21 +43,21 @@ class _FakeSMTP:
 
 def test_send_password_reset_otp_requires_host_and_from(monkeypatch) -> None:
     monkeypatch.setattr(
-        "researchops_api.utils.email.get_auth_config",
+        "utils.email.get_auth_config",
         lambda: _AuthCfg(smtp_host=None, smtp_from_email=None),
     )
     with pytest.raises(RuntimeError, match="SMTP not configured"):
         send_password_reset_otp(to_email="test@example.com", otp="123456")
 
     monkeypatch.setattr(
-        "researchops_api.utils.email.get_auth_config",
+        "utils.email.get_auth_config",
         lambda: _AuthCfg(smtp_host="smtp.local", smtp_from_email=None),
     )
     with pytest.raises(RuntimeError, match="SMTP not configured"):
         send_password_reset_otp(to_email="test@example.com", otp="123456")
 
     monkeypatch.setattr(
-        "researchops_api.utils.email.get_auth_config",
+        "utils.email.get_auth_config",
         lambda: _AuthCfg(smtp_host="   ", smtp_from_email="noreply@example.com"),
     )
     with pytest.raises(RuntimeError, match="SMTP not configured"):
@@ -67,7 +66,7 @@ def test_send_password_reset_otp_requires_host_and_from(monkeypatch) -> None:
 
 def test_send_password_reset_otp_requires_both_user_and_password(monkeypatch) -> None:
     monkeypatch.setattr(
-        "researchops_api.utils.email.get_auth_config",
+        "utils.email.get_auth_config",
         lambda: _AuthCfg(
             smtp_host="smtp.local",
             smtp_from_email="noreply@example.com",
@@ -79,7 +78,7 @@ def test_send_password_reset_otp_requires_both_user_and_password(monkeypatch) ->
         send_password_reset_otp(to_email="test@example.com", otp="123456")
 
     monkeypatch.setattr(
-        "researchops_api.utils.email.get_auth_config",
+        "utils.email.get_auth_config",
         lambda: _AuthCfg(
             smtp_host="smtp.local",
             smtp_from_email="noreply@example.com",
@@ -100,7 +99,7 @@ def test_send_password_reset_otp_skips_login_when_no_credentials(monkeypatch) ->
         return smtp
 
     monkeypatch.setattr(
-        "researchops_api.utils.email.get_auth_config",
+        "utils.email.get_auth_config",
         lambda: _AuthCfg(
             smtp_host="smtp.local",
             smtp_port=1025,
@@ -110,7 +109,7 @@ def test_send_password_reset_otp_skips_login_when_no_credentials(monkeypatch) ->
             smtp_starttls=False,
         ),
     )
-    monkeypatch.setattr("researchops_api.utils.email.smtplib.SMTP", _smtp_factory)
+    monkeypatch.setattr("utils.email.smtplib.SMTP", _smtp_factory)
 
     send_password_reset_otp(to_email="test@example.com", otp="123456")
 
@@ -131,7 +130,7 @@ def test_send_password_reset_otp_logs_in_when_credentials_provided(monkeypatch) 
         return smtp
 
     monkeypatch.setattr(
-        "researchops_api.utils.email.get_auth_config",
+        "utils.email.get_auth_config",
         lambda: _AuthCfg(
             smtp_host="smtp.local",
             smtp_port=587,
@@ -141,7 +140,7 @@ def test_send_password_reset_otp_logs_in_when_credentials_provided(monkeypatch) 
             smtp_starttls=True,
         ),
     )
-    monkeypatch.setattr("researchops_api.utils.email.smtplib.SMTP", _smtp_factory)
+    monkeypatch.setattr("utils.email.smtplib.SMTP", _smtp_factory)
 
     send_password_reset_otp(to_email="test@example.com", otp="123456")
 

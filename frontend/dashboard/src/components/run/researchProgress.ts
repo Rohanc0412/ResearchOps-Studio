@@ -31,6 +31,7 @@ export type ResearchProgressCardModel = {
 type BuildResearchProgressCardModelArgs = {
   activeRun: {
     status: ProgressStatus;
+    question?: string;
     primaryText: string;
     secondaryText?: string;
     error?: string;
@@ -59,7 +60,7 @@ export function buildResearchProgressCardModel({
   messages,
   events
 }: BuildResearchProgressCardModelArgs): ResearchProgressCardModel {
-  const title = deriveResearchTitle(messages, chatTitle);
+  const title = deriveResearchTitle(activeRun?.question, messages, chatTitle);
   const topic = deriveTopicPhrase(title);
   const steps = [
     { id: "collect", label: `Collect recent evidence on ${topic}.` },
@@ -101,7 +102,13 @@ export function buildResearchProgressCardModel({
   };
 }
 
-function deriveResearchTitle(messages: ChatMessage[], chatTitle?: string | null) {
+function deriveResearchTitle(
+  runQuestion: string | undefined,
+  messages: ChatMessage[],
+  chatTitle?: string | null
+) {
+  if (runQuestion?.trim()) return clamp(runQuestion.trim(), 72);
+
   let fallbackTitle: string | null = null;
 
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -334,10 +341,13 @@ function isGenericRunTrigger(value: string) {
     "create the detailed research report now",
     "create the research report now",
     "run the research report",
+    "run the research report now",
     "run the detailed research report",
     "start the research report",
+    "start the research report now",
     "create the report now",
     "generate the report now",
-    "continue with the report"
+    "continue with the report",
+    "run the report now"
   ].includes(normalized.replace(/[.!?]+$/g, ""));
 }

@@ -157,7 +157,7 @@ export function SecurityPage() {
               placeholder="123456"
               autoComplete="one-time-code"
             />
-            <Button className="w-full" variant="danger" type="submit" disabled={isWorking}>
+            <Button className="w-full" type="submit" disabled={isWorking}>
               {isWorking ? "Disabling..." : "Disable MFA"}
             </Button>
           </form>

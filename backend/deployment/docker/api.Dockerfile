@@ -13,9 +13,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
 
-ENV PYTHONPATH=/app/services/api/src:/app/services/orchestrator/src:/app/services/workers/src:/app/libs:/app/libs/research_rules:/app/data
+ENV PYTHONPATH=/app/services/api:/app/services/orchestrator:/app/services/workers:/app/libs:/app/libs/research_rules:/app/data
 ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
 
 EXPOSE 8000
 
-CMD ["python", "-m", "researchops_api.main"]
+CMD ["python", "-m", "main"]

@@ -14,7 +14,6 @@ import { useProjectQuery } from "../api/projects";
 import { useCancelRunMutation, useRetryRunMutation } from "../api/runs";
 import { ResearchProgressCard } from "../components/run/ResearchProgressCard";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
-import { Button } from "../components/ui/Button";
 import { Spinner } from "../components/ui/Spinner";
 import { MODEL_OPTIONS, CUSTOM_MODEL_VALUE, DEFAULT_HOSTED_MODEL, EMPTY_REPORT } from "../features/chat/constants";
 import { ExportModal } from "../features/chat/components/ExportModal";
@@ -529,6 +528,7 @@ export function ChatViewPage() {
         setActiveRun({
           runId: latestRunId,
           status: "failed",
+          question: typeof run.question === "string" ? run.question : undefined,
           primaryText: "Something went wrong",
           secondaryText: message,
           startedAt: run.created_at ?? new Date().toISOString(),
@@ -543,6 +543,7 @@ export function ChatViewPage() {
       setActiveRun({
         runId: latestRunId,
         status: "running",
+        question: typeof run.question === "string" ? run.question : undefined,
         primaryText: "Resuming report generation…",
         secondaryText: "Checking progress…",
         startedAt: run.created_at ?? new Date().toISOString()
@@ -593,12 +594,14 @@ export function ChatViewPage() {
         // TECH: run_id is stored in content_json; validate it???s a string.
         // PLAIN: Get the job ID if one was created.
         const runId = assistant.content_json?.["run_id"];
+        const runQuestion = assistant.content_json?.["question"];
         if (typeof runId === "string") {
           // TECH: Set activeRun so SSE starts and banner appears.
           // PLAIN: Show the ???job running??? indicator and start listening for progress.
           setActiveRun({
             runId,
             status: "running",
+            question: typeof runQuestion === "string" ? runQuestion : undefined,
             primaryText: "Starting run...",
             startedAt: new Date().toISOString()
           });
@@ -767,6 +770,8 @@ export function ChatViewPage() {
   // TECH: Quick action presets that write into the draft input for convenience.
   // PLAIN: Shortcuts you can click to quickly ask common requests.
   const quickActions = ["Add conclusion", "Add recommendations", "Summarize findings", "Add references"];
+  const reportActionButtonClasses =
+    "inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600";
 
   return (
     // TECH: Two-panel fixed layout; left is chat, right is report preview.
@@ -826,9 +831,12 @@ export function ChatViewPage() {
             return (
               <div key={message.id} className={`mb-4 flex flex-col ${isUser ? "items-end" : "items-start"}`}>
                 <div
-                  // TECH: Bubble styling depends on user vs assistant vs error; also uses whitespace-pre-wrap to preserve newlines.
+                  // TECH: Bubble styling depends on user vs assistant vs error. Only user/error bubbles preserve raw newlines;
+                  // assistant markdown uses normal whitespace so blank lines don't compound with markdown block spacing.
                   // PLAIN: The bubble looks different for you, the assistant, and errors.
-                  className={`max-w-[90%] whitespace-pre-wrap rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
+                  className={`max-w-[90%] ${
+                    isUser || isError || message.type === "action" ? "whitespace-pre-wrap" : "whitespace-normal"
+                  } rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
                     isUser
                       ? "rounded-br-sm border border-emerald-500/30 bg-emerald-500/15 text-slate-200"
                       : isError
@@ -1010,11 +1018,13 @@ export function ChatViewPage() {
         {/* TECH: Shows report title and a status pill that reflects whether a run is active. */}
         {/* PLAIN: Top bar showing ???Live Report??? and whether it???s ready or processing. */}
         <div className="flex items-center justify-between border-b border-slate-800 px-8 py-5">
-          <h2 className="font-mono text-xl font-semibold text-slate-100">Live Report</h2>
+          <h2 className="font-mono text-lg font-semibold tracking-tight text-slate-100 md:text-xl">Live Report</h2>
           <div className="flex items-center gap-3">
-            <div className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${reportStatusClasses}`}>
+            <div
+              className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3.5 text-[0.7rem] font-medium uppercase tracking-[0.16em] ${reportStatusClasses}`}
+            >
               <div
-                className={`h-1.5 w-1.5 rounded-full ${
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                   activeRun?.status === "failed"
                     ? "bg-rose-400"
                     : activeRun?.status === "canceled"
@@ -1030,13 +1040,13 @@ export function ChatViewPage() {
         {/* Action Buttons */}
         {/* TECH: Report-level actions; disabled when report is empty to prevent meaningless exports/shares. */}
         {/* PLAIN: Buttons to download, clear, or share the report once it exists. */}
-        <div className="flex gap-3 border-b border-slate-800 px-8 py-4">
+        <div className="flex flex-wrap gap-3 border-b border-slate-800 px-8 py-4">
           <button
             // TECH: Open export modal; disabled if no sections.
             // PLAIN: Choose how to download the report.
             onClick={() => setShowExportModal(true)}
             disabled={report.sections.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600"
+            className={reportActionButtonClasses}
           >
             <Download className="h-4 w-4" />
             Export
@@ -1046,7 +1056,7 @@ export function ChatViewPage() {
             // PLAIN: Delete the report text from the screen.
             onClick={handleClear}
             disabled={report.sections.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600"
+            className={reportActionButtonClasses}
           >
             <Trash2 className="h-4 w-4" />
             Clear
@@ -1056,13 +1066,13 @@ export function ChatViewPage() {
             // PLAIN: Show a share link for the report.
             onClick={() => setShowShareModal(true)}
             disabled={report.sections.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600"
+            className={reportActionButtonClasses}
           >
             <Share2 className="h-4 w-4" />
             Share
           </button>
           <div className="ml-auto">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-500">
               <Sparkles className="h-5 w-5" />
             </div>
           </div>

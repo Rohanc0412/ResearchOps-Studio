@@ -36,12 +36,12 @@ export async function downloadArtifact(artifactId: string): Promise<void> {
 
 function filenameFromDisposition(disposition: string | null): string | null {
   if (!disposition) return null;
-  const match = /filename\*?=(?:UTF-8''|\"?)([^\";]+)/i.exec(disposition);
+  const match = /filename\*?=(?:UTF-8''|"?)([^";]+)/i.exec(disposition);
   if (!match?.[1]) return null;
   try {
-    return decodeURIComponent(match[1].replace(/\"/g, ""));
+    return decodeURIComponent(match[1].replace(/"/g, ""));
   } catch {
-    return match[1].replace(/\"/g, "");
+    return match[1].replace(/"/g, "");
   }
 }
 

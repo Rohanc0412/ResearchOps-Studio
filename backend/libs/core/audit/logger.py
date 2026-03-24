@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
-from core.tenancy import tenant_uuid
 
+from core.auth.identity import Identity
+from core.tenancy import tenant_uuid
+from db.models.audit_logs import AuditLogRow
 from fastapi import Request
 from observability.context import request_id as request_id_ctx
 from sqlalchemy.orm import Session
-
-from db.models.audit_logs import AuditLogRow
-from core.auth.identity import Identity
 
 
 def _now_utc() -> datetime:

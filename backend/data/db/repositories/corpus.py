@@ -15,21 +15,36 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
+def _normalize_author_names(authors: list[str] | None) -> list[str]:
+    return [str(value).strip() for value in authors or [] if str(value).strip()]
+
+
 def list_source_author_names(source: SourceRow) -> list[str]:
     rows = sorted(source.authors, key=lambda row: row.author_order)
     return [row.author_name for row in rows]
 
 
 def replace_source_authors(source: SourceRow, authors: list[str] | None) -> None:
-    source.authors = [
-        SourceAuthorRow(
-            tenant_id=source.tenant_id,
-            author_order=index,
-            author_name=str(value),
+    normalized = _normalize_author_names(authors)
+    existing = sorted(source.authors, key=lambda row: row.author_order)
+
+    for index, value in enumerate(normalized):
+        if index < len(existing):
+            row = existing[index]
+            row.author_order = index
+            row.author_name = value
+            continue
+
+        source.authors.append(
+            SourceAuthorRow(
+                tenant_id=source.tenant_id,
+                author_order=index,
+                author_name=value,
+            )
         )
-        for index, value in enumerate(authors or [])
-        if str(value).strip()
-    ]
+
+    for row in existing[len(normalized) :]:
+        source.authors.remove(row)
 
 
 def get_source_identifier(source: SourceRow, identifier_type: str) -> str | None:
@@ -39,7 +54,11 @@ def get_source_identifier(source: SourceRow, identifier_type: str) -> str | None
     return None
 
 
-def set_source_identifier(source: SourceRow, identifier_type: str, identifier_value: str | None) -> None:
+def set_source_identifier(
+    source: SourceRow,
+    identifier_type: str,
+    identifier_value: str | None,
+) -> None:
     rows = [row for row in source.identifiers if row.identifier_type != identifier_type]
     if identifier_value:
         rows.append(
@@ -99,9 +118,10 @@ def create_or_get_source(
         if title and existing.title != title:
             existing.title = title
             updated = True
+        normalized_authors = _normalize_author_names(authors)
         current_authors = list_source_author_names(existing)
-        if authors and current_authors != authors:
-            replace_source_authors(existing, authors)
+        if normalized_authors and current_authors != normalized_authors:
+            replace_source_authors(existing, normalized_authors)
             updated = True
         if year and existing.year != year:
             existing.year = year

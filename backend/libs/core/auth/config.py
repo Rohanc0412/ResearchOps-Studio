@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from core.env import resolve_env_files
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from core.env import resolve_env_file, resolve_env_files
 
 
 class AuthConfig(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=resolve_env_files() or (resolve_env_file() or ".env"),
+        env_file=resolve_env_files() or ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -71,7 +70,6 @@ class AuthConfig(BaseSettings):
     smtp_starttls: bool = Field(default=True, validation_alias="SMTP_STARTTLS")
     smtp_from_name: str = Field(default="noreply researchstudio", validation_alias="SMTP_FROM_NAME")
     smtp_from_email: str | None = Field(default=None, validation_alias="SMTP_FROM_EMAIL")
-
 
     def validate_for_startup(self, *, environment: str) -> None:
         if self.dev_bypass_auth and environment != "local":

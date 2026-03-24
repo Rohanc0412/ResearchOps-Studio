@@ -24,9 +24,3 @@ def require_roles(*allowed: str) -> Callable[[Identity], Identity]:
 
     return _dep
 
-
-def require_tenant(identity: Identity, tenant_id: str) -> Identity:
-    if identity.tenant_id != tenant_id:
-        raise PermissionError("Cross-tenant access denied")
-    return identity
-

@@ -4,26 +4,19 @@ This module provides production-grade run lifecycle management with:
 - State transition validation (enforces allowed transitions)
 - Atomic transitions (row-level locking to prevent race conditions)
 - Event emission (every state/stage change emits events)
-- Idempotency (guards against duplicate event emission)
-- Cooperative cancellation (cancel flag checked between stages)
+- Cooperative cancellation
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 from uuid import UUID
-
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from db.models.run_events import RunEventLevelDb, RunEventRow
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.project_runs import append_run_event
-
-if TYPE_CHECKING:
-    pass
-
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 # Run state machine: allowed transitions
 # Maps from_status -> set of allowed to_status values
@@ -45,14 +38,7 @@ ALLOWED_TRANSITIONS: dict[RunStatusDb, set[RunStatusDb]] = {
 # Terminal states (cannot transition out except via retry for failed)
 TERMINAL_STATES = {RunStatusDb.succeeded, RunStatusDb.canceled}
 
-# Valid run stages
-VALID_STAGES = {"retrieve", "ingest", "outline", "draft", "validate", "factcheck", "export"}
-
 # Event types
-EVENT_TYPE_STAGE_START = "stage_start"
-EVENT_TYPE_STAGE_FINISH = "stage_finish"
-EVENT_TYPE_LOG = "log"
-EVENT_TYPE_ERROR = "error"
 EVENT_TYPE_STATE = "state"
 
 
@@ -68,7 +54,7 @@ class RunNotFoundError(ValueError):
     pass
 
 
-def validate_transition(from_status: RunStatusDb, to_status: RunStatusDb) -> None:
+def _validate_transition(from_status: RunStatusDb, to_status: RunStatusDb) -> None:
     """Validate that a state transition is allowed.
 
     Args:
@@ -146,7 +132,7 @@ def transition_run_status(
 
     # Validate transition
     from_status = run.status
-    validate_transition(from_status, to_status)
+    _validate_transition(from_status, to_status)
 
     # Update run fields
     run.status = to_status
@@ -228,181 +214,6 @@ def emit_run_event(
         payload_json=payload or {},
         allow_finished=True,
     )
-
-
-def emit_stage_start(
-    session: Session, tenant_id: UUID, run_id: UUID, stage: str, payload: dict | None = None
-) -> RunEventRow:
-    """Emit a stage_start event and update run's current_stage.
-
-    This is idempotent: if the most recent event for this run+stage is already
-    a stage_start, we skip emitting a duplicate.
-
-    Args:
-        session: Database session
-        tenant_id: Tenant ID
-        run_id: Run ID
-        stage: Stage name
-        payload: Optional payload
-
-    Returns:
-        Created or existing RunEventRow
-    """
-    if stage not in VALID_STAGES:
-        raise ValueError(f"Invalid stage: {stage}. Must be one of {VALID_STAGES}")
-
-    # Check if we already emitted stage_start for this stage
-    # (idempotency guard)
-    last_event_stmt = (
-        select(RunEventRow)
-        .where(
-            RunEventRow.tenant_id == tenant_id,
-            RunEventRow.run_id == run_id,
-            RunEventRow.stage == stage,
-        )
-        .order_by(RunEventRow.event_number.desc())
-        .limit(1)
-    )
-    last_event = session.execute(last_event_stmt).scalar_one_or_none()
-
-    if last_event and last_event.event_type == EVENT_TYPE_STAGE_START:
-        # Already emitted, return existing event
-        return last_event
-
-    # Update run's current_stage
-    stmt = (
-        select(RunRow)
-        .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
-        .with_for_update()
-    )
-    run = session.execute(stmt).scalar_one_or_none()
-    if run:
-        run.current_stage = stage
-        run.updated_at = datetime.now(UTC)
-        session.flush()
-
-    # Emit event
-    return emit_run_event(
-        session=session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        event_type=EVENT_TYPE_STAGE_START,
-        level=RunEventLevelDb.info,
-        message=f"Starting stage: {stage}",
-        stage=stage,
-        payload=payload,
-    )
-
-
-def emit_stage_finish(
-    session: Session, tenant_id: UUID, run_id: UUID, stage: str, payload: dict | None = None
-) -> RunEventRow:
-    """Emit a stage_finish event.
-
-    Args:
-        session: Database session
-        tenant_id: Tenant ID
-        run_id: Run ID
-        stage: Stage name
-        payload: Optional payload
-
-    Returns:
-        Created RunEventRow
-    """
-    if stage not in VALID_STAGES:
-        raise ValueError(f"Invalid stage: {stage}. Must be one of {VALID_STAGES}")
-
-    return emit_run_event(
-        session=session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        event_type=EVENT_TYPE_STAGE_FINISH,
-        level=RunEventLevelDb.info,
-        message=f"Finished stage: {stage}",
-        stage=stage,
-        payload=payload,
-    )
-
-
-def emit_error_event(
-    session: Session,
-    tenant_id: UUID,
-    run_id: UUID,
-    error_code: str,
-    reason: str,
-    stage: str | None = None,
-    payload: dict | None = None,
-) -> RunEventRow:
-    """Emit an error event and transition run to failed status.
-
-    Args:
-        session: Database session
-        tenant_id: Tenant ID
-        run_id: Run ID
-        error_code: Error code (e.g., "validation_error", "timeout")
-        reason: Human-readable error reason
-        stage: Optional stage where error occurred
-        payload: Optional additional error context
-
-    Returns:
-        Created RunEventRow
-    """
-    event_payload = payload or {}
-    event_payload["error_code"] = error_code
-    event_payload["reason"] = reason
-
-    # Emit error event
-    event = emit_run_event(
-        session=session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        event_type=EVENT_TYPE_ERROR,
-        level=RunEventLevelDb.error,
-        message=f"Error: {reason}",
-        stage=stage,
-        payload=event_payload,
-    )
-
-    # Transition run to failed (if not already terminal)
-    stmt = select(RunRow).where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
-    run = session.execute(stmt).scalar_one_or_none()
-
-    if run and run.status not in TERMINAL_STATES:
-        try:
-            transition_run_status(
-                session=session,
-                tenant_id=tenant_id,
-                run_id=run_id,
-                to_status=RunStatusDb.failed,
-                failure_reason=reason,
-                error_code=error_code,
-                finished_at=datetime.now(UTC),
-                current_stage=stage,
-                emit_event=False,  # We already emitted the error event
-            )
-        except RunTransitionError:
-            # Already in a terminal state or invalid transition, ignore
-            pass
-
-    return event
-
-
-def check_cancel_requested(session: Session, tenant_id: UUID, run_id: UUID) -> bool:
-    """Check if cancellation has been requested for a run.
-
-    Args:
-        session: Database session
-        tenant_id: Tenant ID
-        run_id: Run ID
-
-    Returns:
-        True if cancel_requested_at is set, False otherwise
-    """
-    stmt = select(RunRow.cancel_requested_at).where(
-        RunRow.tenant_id == tenant_id, RunRow.id == run_id
-    )
-    result = session.execute(stmt).scalar_one_or_none()
-    return result is not None
 
 
 def request_cancel(

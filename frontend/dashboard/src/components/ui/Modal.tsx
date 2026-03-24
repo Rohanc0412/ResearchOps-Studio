@@ -35,7 +35,7 @@ export function Modal({
       <div className={cx("relative w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-soft", className)}>
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-semibold text-slate-100">{title}</div>
-          <Button variant="ghost" onClick={onClose} aria-label="Close">
+          <Button onClick={onClose} aria-label="Close">
             <X className="h-4 w-4" />
           </Button>
         </div>

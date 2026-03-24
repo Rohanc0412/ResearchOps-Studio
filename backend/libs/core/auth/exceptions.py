@@ -20,7 +20,3 @@ class AuthExpiredError(AuthError):
 class AuthIssuerError(AuthError):
     pass
 
-
-class AuthAudienceError(AuthError):
-    pass
-

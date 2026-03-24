@@ -4,16 +4,15 @@ import os
 from uuid import UUID
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
-from researchops_api import create_app
+from app import create_app
 from core.auth.config import get_auth_config
 from core.settings import get_settings
 from db.models.chat_conversations import ChatConversationRow
 from db.models.chat_messages import ChatMessageRow
 from db.models.runs import RunRow
 from db.session import session_scope
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 
 @pytest.fixture()
@@ -52,6 +51,7 @@ def _send_message(
     project_id: str,
     message: str,
     client_message_id: str,
+    force_pipeline: bool = False,
 ):
     return client.post(
         "/chat/send",
@@ -60,8 +60,21 @@ def _send_message(
             "project_id": project_id,
             "message": message,
             "client_message_id": client_message_id,
+            "force_pipeline": force_pipeline,
         },
     )
+
+
+def _latest_run_question(app, project_id: str) -> str:
+    SessionLocal = app.state.SessionLocal
+    with session_scope(SessionLocal) as session:
+        run = session.execute(
+            select(RunRow)
+            .where(RunRow.project_id == UUID(project_id))
+            .order_by(RunRow.created_at.desc())
+        ).scalars().first()
+        assert run is not None
+        return run.question
 
 
 def test_chat_message_persistence(api_client) -> None:
@@ -140,8 +153,240 @@ def test_pipeline_yes_starts_run(api_client) -> None:
             select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
         ).scalar_one()
         assert convo.pending_action_json is None
-        run = session.execute(select(RunRow).where(RunRow.project_id == UUID(project_id))).scalar_one()
+        run = session.execute(
+            select(RunRow).where(RunRow.project_id == UUID(project_id))
+        ).scalar_one()
         assert run is not None
+
+
+def test_force_pipeline_uses_prior_substantive_prompt_for_generic_trigger(api_client) -> None:
+    client, app = api_client
+    project_id = _create_project(client, "Force Pipeline Project")
+    conversation_id = _create_conversation(client, project_id)
+
+    detailed_prompt = (
+        "Run the full research report on adoption risks of autonomous coding agents "
+        "in enterprise teams, with citations and evidence."
+    )
+    generic_trigger = "Run the research report now."
+
+    first = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message=detailed_prompt,
+        client_message_id="force-1",
+    )
+    assert first.status_code == 200
+
+    second = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message=generic_trigger,
+        client_message_id="force-2",
+        force_pipeline=True,
+    )
+    assert second.status_code == 200
+    assert second.json()["assistant_message"]["type"] == "run_started"
+    assert second.json()["assistant_message"]["content_json"]["question"] == detailed_prompt
+    run_id = second.json()["assistant_message"]["content_json"]["run_id"]
+
+    assert _latest_run_question(app, project_id) == detailed_prompt
+    run_resp = client.get(f"/runs/{run_id}")
+    assert run_resp.status_code == 200
+    assert run_resp.json()["question"] == detailed_prompt
+
+
+@pytest.mark.parametrize(
+    "generic_trigger",
+    [
+        "Run the research report now.",
+        "RUN THE RESEARCH REPORT NOW!!!",
+        "create the detailed research report now",
+        "Go ahead",
+    ],
+)
+def test_force_pipeline_generic_trigger_variants_use_prior_prompt(
+    api_client, generic_trigger: str
+) -> None:
+    client, app = api_client
+    project_id = _create_project(client, "Generic Variants Project")
+    conversation_id = _create_conversation(client, project_id)
+    detailed_prompt = (
+        "Assess the security, governance, and reliability risks of autonomous coding "
+        "agents in enterprise teams, with citations and evidence."
+    )
+
+    first = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message=detailed_prompt,
+        client_message_id=f"variant-seed-{generic_trigger}",
+    )
+    assert first.status_code == 200
+
+    second = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message=generic_trigger,
+        client_message_id=f"variant-run-{generic_trigger}",
+        force_pipeline=True,
+    )
+    assert second.status_code == 200
+    assert second.json()["assistant_message"]["content_json"]["question"] == detailed_prompt
+    assert _latest_run_question(app, project_id) == detailed_prompt
+
+
+def test_force_pipeline_uses_most_recent_substantive_prompt(api_client) -> None:
+    client, app = api_client
+    project_id = _create_project(client, "Most Recent Prompt Project")
+    conversation_id = _create_conversation(client, project_id)
+    first_prompt = "Create a cited report on governance risks of autonomous coding agents."
+    second_prompt = (
+        "Create a cited report on operational rollout risks of autonomous coding agents "
+        "in enterprise teams."
+    )
+
+    assert (
+        _send_message(
+            client,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            message=first_prompt,
+            client_message_id="recent-1",
+        ).status_code
+        == 200
+    )
+    assert (
+        _send_message(
+            client,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            message="thanks",
+            client_message_id="recent-ack",
+        ).status_code
+        == 200
+    )
+    assert (
+        _send_message(
+            client,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            message=second_prompt,
+            client_message_id="recent-2",
+        ).status_code
+        == 200
+    )
+
+    resp = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message="Run the research report now.",
+        client_message_id="recent-run",
+        force_pipeline=True,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["assistant_message"]["content_json"]["question"] == second_prompt
+    assert _latest_run_question(app, project_id) == second_prompt
+
+
+def test_force_pipeline_ignores_non_substantive_prior_messages(api_client) -> None:
+    client, app = api_client
+    project_id = _create_project(client, "Non Substantive Project")
+    conversation_id = _create_conversation(client, project_id)
+
+    assert (
+        _send_message(
+            client,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            message="hello",
+            client_message_id="noise-1",
+        ).status_code
+        == 200
+    )
+    assert (
+        _send_message(
+            client,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            message="thanks",
+            client_message_id="noise-2",
+        ).status_code
+        == 200
+    )
+
+    generic_trigger = "Run the research report now."
+    resp = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message=generic_trigger,
+        client_message_id="noise-run",
+        force_pipeline=True,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["assistant_message"]["content_json"]["question"] == generic_trigger
+    assert _latest_run_question(app, project_id) == generic_trigger
+
+
+def test_force_pipeline_does_not_reuse_prompt_from_other_conversation(api_client) -> None:
+    client, app = api_client
+    project_id = _create_project(client, "Conversation Isolation Project")
+    source_conversation_id = _create_conversation(client, project_id)
+    target_conversation_id = _create_conversation(client, project_id)
+    detailed_prompt = (
+        "Create a cited report on adoption risks of autonomous coding agents in "
+        "enterprise teams."
+    )
+    generic_trigger = "Run the research report now."
+
+    seed = _send_message(
+        client,
+        conversation_id=source_conversation_id,
+        project_id=project_id,
+        message=detailed_prompt,
+        client_message_id="isolation-seed",
+    )
+    assert seed.status_code == 200
+
+    resp = _send_message(
+        client,
+        conversation_id=target_conversation_id,
+        project_id=project_id,
+        message=generic_trigger,
+        client_message_id="isolation-run",
+        force_pipeline=True,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["assistant_message"]["content_json"]["question"] == generic_trigger
+    assert _latest_run_question(app, project_id) == generic_trigger
+
+
+def test_force_pipeline_direct_detailed_prompt_uses_same_question(api_client) -> None:
+    client, app = api_client
+    project_id = _create_project(client, "Direct Force Pipeline Project")
+    conversation_id = _create_conversation(client, project_id)
+    detailed_prompt = (
+        "Evaluate the operational, security, and governance risks of autonomous coding "
+        "agents in enterprise teams, with citations and evidence."
+    )
+
+    resp = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message=detailed_prompt,
+        client_message_id="direct-run",
+        force_pipeline=True,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["assistant_message"]["content_json"]["question"] == detailed_prompt
+    assert _latest_run_question(app, project_id) == detailed_prompt
 
 
 def test_pipeline_no_returns_quick_answer(api_client) -> None:
@@ -342,5 +587,7 @@ def test_run_start_idempotency(api_client) -> None:
 
     SessionLocal = app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        runs = session.execute(select(RunRow).where(RunRow.project_id == UUID(project_id))).scalars().all()
+        runs = session.execute(
+            select(RunRow).where(RunRow.project_id == UUID(project_id))
+        ).scalars().all()
         assert len(runs) == 1

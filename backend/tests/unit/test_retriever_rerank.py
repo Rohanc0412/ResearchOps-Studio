@@ -4,12 +4,11 @@ from datetime import datetime
 from uuid import uuid4
 
 import pytest
+from connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
+from db.init_db import init_db
+from nodes import retriever as retriever_module
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
-from db.init_db import init_db
-from connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
-from researchops_orchestrator.nodes import retriever as retriever_module
 
 
 @pytest.fixture
@@ -161,7 +160,11 @@ def test_rerank_fallback_when_embedding_fails(session, monkeypatch):
         def embed_texts(self, texts: list[str]) -> list[list[float]]:
             raise retriever_module.EmbedError("boom")
 
-    monkeypatch.setattr(retriever_module, "_get_embed_client", lambda _provider: FailingEmbedClient())
+    monkeypatch.setattr(
+        retriever_module,
+        "_get_embed_client",
+        lambda _provider: FailingEmbedClient(),
+    )
 
     sources = [
         _make_source(doi="10.1000/10", title="Fallback A", abstract="Alpha"),

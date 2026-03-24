@@ -36,7 +36,7 @@ export function EvidencePage() {
           </div>
         </div>
         <Link to="/projects">
-          <Button variant="secondary">Projects</Button>
+          <Button>Projects</Button>
         </Link>
       </div>
 

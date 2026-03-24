@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-from fastapi.testclient import TestClient
-from researchops_api import create_app
-from core.settings import get_settings
+
+from app import create_app
 from core.auth.config import get_auth_config
+from core.settings import get_settings
+from fastapi.testclient import TestClient
 
 
 def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:

@@ -73,10 +73,10 @@ function coerceRoles(raw: unknown): string[] {
 }
 
 function mapAuthUser(payload: Record<string, unknown>): AuthUser | null {
-  const user_id = typeof payload.user_id === "string" ? payload.user_id : "";
-  const username = typeof payload.username === "string" ? payload.username : user_id;
-  const tenant_id = typeof payload.tenant_id === "string" ? payload.tenant_id : "";
-  const roles = coerceRoles(payload.roles);
+  const user_id = typeof payload["user_id"] === "string" ? payload["user_id"] : "";
+  const username = typeof payload["username"] === "string" ? payload["username"] : user_id;
+  const tenant_id = typeof payload["tenant_id"] === "string" ? payload["tenant_id"] : "";
+  const roles = coerceRoles(payload["roles"]);
   if (!user_id || !tenant_id) return null;
   return { user_id, username, tenant_id, roles };
 }
@@ -143,17 +143,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const payload = await parseJson(response);
     if (!response.ok) {
       const message =
-        typeof payload.detail === "string" ? payload.detail : "Login failed. Check credentials.";
+        typeof payload["detail"] === "string" ? payload["detail"] : "Login failed. Check credentials.";
       throw new Error(message);
     }
-    const mfaRequired = payload.mfa_required === true;
+    const mfaRequired = payload["mfa_required"] === true;
     if (mfaRequired) {
-      const token = typeof payload.mfa_token === "string" ? payload.mfa_token : "";
+      const token = typeof payload["mfa_token"] === "string" ? payload["mfa_token"] : "";
       if (!token) throw new Error("Missing MFA token");
-      const mfaUser = typeof payload.username === "string" ? payload.username : undefined;
+      const mfaUser = typeof payload["username"] === "string" ? payload["username"] : undefined;
       return { mfaRequired: true, mfaToken: token, username: mfaUser };
     }
-    const token = typeof payload.access_token === "string" ? payload.access_token : "";
+    const token = typeof payload["access_token"] === "string" ? payload["access_token"] : "";
     if (!token) throw new Error("Missing access token");
     setAccessToken(token);
     setUser(mapAuthUser(payload));
@@ -168,10 +168,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const payload = await parseJson(response);
     if (!response.ok) {
       const message =
-        typeof payload.detail === "string" ? payload.detail : "MFA verification failed.";
+        typeof payload["detail"] === "string" ? payload["detail"] : "MFA verification failed.";
       throw new Error(message);
     }
-    const token = typeof payload.access_token === "string" ? payload.access_token : "";
+    const token = typeof payload["access_token"] === "string" ? payload["access_token"] : "";
     if (!token) throw new Error("Missing access token");
     setAccessToken(token);
     setUser(mapAuthUser(payload));
@@ -190,10 +190,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const payload = await parseJson(response);
     if (!response.ok) {
       const message =
-        typeof payload.detail === "string" ? payload.detail : "Sign up failed. Try again.";
+        typeof payload["detail"] === "string" ? payload["detail"] : "Sign up failed. Try again.";
       throw new Error(message);
     }
-    const token = typeof payload.access_token === "string" ? payload.access_token : "";
+    const token = typeof payload["access_token"] === "string" ? payload["access_token"] : "";
     if (!token) throw new Error("Missing access token");
     setAccessToken(token);
     setUser(mapAuthUser(payload));
@@ -207,10 +207,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const payload = await parseJson(response);
     if (!response.ok) {
       const message =
-        typeof payload.detail === "string" ? payload.detail : "Password reset request failed.";
+        typeof payload["detail"] === "string"
+          ? payload["detail"]
+          : "Password reset request failed.";
       throw new Error(message);
     }
-    const resetToken = typeof payload.reset_token === "string" ? payload.reset_token : undefined;
+    const resetToken =
+      typeof payload["reset_token"] === "string" ? payload["reset_token"] : undefined;
     return { resetToken };
   }
 
@@ -222,7 +225,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const payload = await parseJson(response);
     if (!response.ok) {
       const message =
-        typeof payload.detail === "string" ? payload.detail : "Password reset failed.";
+        typeof payload["detail"] === "string" ? payload["detail"] : "Password reset failed.";
       throw new Error(message);
     }
   }
@@ -233,7 +236,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!response.ok) {
       throw new Error("Unable to refresh session");
     }
-    const token = typeof payload.access_token === "string" ? payload.access_token : "";
+    const token = typeof payload["access_token"] === "string" ? payload["access_token"] : "";
     if (!token) throw new Error("Missing access token");
     setAccessToken(token);
     setUser(mapAuthUser(payload));

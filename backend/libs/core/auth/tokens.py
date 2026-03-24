@@ -3,15 +3,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
-from jwt import InvalidIssuerError
-from jwt.exceptions import ExpiredSignatureError, PyJWTError
-
 from core.auth.exceptions import AuthExpiredError, AuthInvalidTokenError, AuthIssuerError
 from core.auth.identity import TENANT_CLAIM_PRIMARY
+from jwt import InvalidIssuerError
+from jwt.exceptions import ExpiredSignatureError, PyJWTError
 
 
 def issue_access_token(
@@ -26,7 +25,7 @@ def issue_access_token(
 ) -> str:
     if not username or not tenant_id:
         raise ValueError("username and tenant_id are required")
-    now_dt = now or datetime.now(timezone.utc)
+    now_dt = now or datetime.now(UTC)
     exp = now_dt + timedelta(minutes=expires_minutes)
     payload: dict[str, Any] = {
         "sub": username,
@@ -51,7 +50,7 @@ def issue_mfa_challenge_token(
 ) -> str:
     if not user_id or not tenant_id:
         raise ValueError("user_id and tenant_id are required")
-    now_dt = now or datetime.now(timezone.utc)
+    now_dt = now or datetime.now(UTC)
     exp = now_dt + timedelta(minutes=expires_minutes)
     payload: dict[str, Any] = {
         "sub": user_id,

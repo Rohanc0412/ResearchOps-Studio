@@ -44,7 +44,7 @@ export function ArtifactsPage() {
             Run <span className="text-slate-300">{id}</span>
           </div>
         </div>
-        <Button variant="secondary" onClick={() => navigate(-1)}>
+        <Button onClick={() => navigate(-1)}>
           Back
         </Button>
       </div>
@@ -73,12 +73,12 @@ export function ArtifactsPage() {
                     <div className="mt-1 text-xs text-slate-500">{formatTs(a.created_at)}</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="secondary" onClick={() => void onDownload(a)}>
+                    <Button onClick={() => void onDownload(a)}>
                       <Download className="h-4 w-4" />
                       Download
                     </Button>
                     {a.type.includes("report") ? (
-                      <Button variant="secondary" onClick={() => onOpen(a)}>
+                      <Button onClick={() => onOpen(a)}>
                         Open
                       </Button>
                     ) : null}

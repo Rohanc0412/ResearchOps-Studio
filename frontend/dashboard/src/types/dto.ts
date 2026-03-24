@@ -101,6 +101,7 @@ export const ArtifactSchema: z.ZodType<Artifact, z.ZodTypeDef, unknown> = Artifa
 export type Run = {
   id: string;
   status: RunStatus;
+  question?: string | null;
   project_id?: string;
   tenant_id?: string;
   created_at?: string;
@@ -117,6 +118,7 @@ const RunWireSchema = z
     run_id: z.string().min(1).optional(),
     project_id: z.string().optional(),
     tenant_id: z.string().optional(),
+    question: z.string().nullable().optional(),
     status: RunStatusSchema,
     created_at: z.string().optional(),
     updated_at: z.string().optional(),

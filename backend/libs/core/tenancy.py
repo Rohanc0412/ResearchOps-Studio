@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from uuid import UUID, uuid5
 
-
 _TENANT_NAMESPACE = UUID("6d7f9a0e-84c4-4c8e-9a5b-4d7b2d3c6a10")
 
 

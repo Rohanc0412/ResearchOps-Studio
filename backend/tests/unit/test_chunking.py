@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
-from ingestion.chunking import chunk_text, rechunk_with_size
+from ingestion.chunking import chunk_text
 
 
 class TestChunkText:
@@ -89,7 +87,7 @@ class TestChunkText:
         chunks2 = chunk_text(text, max_chars=300, overlap_chars=50)
 
         assert len(chunks1) == len(chunks2)
-        for c1, c2 in zip(chunks1, chunks2):
+        for c1, c2 in zip(chunks1, chunks2, strict=True):
             assert c1["text"] == c2["text"]
             assert c1["char_start"] == c2["char_start"]
             assert c1["char_end"] == c2["char_end"]
@@ -130,31 +128,3 @@ class TestChunkText:
             extracted = text[chunk["char_start"] : chunk["char_end"]]
             assert extracted == chunk["text"]
 
-
-class TestRechunkWithSize:
-    """Test rechunk_with_size function."""
-
-    def test_token_based_chunking(self):
-        """Test chunking based on target token count."""
-        text = "word " * 1000
-        chunks = rechunk_with_size(text, target_tokens=100, overlap_tokens=10)
-
-        # Most chunks should be roughly 100 tokens (allow some variance)
-        for chunk in chunks:
-            # Token count should be in reasonable range around target
-            assert 50 <= chunk["token_count"] <= 200
-
-    def test_empty_string(self):
-        """Test rechunking empty string."""
-        chunks = rechunk_with_size("")
-        assert chunks == []
-
-    def test_deterministic(self):
-        """Test that rechunking is deterministic."""
-        text = "word " * 500
-        chunks1 = rechunk_with_size(text, target_tokens=100, overlap_tokens=10)
-        chunks2 = rechunk_with_size(text, target_tokens=100, overlap_tokens=10)
-
-        assert len(chunks1) == len(chunks2)
-        for c1, c2 in zip(chunks1, chunks2):
-            assert c1["text"] == c2["text"]

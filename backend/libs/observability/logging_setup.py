@@ -5,7 +5,7 @@ import logging
 import os
 import pathlib
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
@@ -13,7 +13,7 @@ from observability.context import request_id, run_id, service, tenant_id
 
 
 def _utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _local_time_short() -> str:

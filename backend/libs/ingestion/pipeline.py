@@ -18,14 +18,13 @@ import hashlib
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy.orm import Session
-
 from db.models import SnapshotRow, SnippetEmbeddingRow, SnippetRow, SourceRow
 from db.repositories.corpus import create_or_get_source as repo_create_or_get_source
+from sqlalchemy.orm import Session
+
 from ingestion.chunking import chunk_text
 from ingestion.embeddings import EmbeddingProvider
 from ingestion.sanitize import sanitize_text
-
 
 
 def _now_utc() -> datetime:
@@ -242,7 +241,7 @@ def ingest_snapshot(
 
     # Step 5: Store embeddings
     embeddings: list[SnippetEmbeddingRow] = []
-    for snippet, vector in zip(snippets, embedding_vectors):
+    for snippet, vector in zip(snippets, embedding_vectors, strict=True):
         embedding = SnippetEmbeddingRow(
             tenant_id=tenant_id,
             snippet_id=snippet.id,
@@ -311,20 +310,6 @@ def ingest_source(
     Returns:
         IngestionResult with all created entities
 
-    Example:
-        >>> from ingestion.embeddings import StubEmbeddingProvider
-        >>> provider = StubEmbeddingProvider()
-        >>> result = ingest_source(
-        ...     session=session,
-        ...     tenant_id=tenant_id,
-        ...     canonical_id="arxiv:2401.12345",
-        ...     source_type="paper",
-        ...     raw_content="<p>This is a research paper...</p>",
-        ...     embedding_provider=provider,
-        ...     title="Example Paper",
-        ... )
-        >>> result.snippet_count > 0
-        True
     """
     # Step 1: Create or get source
     source = create_or_get_source(

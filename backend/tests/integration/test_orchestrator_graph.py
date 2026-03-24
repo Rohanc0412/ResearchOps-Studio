@@ -8,22 +8,20 @@ Tests:
 """
 
 from __future__ import annotations
-from datetime import UTC, datetime
+
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from db.init_db import init_db
 from core.orchestrator.state import (
     EvaluatorDecision,
     OrchestratorState,
 )
-from researchops_orchestrator.graph import create_orchestrator_graph
-from researchops_orchestrator.runner import run_orchestrator
+from db.init_db import init_db
+from graph import create_orchestrator_graph
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +57,7 @@ def test_run():
 
 def test_outliner_creates_structure(db_session, test_run, monkeypatch):
     """Test that outliner creates ordered outline structure."""
-    from researchops_orchestrator.nodes import outliner_node
+    from nodes import outliner_node
 
     class StubLLM:
         def generate(
@@ -92,7 +90,10 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
                         {
                             "section_id": "background",
                             "title": "Background",
-                            "goal": "This section covers foundational context. It aligns sources to core themes.",
+                            "goal": (
+                                "This section covers foundational context. "
+                                "It aligns sources to core themes."
+                            ),
                             "key_points": [
                                 "Summarize foundational studies.",
                                 "Clarify historical context.",
@@ -107,7 +108,10 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
                         {
                             "section_id": "methods",
                             "title": "Methods and Approaches",
-                            "goal": "This section reviews methodological choices. It contrasts key approaches.",
+                            "goal": (
+                                "This section reviews methodological choices. "
+                                "It contrasts key approaches."
+                            ),
                             "key_points": [
                                 "List major methods.",
                                 "Compare methodological tradeoffs.",
@@ -122,7 +126,10 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
                         {
                             "section_id": "conclusion",
                             "title": "Conclusion",
-                            "goal": "This section summarizes the findings. It closes with implications.",
+                            "goal": (
+                                "This section summarizes the findings. "
+                                "It closes with implications."
+                            ),
                             "key_points": [
                                 "Restate key takeaways.",
                                 "Summarize evidence strength.",
@@ -139,7 +146,7 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
             )
 
     monkeypatch.setattr(
-        "researchops_orchestrator.nodes.outliner.get_llm_client",
+        "nodes.outliner.get_llm_client",
         lambda *_args, **_kwargs: StubLLM(),
     )
 
@@ -164,9 +171,9 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
 
 def test_evaluator_stops_on_success(db_session, test_run):
     """Test that evaluator stops when no errors."""
-    from researchops_orchestrator.nodes import evaluator_node
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
+    from nodes import evaluator_node
 
     tenant_id, run_id = test_run
 
@@ -216,7 +223,7 @@ def test_evaluator_stops_on_success(db_session, test_run):
 
     db_session.flush()
 
-    import researchops_orchestrator.nodes.evaluator as evaluator_module
+    import nodes.evaluator as evaluator_module
 
     evaluator_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
 
@@ -227,9 +234,9 @@ def test_evaluator_stops_on_success(db_session, test_run):
 
 def test_evaluator_continues_on_errors(db_session, test_run):
     """Test that evaluator continues when errors found."""
-    from researchops_orchestrator.nodes import evaluator_node
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
+    from nodes import evaluator_node
 
     tenant_id, run_id = test_run
 
@@ -290,7 +297,7 @@ def test_evaluator_continues_on_errors(db_session, test_run):
         },
     )
 
-    import researchops_orchestrator.nodes.evaluator as evaluator_module
+    import nodes.evaluator as evaluator_module
 
     evaluator_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
 
@@ -301,16 +308,16 @@ def test_evaluator_continues_on_errors(db_session, test_run):
 
 def test_exporter_generates_three_artifacts(db_session, test_run):
     """Test that exporter produces all three artifacts."""
-    from researchops_orchestrator.nodes import exporter_node
     from core.orchestrator.state import (
         OutlineModel,
         OutlineSection,
         SourceRef,
     )
-    from db.models.projects import ProjectRow
-    from db.models.runs import RunRow, RunStatusDb
-    from db.models.run_sections import RunSectionRow
     from db.models.draft_sections import DraftSectionRow
+    from db.models.projects import ProjectRow
+    from db.models.run_sections import RunSectionRow
+    from db.models.runs import RunRow, RunStatusDb
+    from nodes import exporter_node
 
     tenant_id, run_id = test_run
 
@@ -342,7 +349,14 @@ def test_exporter_generates_three_artifacts(db_session, test_run):
                 section_id="intro",
                 title="Introduction",
                 goal="Introduce the topic and scope.",
-                key_points=["Context", "Scope", "Motivation", "Framing", "Definitions", "Structure"],
+                key_points=[
+                    "Context",
+                    "Scope",
+                    "Motivation",
+                    "Framing",
+                    "Definitions",
+                    "Structure",
+                ],
                 suggested_evidence_themes=["background", "scope"],
                 section_order=1,
             )
@@ -424,10 +438,10 @@ def test_graph_execution_completes(db_session, test_run):
 
 def test_repair_agent_modifies_draft(db_session, test_run):
     """Test that repair agent makes targeted edits."""
-    from researchops_orchestrator.nodes import repair_agent_node
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
     from db.models.section_reviews import SectionReviewRow
+    from nodes import repair_agent_node
 
     tenant_id, run_id = test_run
 
@@ -436,24 +450,37 @@ def test_repair_agent_modifies_draft(db_session, test_run):
             return json.dumps(
                 {
                     "section_id": "intro",
-                    "revised_text": "Evidence-backed sentence [CITE:11111111-1111-1111-1111-111111111111].",
+                    "revised_text": (
+                        "Evidence-backed sentence "
+                        "[CITE:11111111-1111-1111-1111-111111111111]."
+                    ),
                     "revised_summary": "Sentence one.\nSentence two.",
                     "next_section_id": "methods",
-                    "patched_next_text": "Transition sentence. Another transition sentence. Methods sentence three.",
+                    "patched_next_text": (
+                        "Transition sentence. Another transition sentence. "
+                        "Methods sentence three."
+                    ),
                     "patched_next_summary": "Methods line one.\nMethods line two.",
                     "edits_json": {
                         "repaired_section_edits": [
                             {
                                 "sentence_index": 0,
                                 "before": "Research shows transformers are effective.",
-                                "after": "Evidence-backed sentence [CITE:11111111-1111-1111-1111-111111111111].",
+                                "after": (
+                                    "Evidence-backed sentence "
+                                    "[CITE:11111111-1111-1111-1111-111111111111]."
+                                ),
                                 "change_type": "replace",
                             }
                         ],
                         "continuity_patch": {
                             "next_section_id": "methods",
-                            "before_first_two_sentences": "Methods sentence one. Methods sentence two.",
-                            "after_first_two_sentences": "Transition sentence. Another transition sentence.",
+                            "before_first_two_sentences": (
+                                "Methods sentence one. Methods sentence two."
+                            ),
+                            "after_first_two_sentences": (
+                                "Transition sentence. Another transition sentence."
+                            ),
                         },
                     },
                 }
@@ -543,7 +570,7 @@ def test_repair_agent_modifies_draft(db_session, test_run):
         },
     )
 
-    import researchops_orchestrator.nodes.repair_agent as repair_module
+    import nodes.repair_agent as repair_module
 
     repair_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
 

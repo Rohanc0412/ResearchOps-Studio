@@ -9,11 +9,10 @@ Provides:
 
 from __future__ import annotations
 
-from retrieval.search import SearchResult, get_snippet_with_context, search_snippets
+from retrieval.search import get_snippet_with_context, search_snippets
 
 __all__ = [
     "search_snippets",
     "get_snippet_with_context",
-    "SearchResult",
 ]
 

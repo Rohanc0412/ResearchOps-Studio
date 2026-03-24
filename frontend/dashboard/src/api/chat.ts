@@ -572,7 +572,7 @@ export function applyAssistantDeltaToCache(params: {
         ? {
             ...existing,
             content_text: (existing.content_text ?? "") + deltaText,
-            optimistic: existing.optimistic ?? true
+            optimistic: existing["optimistic"] ?? true
           }
         : {
             // Create new message if not found

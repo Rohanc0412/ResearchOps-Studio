@@ -78,7 +78,7 @@ export function useSSE(path: string | null, enabled: boolean) {
               const json = JSON.parse(evt.data) as unknown;
               const parsed = RunEventSchema.safeParse(json);
               if (parsed.success) {
-                const eventId = evt?.id ?? parsed.data.id;
+                const eventId = evt?.id ?? parsed.data["id"];
                 if (typeof eventId === "number" && eventId <= lastEventIdRef.current) {
                   continue;
                 }

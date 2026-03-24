@@ -25,8 +25,3 @@ def resolve_env_files() -> tuple[str, ...]:
 
     return tuple(candidates)
 
-
-def resolve_env_file() -> str | None:
-    files = resolve_env_files()
-    return files[-1] if files else None
-

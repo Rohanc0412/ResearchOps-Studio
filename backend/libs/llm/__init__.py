@@ -9,7 +9,6 @@ from typing import Any, Protocol
 import httpx
 
 
-
 class LLMProvider(Protocol):
     model_name: str
 
@@ -130,7 +129,8 @@ def get_llm_client(
         model_name = model or os.getenv("HOSTED_LLM_MODEL")
         if not base_url or not api_key or not model_name:
             raise LLMError(
-                "Hosted LLM not configured. Set HOSTED_LLM_BASE_URL, HOSTED_LLM_API_KEY, HOSTED_LLM_MODEL."
+                "Hosted LLM not configured. Set HOSTED_LLM_BASE_URL, "
+                "HOSTED_LLM_API_KEY, HOSTED_LLM_MODEL."
             )
         return OpenAICompatibleClient(
             base_url=base_url,
@@ -208,7 +208,10 @@ def json_schema_response_format(name: str, schema: dict[str, Any], *, strict: bo
     }
 
 
-def json_response_format(name: str | None = None, schema: dict[str, Any] | None = None) -> str | dict:
+def json_response_format(
+    name: str | None = None,
+    schema: dict[str, Any] | None = None,
+) -> str | dict:
     if schema and use_json_schema():
         return json_schema_response_format(name or "response", schema, strict=True)
     return "json"

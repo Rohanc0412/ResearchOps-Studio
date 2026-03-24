@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import uuid
 import logging
 import time
+import uuid
 from collections.abc import Callable
 
 from fastapi import Request, Response
 
 from observability.context import bind
-
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,11 @@ def request_id_middleware(app_name: str) -> Callable:
         response.headers["x-request-id"] = rid
 
         content_length = response.headers.get("content-length")
-        response_bytes = int(content_length) if content_length and content_length.isdigit() else None
+        response_bytes = (
+            int(content_length)
+            if content_length and content_length.isdigit()
+            else None
+        )
         _bind_optional_ids(request)
         duration_ms = int((time.perf_counter() - start) * 1000)
         logger.info(

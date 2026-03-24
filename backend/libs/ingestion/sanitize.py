@@ -30,11 +30,24 @@ class SanitizationResult(TypedDict):
 # Prompt injection patterns (fail-closed: flag suspicious patterns)
 _INJECTION_PATTERNS = [
     # Direct instruction attempts
-    re.compile(r"ignore (previous|all|above|prior) (instructions?|prompts?|rules?)", re.IGNORECASE),
-    re.compile(r"disregard (previous|all|above|prior) (instructions?|prompts?|rules?)", re.IGNORECASE),
-    re.compile(r"forget (previous|all|above|prior) (instructions?|prompts?|rules?)", re.IGNORECASE),
+    re.compile(
+        r"ignore (previous|all|above|prior) (instructions?|prompts?|rules?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"disregard (previous|all|above|prior) (instructions?|prompts?|rules?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"forget (previous|all|above|prior) (instructions?|prompts?|rules?)",
+        re.IGNORECASE,
+    ),
     # System prompt leakage attempts
-    re.compile(r"(show|print|display|reveal|output) (your|the) (system |initial )?(prompt|instructions?)", re.IGNORECASE),
+    re.compile(
+        r"(show|print|display|reveal|output) (your|the) (system |initial )?"
+        r"(prompt|instructions?)",
+        re.IGNORECASE,
+    ),
     re.compile(r"what (is|are) your (system |initial )?(prompt|instructions?)", re.IGNORECASE),
     # Role manipulation
     re.compile(r"you are now (a |an )?[a-z]+", re.IGNORECASE),
@@ -57,7 +70,11 @@ def _remove_html(text: str) -> str:
 def _remove_control_chars(text: str) -> str:
     """Remove control characters except newlines, tabs, and carriage returns."""
     # Keep \n, \t, \r
-    return "".join(ch for ch in text if ch in ("\n", "\t", "\r") or not unicodedata.category(ch).startswith("C"))
+    return "".join(
+        ch
+        for ch in text
+        if ch in ("\n", "\t", "\r") or not unicodedata.category(ch).startswith("C")
+    )
 
 
 def _normalize_whitespace(text: str) -> str:

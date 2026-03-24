@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 
-from fastapi.testclient import TestClient
-
-from researchops_api import create_app
+from app import create_app
 from core.auth.config import get_auth_config
 from core.settings import get_settings
+from fastapi.testclient import TestClient
 
 
 def test_healthz_ok() -> None:

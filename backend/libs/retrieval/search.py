@@ -14,13 +14,11 @@ import math
 from typing import TypedDict
 from uuid import UUID
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-
-from db.models import SnippetEmbeddingRow, SnippetRow, SnapshotRow, SourceRow
+from db.models import SnapshotRow, SnippetEmbeddingRow, SnippetRow, SourceRow
 from db.models.source_authors import SourceAuthorRow
 from db.repositories.corpus import list_source_author_names
-
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 
 class SearchResult(TypedDict):
@@ -72,7 +70,12 @@ class SearchResult(TypedDict):
     """Snapshot version number."""
 
 
-def _load_source_authors(session: Session, *, tenant_id: UUID, source_ids: list[UUID]) -> dict[UUID, list[str]]:
+def _load_source_authors(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    source_ids: list[UUID],
+) -> dict[UUID, list[str]]:
     if not source_ids:
         return {}
     rows = session.execute(
@@ -119,14 +122,12 @@ def search_snippets(
         List of search results sorted by similarity (descending)
 
     Example:
-        >>> from ingestion.embeddings import StubEmbeddingProvider
-        >>> provider = StubEmbeddingProvider()
-        >>> query_vec = provider.embed_texts(["machine learning"])[0]
+        >>> query_vec = [0.1, 0.2, 0.3]
         >>> results = search_snippets(
         ...     session=session,
         ...     tenant_id=tenant_id,
         ...     query_embedding=query_vec,
-        ...     embedding_model=provider.model_name,
+        ...     embedding_model="example-embedder",
         ...     limit=5,
         ... )
         >>> len(results) <= 5
@@ -150,7 +151,7 @@ def search_snippets(
             return 0.0
         if len(a) != len(b):
             return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b, strict=True))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(y * y for y in b))
         if norm_a == 0.0 or norm_b == 0.0:
