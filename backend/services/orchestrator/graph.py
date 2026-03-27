@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.orchestrator.state import EvaluatorDecision, OrchestratorState
+from db.models.runs import RunRow
 from langgraph.graph import END, StateGraph
 from nodes import (
     evaluator_node,
@@ -20,6 +21,11 @@ from nodes import (
     writer_node,
 )
 from sqlalchemy.orm import Session
+
+
+class RunCancelledError(Exception):
+    """Raised when a run cancel is detected between pipeline nodes."""
+
 
 # Node display names for logging
 NODE_DISPLAY_NAMES = {
@@ -58,9 +64,13 @@ def create_orchestrator_graph(session: Session) -> StateGraph:
 
     # Wrap nodes to inject session and add logging
     def wrap_node(node_func):
-        """Wrapper to inject session into node and log execution."""
+        """Wrapper to inject session into node, check for cancellation, and log execution."""
         def wrapped(state: OrchestratorState) -> dict[str, Any]:
             """Wrapped node function."""
+            # Check for cooperative cancellation before running each node
+            run_row = session.get(RunRow, state.run_id)
+            if run_row and run_row.cancel_requested_at is not None:
+                raise RunCancelledError(f"Run {state.run_id} cancelled by user")
             result_state = node_func(state, session)
             return result_state.dict()
 

@@ -17,7 +17,7 @@ from core.orchestrator.state import OrchestratorState
 from core.runs.lifecycle import transition_run_status
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.artifacts import create_artifact, list_artifacts
-from graph import create_orchestrator_graph
+from graph import RunCancelledError, create_orchestrator_graph
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -242,6 +242,17 @@ async def run_orchestrator(
         session.commit()
 
         return final_state
+
+    except RunCancelledError:
+        session.rollback()
+        transition_run_status(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            to_status=RunStatusDb.canceled,
+        )
+        session.commit()
+        return initial_state
 
     except Exception as e:
         session.rollback()
