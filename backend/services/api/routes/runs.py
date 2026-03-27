@@ -59,7 +59,7 @@ class WebRunOut(BaseModel):
     budgets: dict = Field(default_factory=dict)
     usage: dict = Field(default_factory=dict)
 
-_ALLOWED_STAGES = {"retrieve", "ingest", "outline", "draft", "validate", "factcheck", "export"}
+_ALLOWED_STAGES = {"retrieve", "ingest", "outline", "evidence_pack", "draft", "evaluate", "validate", "repair", "factcheck", "export"}
 
 
 def _event_to_sse(event) -> str:

@@ -1,6 +1,6 @@
 function titleCase(value: string): string {
   if (!value) return value;
-  return value.replace(/(^|_|-)([a-z])/g, (_, sep, ch) => `${sep} ${ch.toUpperCase()}`).trim();
+  return value.replace(/(^|[_-])([a-z])/g, (_, _sep, ch) => ` ${ch.toUpperCase()}`).trim();
 }
 
 export function deriveRunUpdate(event: {

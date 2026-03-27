@@ -519,7 +519,6 @@ export function ChatViewPage() {
     if (!chatId) return;
     if (!latestRunId) return;
     if (activeRun) return;
-    if (report.sections.length > 0) return;
 
     if (runHydrationRef.current.chatId === chatId && runHydrationRef.current.runId === latestRunId) return;
     runHydrationRef.current = { chatId, runId: latestRunId };
@@ -563,7 +562,7 @@ export function ChatViewPage() {
       });
       lastEventIdRef.current = 0;
     })();
-  }, [activeRun, chatId, hydrateReportFromArtifacts, latestRunId, report.sections.length]);
+  }, [activeRun, chatId, hydrateReportFromArtifacts, latestRunId]);
 
   // TECH (Function Summary): Sends a user message to backend, starts run tracking if assistant responds with run_started.
   // PLAIN (Function Summary): Sends the chat message and starts tracking the report job if one begins.

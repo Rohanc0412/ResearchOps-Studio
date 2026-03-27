@@ -207,6 +207,7 @@ def emit_run_event(
     run_id: UUID,
     event_type: str,
     stage: str | None = None,
+    message: str | None = None,
     data: dict[str, Any] | None = None,
 ) -> RunEventRow:
     """
@@ -225,13 +226,15 @@ def emit_run_event(
     """
     # SQLite cannot safely interleave a second writer connection while the
     # worker's main transaction is still active. Reuse the current session there.
+    resolved_message = message or f"{event_type}: {stage or 'unknown'}"
+
     if _should_use_current_session(session):
         return append_run_event(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
             level=RunEventLevelDb.info,
-            message=f"{event_type}: {stage or 'unknown'}",
+            message=resolved_message,
             stage=stage or "unknown",
             event_type=event_type,
             payload_json=data or {},
@@ -261,7 +264,7 @@ def emit_run_event(
             event_type=event_type,
             stage=stage or "unknown",
             level=RunEventLevelDb.info,  # Default to info
-            message=f"{event_type}: {stage or 'unknown'}",
+            message=resolved_message,
             payload_json=data or {},
             ts=datetime.now(UTC),
         )
@@ -313,6 +316,7 @@ def instrument_node(stage_name: str) -> Callable:
                 run_id=state.run_id,
                 event_type="stage_start",
                 stage=stage_name,
+                message=f"Starting stage: {stage_name}",
                 data={
                     "iteration": state.iteration_count,
                     "state_summary": state_summary,
@@ -333,6 +337,7 @@ def instrument_node(stage_name: str) -> Callable:
                     run_id=state.run_id,
                     event_type="stage_finish",
                     stage=stage_name,
+                    message=f"Finished stage: {stage_name}",
                     data={
                         "iteration": state.iteration_count,
                         "success": True,
