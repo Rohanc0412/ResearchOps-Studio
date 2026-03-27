@@ -19,6 +19,7 @@ import { MODEL_OPTIONS, CUSTOM_MODEL_VALUE, DEFAULT_HOSTED_MODEL, EMPTY_REPORT }
 import { ExportModal } from "../features/chat/components/ExportModal";
 import { ReportSectionView } from "../features/chat/components/ReportSectionView";
 import { ShareModal } from "../features/chat/components/ShareModal";
+import { RunArtifactLinks } from "../features/chat/components/RunArtifactLinks";
 import { TypingIndicator } from "../features/chat/components/TypingIndicator";
 import { generateClientMessageId } from "../features/chat/lib/ids";
 import {
@@ -97,11 +98,17 @@ export function ChatViewPage() {
 
   // TECH: runPipelineArmed toggles auto-accepting research pipeline offers.
   // PLAIN: When on, the app auto-starts a research report if offered.
-  const [runPipelineArmed, setRunPipelineArmed] = useState(false);
+  // Initialised from navigation state so "Run research report" on project page carries through.
+  const [runPipelineArmed, setRunPipelineArmed] = useState(() => {
+    if (!location.state || typeof location.state !== "object") return false;
+    const state = location.state as { runPipeline?: boolean };
+    return state.runPipeline === true;
+  });
 
   // TECH: report stores the right-panel report structure.
   // PLAIN: Holds the generated report content that shows on the right side.
   const [report, setReport] = useState<Report>(EMPTY_REPORT);
+  const [completedRunArtifacts, setCompletedRunArtifacts] = useState<Record<string, Artifact[]>>({});
 
   // TECH: reportChatIdRef tracks which chatId the report state currently corresponds to.
   // PLAIN: Prevents saving a report under the wrong conversation when switching chats.
@@ -181,12 +188,14 @@ export function ChatViewPage() {
     if (!chatId) {
       reportChatIdRef.current = null;
       setReport(EMPTY_REPORT);
+      setCompletedRunArtifacts({});
       return;
     }
 
     const stored = loadStoredReport(chatId);
     reportChatIdRef.current = chatId;
     setReport(stored ?? EMPTY_REPORT);
+    setCompletedRunArtifacts({});
   }, [chatId]);
 
   // TECH: Persist report updates so reopening the chat shows the latest report.
@@ -394,6 +403,10 @@ export function ChatViewPage() {
         schema: ArtifactsSchema
       }).catch(() => [] as Artifact[]);
 
+      if (artifacts.length > 0) {
+        setCompletedRunArtifacts((prev) => ({ ...prev, [runId]: artifacts }));
+      }
+
       const response = buildFinalResponse(artifacts);
       if (!response || response === "Run completed. Output is available in artifacts.") return;
 
@@ -402,7 +415,7 @@ export function ChatViewPage() {
 
       setReport((prev) => ({
         ...prev,
-        sections: [...prev.sections, ...parsedSections]
+        sections: parsedSections
       }));
 
       const firstSection = parsedSections[0];
@@ -411,7 +424,7 @@ export function ChatViewPage() {
         setTimeout(() => setHighlightedSection(null), 2000);
       }
     },
-    [setHighlightedSection, setReport]
+    [setHighlightedSection, setReport, setCompletedRunArtifacts]
   );
 
   async function handleRunCompletion(status: ActiveRunStatus) {
@@ -635,6 +648,7 @@ export function ChatViewPage() {
       // TECH: Clear input after successful send for UX.
       // PLAIN: Empty the text box after sending.
       setDraft("");
+      setRunPipelineArmed(false);
     } catch {
       // TECH: Intentionally keep draft for retry; swallowing error avoids UI crash.
       // PLAIN: If it fails, keep your message so you can try again.
@@ -857,7 +871,20 @@ export function ChatViewPage() {
                   {/* TECH: If assistant started a run, keep the bubble informational only. */}
                   {/* PLAIN: The progress now lives in the report panel, so no separate run page link is shown here. */}
                   {isRunStarted && runId ? (
-                    <div className="mt-2 text-xs text-slate-400">Tracking progress in the research report panel.</div>
+                    (() => {
+                      const runArtifacts = completedRunArtifacts[runId];
+                      if (runArtifacts && runArtifacts.length > 0) {
+                        return <RunArtifactLinks runId={runId} artifacts={runArtifacts} />;
+                      }
+                      if (activeRun?.runId === runId) {
+                        return (
+                          <div className="mt-2 text-xs text-slate-400">
+                            Tracking progress in the research report panel.
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()
                   ) : null}
                 </div>
 
@@ -922,7 +949,7 @@ export function ChatViewPage() {
               key={action}
               // TECH: Set draft text to the selected action template.
               // PLAIN: Put this suggestion into the message box.
-              onClick={() => setDraft(action)}
+              onClick={() => { setDraft(action); setRunPipelineArmed(false); }}
               className="rounded-full border border-slate-700 bg-slate-900 px-3.5 py-2 text-xs text-slate-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-400"
             >
               {action}
@@ -989,7 +1016,7 @@ export function ChatViewPage() {
                   void onSend();
                 }
               }}
-              placeholder="Ask a question or request a report..."
+              placeholder={runPipelineArmed ? "Describe your research topic — report will run on send…" : "Ask a question or request a report..."}
               rows={1}
               className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3.5 text-sm text-slate-200 outline-none transition-colors focus:border-emerald-500/50"
             />
