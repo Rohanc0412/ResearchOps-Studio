@@ -143,12 +143,6 @@ function deriveResearchTitle(
   return "Research report";
 }
 
-function deriveTopicPhrase(title: string) {
-  const normalized = title.replace(/[.?!]+$/g, "").trim();
-  const compact = normalized.length > 58 ? `${normalized.slice(0, 55).trim()}...` : normalized;
-  return compact || "the topic";
-}
-
 function deriveCurrentStepIndex(status: ProgressStatus, latestEvent?: RunEvent) {
   if (status === "succeeded") return 6;
   if (!latestEvent) return 0;
