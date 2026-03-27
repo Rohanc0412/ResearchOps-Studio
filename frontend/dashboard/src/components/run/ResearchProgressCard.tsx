@@ -115,7 +115,7 @@ export function ResearchProgressCard({
           {isRunning ? (
             <WaveText text={model.summaryText} duration={3.2} className="text-white/[0.62]" />
           ) : (
-            <span className={isFailed ? "text-[rgba(255,100,100,0.45)]" : "text-white/[0.28]"}>
+            <span className="text-white/[0.28]">
               {model.summaryText}
             </span>
           )}
@@ -286,7 +286,7 @@ function WaveText({
   return (
     <span className={className}>
       {text.split("").map((ch, i, arr) => {
-        if (ch === " ") return " ";
+        if (ch === " ") return <span key={i}>&nbsp;</span>;
         const delay = -(duration * (1 - i / arr.length));
         return (
           <span
