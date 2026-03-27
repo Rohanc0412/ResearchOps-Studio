@@ -13,6 +13,7 @@ class Settings(BaseSettings):
         env_file=resolve_env_files() or ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        env_ignore_empty=True,
     )
 
     environment: str = Field(default="local")
