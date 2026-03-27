@@ -26,6 +26,7 @@ export type ResearchProgressCardModel = {
   progressRatio: number;
   status: ProgressStatus;
   recentEvents: ResearchProgressEventRow[];
+  stepMetrics: (string | null)[];
 };
 
 type BuildResearchProgressCardModelArgs = {
@@ -43,18 +44,24 @@ type BuildResearchProgressCardModelArgs = {
 
 const STAGE_TO_STEP_INDEX: Record<string, number> = {
   retrieve: 0,
-  ingest: 1,
   outline: 1,
   evidence_pack: 2,
   draft: 3,
+  repair: 3,
   evaluate: 4,
   validate: 4,
-  repair: 4,
   factcheck: 4,
-  export: 4
+  export: 5,
 };
 
-const STEP_PHASE_NAMES = ["Collect", "Themes", "Studies", "Compare", "Summary"] as const;
+const FALLBACK_STEP_LABELS: string[] = [
+  "Search papers and collect evidence.",
+  "Structure the report outline.",
+  "Package evidence per section.",
+  "Draft each section with citations.",
+  "Review quality and evidence coverage.",
+  "Export the final report.",
+];
 
 export function buildResearchProgressCardModel({
   activeRun,
@@ -63,24 +70,31 @@ export function buildResearchProgressCardModel({
   events
 }: BuildResearchProgressCardModelArgs): ResearchProgressCardModel {
   const title = deriveResearchTitle(activeRun?.question, messages, chatTitle);
-  const topic = deriveTopicPhrase(title);
-  const steps = [
-    { id: "collect", label: `Collect recent evidence on ${topic}.` },
-    { id: "themes", label: `Extract the main mechanisms and themes behind ${topic}.` },
-    { id: "studies", label: `Review studies, benchmarks, and outcomes tied to ${topic}.` },
-    { id: "compare", label: `Compare findings, tradeoffs, and limitations across the evidence.` },
-    { id: "summary", label: `Summarize practical conclusions and recommendations.` }
-  ];
+
+  // Read LLM-planned labels from the first retrieve.plan_created event.
+  // event_type is sent by the backend and preserved by RunEventSchema's .passthrough().
+  const planEvent = events.find(
+    e => (e as RunEvent & { event_type?: string }).event_type === "retrieve.plan_created"
+  );
+  const rawLabels = planEvent?.payload?.["step_labels"];
+  const stepLabels: string[] = (
+    Array.isArray(rawLabels) && rawLabels.length === 6
+      ? rawLabels as string[]
+      : FALLBACK_STEP_LABELS
+  );
+
+  const STEP_IDS = ["retrieve", "outline", "evidence_pack", "draft", "evaluate", "export"] as const;
 
   const latestEvent = events.at(-1);
   const currentStepIndex = deriveCurrentStepIndex(activeRun?.status ?? "running", latestEvent);
-  const completedCount = activeRun?.status === "succeeded" ? steps.length : Math.max(0, currentStepIndex);
+  const completedCount = activeRun?.status === "succeeded" ? STEP_IDS.length : Math.max(0, currentStepIndex);
   const progressRatio = deriveProgressRatio(activeRun?.status ?? "running", currentStepIndex, latestEvent);
 
   return {
     title,
-    steps: steps.map((step, index) => ({
-      ...step,
+    steps: STEP_IDS.map((id, index) => ({
+      id,
+      label: stepLabels[index] ?? FALLBACK_STEP_LABELS[index] ?? "",
       state:
         activeRun?.status === "succeeded" || index < currentStepIndex
           ? "complete"
@@ -100,7 +114,8 @@ export function buildResearchProgressCardModel({
       message: humanizeEventMessage(event),
       detail: humanizeEventDetail(event),
       level: event.level
-    }))
+    })),
+    stepMetrics: deriveStepMetrics(events, activeRun?.status ?? "running"),
   };
 }
 
@@ -135,16 +150,16 @@ function deriveTopicPhrase(title: string) {
 }
 
 function deriveCurrentStepIndex(status: ProgressStatus, latestEvent?: RunEvent) {
-  if (status === "succeeded") return 5;
+  if (status === "succeeded") return 6;
   if (!latestEvent) return 0;
   const index = STAGE_TO_STEP_INDEX[latestEvent.stage] ?? 0;
-  return Math.min(index, 4);
+  return Math.min(index, 5);
 }
 
 function deriveProgressRatio(status: ProgressStatus, currentStepIndex: number, latestEvent?: RunEvent) {
   if (status === "succeeded") return 1;
   if (status === "failed" || status === "canceled") {
-    return Math.max(0.08, Math.min(0.96, (currentStepIndex + 0.35) / 5));
+    return Math.max(0.08, Math.min(0.96, (currentStepIndex + 0.35) / 6));
   }
 
   let intraStep = 0.45;
@@ -159,7 +174,7 @@ function deriveProgressRatio(status: ProgressStatus, currentStepIndex: number, l
     if (maybeSectionProgress !== null) intraStep = maybeSectionProgress;
   }
 
-  return Math.max(0.08, Math.min(0.96, (currentStepIndex + intraStep) / 5));
+  return Math.max(0.08, Math.min(0.96, (currentStepIndex + intraStep) / 6));
 }
 
 function deriveSummaryText(
@@ -185,7 +200,7 @@ function deriveMetricText(
   if (status === "succeeded") return "Done";
   if (status === "failed") return "Needs retry";
   if (status === "canceled") return "Stopped";
-  if (!latestEvent) return STEP_PHASE_NAMES[0];
+  if (!latestEvent) return "";
 
   const payload = latestEvent.payload ?? {};
   const queryCount = pickNumber(payload, ["query_count", "queries", "search_count", "searches"]);
@@ -200,7 +215,124 @@ function deriveMetricText(
   const sectionProgress = deriveSectionMetric(events, latestEvent.stage);
   if (sectionProgress) return sectionProgress;
 
-  return STEP_PHASE_NAMES[Math.min(currentStepIndex, 4)]!;
+  return "";
+}
+
+function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string | null)[] {
+  // event_type is sent by the backend and preserved via .passthrough() — not in the TS type
+  type E = RunEvent & { event_type?: string };
+  const evts = events as E[];
+
+  // ── Step 0: retrieve ──────────────────────────────────────────
+  let queryCount: number | null = null;
+  let foundTotal: number | null = null;
+  let selectedTotal: number | null = null;
+
+  for (const e of evts) {
+    if (e.event_type === "retrieve.plan_created") {
+      const q = pickNumber(e.payload ?? {}, ["query_count"]);
+      if (q !== null) queryCount = q;
+    }
+    if (e.event_type === "retrieve.mcp_completed") {
+      const foundBySource = e.payload?.["found_by_source"];
+      if (foundBySource && typeof foundBySource === "object" && !Array.isArray(foundBySource)) {
+        foundTotal = Object.values(foundBySource as Record<string, number>).reduce((a, b) => a + b, 0);
+      }
+    }
+    if (e.event_type === "retrieve.summary") {
+      const s = pickNumber(e.payload ?? {}, ["selected_sources_total"]);
+      if (s !== null) selectedTotal = s;
+    }
+  }
+
+  let step0: string | null = null;
+  if (queryCount !== null || foundTotal !== null || selectedTotal !== null) {
+    const parts: string[] = [];
+    if (queryCount !== null) parts.push(`${queryCount} q`);
+    if (foundTotal !== null) parts.push(`${foundTotal} found`);
+    if (selectedTotal !== null) parts.push(`${selectedTotal} sel.`);
+    step0 = parts.join(" · ");
+  }
+
+  // ── Step 1: outline ───────────────────────────────────────────
+  let step1: string | null = null;
+  for (const e of evts) {
+    if (e.event_type === "outline.created") {
+      const n = pickNumber(e.payload ?? {}, ["section_count"]);
+      if (n !== null) step1 = `${n} sections`;
+    }
+  }
+
+  // ── Step 2: evidence_pack ─────────────────────────────────────
+  let step2: string | null = null;
+  {
+    const packedSections = evts.filter(e => e.event_type === "evidence_pack.created").length;
+    let outlineSections: number | null = null;
+    for (const e of evts) {
+      if (e.event_type === "outline.created") {
+        outlineSections = pickNumber(e.payload ?? {}, ["section_count"]);
+      }
+    }
+    if (packedSections > 0) {
+      step2 = outlineSections !== null
+        ? `${packedSections} / ${outlineSections} sections`
+        : `${packedSections} sections`;
+    }
+  }
+
+  // ── Step 3: draft ─────────────────────────────────────────────
+  let step3: string | null = null;
+  {
+    const draftedSections = evts.filter(e => e.event_type === "draft.section_completed").length;
+    let totalSections: number | null = null;
+    for (const e of evts) {
+      if (e.stage === "draft" && e.event_type === "progress") {
+        const t = pickNumber(e.payload ?? {}, ["total_sections"]);
+        if (t !== null) totalSections = t;
+      }
+    }
+    if (totalSections === null) {
+      for (const e of evts) {
+        if (e.event_type === "outline.created") {
+          totalSections = pickNumber(e.payload ?? {}, ["section_count"]);
+        }
+      }
+    }
+    if (draftedSections > 0) {
+      step3 = totalSections !== null
+        ? `${draftedSections} / ${totalSections} sections`
+        : `${draftedSections} sections`;
+    }
+  }
+
+  // ── Step 4: evaluate ──────────────────────────────────────────
+  let step4: string | null = null;
+  for (const e of evts) {
+    if (e.event_type === "evaluate.summary") {
+      const pass = pickNumber(e.payload ?? {}, ["pass_count"]);
+      const fail = pickNumber(e.payload ?? {}, ["fail_count"]);
+      if (pass !== null || fail !== null) {
+        if ((fail ?? 0) > 0) {
+          step4 = `${fail} flagged`;
+        } else {
+          step4 = `${pass ?? 0} passed`;
+        }
+      }
+    }
+  }
+  if (step4 === null) {
+    const evalDone = evts.filter(
+      e => e.event_type === "evaluate.section_completed" || e.event_type === "evaluate.completed"
+    ).length;
+    if (evalDone > 0) step4 = `${evalDone} reviewed`;
+  }
+
+  // ── Step 5: export ────────────────────────────────────────────
+  let step5: string | null = null;
+  const hasExport = evts.some(e => e.stage === "export");
+  if (status === "succeeded" || hasExport) step5 = "done";
+
+  return [step0, step1, step2, step3, step4, step5];
 }
 
 function deriveSectionMetric(events: RunEvent[], stage: string) {
