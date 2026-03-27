@@ -54,6 +54,8 @@ const STAGE_TO_STEP_INDEX: Record<string, number> = {
   export: 4
 };
 
+const STEP_PHASE_NAMES = ["Collect", "Themes", "Studies", "Compare", "Summary"] as const;
+
 export function buildResearchProgressCardModel({
   activeRun,
   chatTitle,
@@ -179,11 +181,11 @@ function deriveMetricText(
   latestEvent: RunEvent | undefined,
   events: RunEvent[],
   currentStepIndex: number
-) {
+): string {
   if (status === "succeeded") return "Done";
   if (status === "failed") return "Needs retry";
   if (status === "canceled") return "Stopped";
-  if (!latestEvent) return "Step 1 of 5";
+  if (!latestEvent) return STEP_PHASE_NAMES[0];
 
   const payload = latestEvent.payload ?? {};
   const queryCount = pickNumber(payload, ["query_count", "queries", "search_count", "searches"]);
@@ -198,7 +200,8 @@ function deriveMetricText(
   const sectionProgress = deriveSectionMetric(events, latestEvent.stage);
   if (sectionProgress) return sectionProgress;
 
-  return `Step ${Math.min(currentStepIndex + 1, 5)} of 5`;
+  const stepIndex = Math.min(currentStepIndex, 4);
+  return STEP_PHASE_NAMES[stepIndex] || STEP_PHASE_NAMES[0];
 }
 
 function deriveSectionMetric(events: RunEvent[], stage: string) {
