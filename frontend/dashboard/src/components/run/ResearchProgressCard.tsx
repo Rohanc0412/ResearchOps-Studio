@@ -85,11 +85,11 @@ export function ResearchProgressCard({
                 )}
               </div>
 
-              {/* label */}
-              <div className="min-w-0 flex-1 pt-[5px]">
+              {/* label + metric row */}
+              <div className="flex min-w-0 flex-1 items-baseline gap-2 pt-[5px]">
                 <p
                   className={cx(
-                    "text-[11px] leading-relaxed",
+                    "min-w-0 flex-1 text-[11px] leading-relaxed",
                     isFailed && step.state === "current"
                       ? "text-[rgba(255,100,100,0.6)]"
                       : step.state === "current"
@@ -105,6 +105,18 @@ export function ResearchProgressCard({
                     step.label
                   )}
                 </p>
+                <span
+                  className={cx(
+                    "shrink-0 whitespace-nowrap text-[10px]",
+                    step.state === "complete"
+                      ? "font-semibold text-white/40"
+                      : step.state === "current"
+                        ? "font-bold text-[#9580c4]"
+                        : "text-white/10"
+                  )}
+                >
+                  {model.stepMetrics[index] ?? "—"}
+                </span>
               </div>
             </div>
           );
