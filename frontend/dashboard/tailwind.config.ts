@@ -120,13 +120,13 @@ export default {
           "50%":      { opacity: "0.45" },
         },
         "halo-pulse": {
-          "0%":   { boxShadow: "0 0 0 0px rgba(255,255,255,0.55), 0 0 0 0px rgba(255,255,255,0.15)" },
-          "60%":  { boxShadow: "0 0 0 6px rgba(255,255,255,0.08), 0 0 0 12px rgba(255,255,255,0.04)" },
+          "0%":   { boxShadow: "0 0 0 0px rgba(255,255,255,0.8), 0 0 0 0px rgba(255,255,255,0.4)" },
+          "20%":  { boxShadow: "0 0 0 3px rgba(255,255,255,0.5), 0 0 0 7px rgba(255,255,255,0.2)" },
           "100%": { boxShadow: "0 0 0 10px rgba(255,255,255,0), 0 0 0 18px rgba(255,255,255,0)" },
         },
         "shimmer": {
-          "0%":   { backgroundPosition: "-200% center" },
-          "100%": { backgroundPosition: "200% center" },
+          "0%":   { backgroundPosition: "100% center" },
+          "100%": { backgroundPosition: "0% center" },
         },
         "dot-blink": {
           "0%, 100%": { opacity: "1" },
