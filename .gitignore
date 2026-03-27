@@ -16,6 +16,9 @@ env/
 
 # Local tool settings
 .claude/settings.local.json
+.claude/
+.playwright-mcp/
+.superpowers/
 
 # Patch files
 *.patch
