@@ -309,8 +309,30 @@ def _maybe_render_pdf(markdown: str) -> tuple[bytes | None, str | None]:
         return None, "PDF export requested but weasyprint is not installed."
 
     try:
-        html = md.markdown(markdown, extensions=["extra"])
-        pdf_bytes = HTML(string=html).write_pdf()
+        body_html = md.markdown(markdown, extensions=["extra", "toc"])
+        css = """
+            @page { margin: 2.2cm 2.5cm; }
+            body { font-family: Georgia, 'Times New Roman', serif; font-size: 11pt;
+                   line-height: 1.65; color: #1a1a1a; }
+            h1 { font-size: 22pt; color: #111; margin: 0 0 0.4em; }
+            h2 { font-size: 15pt; color: #222; margin: 1.6em 0 0.35em; border-bottom: 1px solid #ddd; padding-bottom: 0.15em; }
+            h3 { font-size: 12.5pt; color: #333; margin: 1.2em 0 0.25em; }
+            p  { margin: 0.75em 0; }
+            a  { color: #1d4ed8; text-decoration: none; }
+            code { font-family: 'Courier New', monospace; font-size: 9pt;
+                   background: #f4f4f4; padding: 0.1em 0.35em; border-radius: 3px; }
+            pre  { background: #f4f4f4; padding: 0.8em 1em; border-radius: 4px;
+                   overflow-x: auto; font-size: 9pt; }
+            pre code { background: none; padding: 0; }
+            blockquote { border-left: 3px solid #ccc; margin: 1em 0; padding-left: 1em; color: #555; }
+            table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 10pt; }
+            th, td { border: 1px solid #d0d0d0; padding: 6px 10px; text-align: left; }
+            th { background: #f0f0f0; font-weight: bold; }
+            hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
+            sup { font-size: 0.72em; vertical-align: super; line-height: 0; }
+        """
+        full_html = f"<html><head><meta charset='utf-8'><style>{css}</style></head><body>{body_html}</body></html>"
+        pdf_bytes = HTML(string=full_html).write_pdf()
         return pdf_bytes, None
     except Exception as exc:
         return None, f"PDF export failed: {exc}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from uuid import UUID
 
@@ -26,11 +27,32 @@ def download_user_artifact(
     if artifact is None:
         raise HTTPException(status_code=404, detail="artifact not found")
     if artifact.blob_ref.startswith("inline://"):
-        body = json.dumps(artifact.metadata_json or {}, indent=2).encode("utf-8")
+        meta = artifact.metadata_json or {}
+        filename = meta.get("filename") or f"artifact-{artifact.id}"
+
+        if isinstance(meta.get("markdown"), str):
+            return Response(
+                content=meta["markdown"].encode("utf-8"),
+                media_type="text/markdown; charset=utf-8",
+                headers={"content-disposition": f'attachment; filename="{filename}"'},
+            )
+
+        if isinstance(meta.get("content_base64"), str):
+            try:
+                raw = base64.b64decode(meta["content_base64"])
+                return Response(
+                    content=raw,
+                    media_type=artifact.mime_type or "application/octet-stream",
+                    headers={"content-disposition": f'attachment; filename="{filename}"'},
+                )
+            except Exception:
+                pass
+
+        body = json.dumps(meta, indent=2).encode("utf-8")
         return Response(
             content=body,
             media_type="application/json",
-            headers={"content-disposition": f'attachment; filename="artifact-{artifact.id}.json"'},
+            headers={"content-disposition": f'attachment; filename="{filename}.json"'},
         )
     raise HTTPException(
         status_code=501,
