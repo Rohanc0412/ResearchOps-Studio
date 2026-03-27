@@ -22,7 +22,7 @@ export function ResearchProgressCard({
   const isFailed  = model.status === "failed";
 
   return (
-    <div className="mb-6 rounded-[24px] border border-white/[0.07] bg-[#0c0c0c] p-[22px] shadow-[0_24px_64px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="mb-6 rounded-[24px] border border-white/[0.07] bg-obsidian-bg p-[22px] shadow-[0_24px_64px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.04)]">
 
       {/* ── Header ───────────────────────────────────────────────── */}
       <div className="mb-5 flex items-start justify-between gap-4">
@@ -44,7 +44,9 @@ export function ResearchProgressCard({
                 ? "Run failed — review or retry"
                 : model.status === "canceled"
                   ? "Run stopped before the report finished"
-                  : "Live research progress"}
+                  : model.status === "succeeded"
+                    ? "Report complete"
+                    : "Live research progress"}
             </p>
           </div>
         </div>
