@@ -1,3 +1,5 @@
+name: research_studio
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
