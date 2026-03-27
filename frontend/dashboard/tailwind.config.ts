@@ -115,32 +115,11 @@ export default {
           from: { transform: "rotate(0deg)" },
           to:   { transform: "rotate(360deg)" },
         },
-        "letter-breathe": {
-          "0%, 100%": { opacity: "1" },
-          "50%":      { opacity: "0.45" },
-        },
-        "halo-pulse": {
-          "0%":   { boxShadow: "0 0 0 0px rgba(255,255,255,0.8), 0 0 0 0px rgba(255,255,255,0.4)" },
-          "20%":  { boxShadow: "0 0 0 3px rgba(255,255,255,0.5), 0 0 0 7px rgba(255,255,255,0.2)" },
-          "100%": { boxShadow: "0 0 0 10px rgba(255,255,255,0), 0 0 0 18px rgba(255,255,255,0)" },
-        },
-        "shimmer": {
-          "0%":   { backgroundPosition: "100% center" },
-          "100%": { backgroundPosition: "0% center" },
-        },
-        "dot-blink": {
-          "0%, 100%": { opacity: "1" },
-          "50%":      { opacity: "0.2" },
-        },
       },
       animation: {
         "fade-in":  "fade-in 150ms cubic-bezier(0.4, 0, 0.2, 1)",
         "scale-in": "scale-in 150ms cubic-bezier(0.4, 0, 0.2, 1)",
         spin:       "spin 700ms linear infinite",
-        "letter-breathe": "letter-breathe 2.8s ease-in-out infinite",
-        "halo-pulse":     "halo-pulse 2s ease-out infinite",
-        "shimmer":        "shimmer 2.5s linear infinite",
-        "dot-blink":      "dot-blink 2s ease-in-out infinite",
       },
     },
   },

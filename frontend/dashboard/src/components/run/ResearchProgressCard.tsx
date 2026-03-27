@@ -1,3 +1,4 @@
+import { motion } from "framer-motion";
 import { Check, ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 
 import { cx, formatTs } from "../../utils/format";
@@ -32,7 +33,11 @@ export function ResearchProgressCard({
           </h3>
           <div className="mt-1 flex items-center gap-1.5">
             {isRunning && (
-              <span className="h-[5px] w-[5px] shrink-0 animate-dot-blink rounded-full bg-white/40" />
+              <motion.span
+                className="h-[5px] w-[5px] shrink-0 rounded-full bg-white/40"
+                animate={{ opacity: [1, 0.2, 1] }}
+                transition={{ duration: 2, ease: "easeInOut", repeat: Infinity }}
+              />
             )}
             <p
               className={cx(
@@ -151,19 +156,30 @@ export function ResearchProgressCard({
       {/* ── Progress bar ─────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <div className="h-[2px] flex-1 overflow-hidden rounded-full bg-white/[0.07]">
-          <div
-            className={cx(
-              "h-full rounded-full",
-              isRunning
-                ? "animate-shimmer bg-[linear-gradient(90deg,rgba(255,255,255,0.4)_0%,rgba(255,255,255,0.85)_40%,#fff_50%,rgba(255,255,255,0.85)_60%,rgba(255,255,255,0.4)_100%)] bg-[length:200%_100%]"
-                : isFailed
+          {isRunning ? (
+            <motion.div
+              className="h-full rounded-full"
+              style={{
+                width: `${Math.max(6, Math.round(model.progressRatio * 100))}%`,
+                background: "linear-gradient(90deg,rgba(255,255,255,0.4) 0%,rgba(255,255,255,0.85) 40%,#fff 50%,rgba(255,255,255,0.85) 60%,rgba(255,255,255,0.4) 100%)",
+                backgroundSize: "200% 100%",
+              }}
+              animate={{ backgroundPosition: ["100% center", "0% center"] }}
+              transition={{ duration: 2.5, ease: "linear", repeat: Infinity }}
+            />
+          ) : (
+            <div
+              className={cx(
+                "h-full rounded-full",
+                isFailed
                   ? "bg-[rgba(255,80,80,0.6)]"
                   : model.status === "canceled"
                     ? "bg-white/20"
                     : "bg-white/75"
-            )}
-            style={{ width: `${Math.max(6, Math.round(model.progressRatio * 100))}%` }}
-          />
+              )}
+              style={{ width: `${Math.max(6, Math.round(model.progressRatio * 100))}%` }}
+            />
+          )}
         </div>
 
         {isRunning && onCancel && (
@@ -272,9 +288,19 @@ function ProgressStepBadge({
 
   if (state === "current") {
     return (
-      <span className="animate-halo-pulse inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-bold text-[#0a0a0a]">
+      <motion.span
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-bold text-[#0a0a0a]"
+        animate={{
+          boxShadow: [
+            "0 0 0 0px rgba(255,255,255,0.8), 0 0 0 0px rgba(255,255,255,0.4)",
+            "0 0 0 3px rgba(255,255,255,0.5), 0 0 0 7px rgba(255,255,255,0.2)",
+            "0 0 0 10px rgba(255,255,255,0), 0 0 0 18px rgba(255,255,255,0)",
+          ],
+        }}
+        transition={{ duration: 2, ease: "easeOut", repeat: Infinity, times: [0, 0.2, 1] }}
+      >
         {index}
-      </span>
+      </motion.span>
     );
   }
 
@@ -297,22 +323,27 @@ function WaveText({
   duration: number;
   className?: string;
 }) {
+  const chars = text.split("");
   return (
     <span className={className}>
-      {text.split("").map((ch, i, arr) => {
+      {chars.map((ch, i) => {
         if (ch === " ") return <span key={i}>&nbsp;</span>;
-        const delay = -(duration * (1 - i / arr.length));
+        // Negative delay equivalent: offset each char's phase within the cycle
+        const delay = -(duration * (1 - i / chars.length));
         return (
-          <span
+          <motion.span
             key={i}
-            className="animate-letter-breathe inline-block"
-            style={{
-              animationDuration: `${duration}s`,
-              animationDelay: `${delay.toFixed(2)}s`
+            style={{ display: "inline-block" }}
+            animate={{ opacity: [1, 0.45, 1] }}
+            transition={{
+              duration,
+              ease: "easeInOut",
+              repeat: Infinity,
+              delay,
             }}
           >
             {ch}
-          </span>
+          </motion.span>
         );
       })}
     </span>
