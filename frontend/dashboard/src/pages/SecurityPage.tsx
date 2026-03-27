@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from "react";
 import { CheckCircle, Copy, ShieldCheck, ShieldOff } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 import { useAuth } from "../auth/useAuth";
 import { disableMfa, startMfaEnroll, useMfaStatusQuery, verifyMfaEnroll } from "../api/mfa";
@@ -57,7 +58,11 @@ export function SecurityPage() {
       await statusQuery.refetch();
       setSuccess("MFA is enabled.");
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Verification failed.";
+      const raw = e instanceof Error ? e.message : "";
+      const message = raw.includes("401")
+        ? "Invalid verification code. Please check your authenticator app and try again."
+        : raw || "Verification failed.";
+      setCode("");
       setError(message);
     } finally {
       setIsWorking(false);
@@ -166,6 +171,16 @@ export function SecurityPage() {
             className="flex flex-col gap-5 border-t border-obsidian-border-subtle px-6 py-5"
             onSubmit={handleVerify}
           >
+            {/* QR code */}
+            <div className="flex flex-col items-center gap-3">
+              <div className="rounded-xl border border-obsidian-border bg-white p-3">
+                <QRCodeSVG value={enroll.otpauth_uri} size={160} />
+              </div>
+              <p className="text-center text-xs text-obsidian-muted">
+                Scan with your authenticator app (Google Authenticator, Authy, 1Password…)
+              </p>
+            </div>
+
             {/* Secret block */}
             <div className="space-y-1.5">
               <div className="text-[11px] font-semibold uppercase tracking-widest text-obsidian-muted">

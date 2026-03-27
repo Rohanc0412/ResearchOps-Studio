@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { ExternalLink } from "lucide-react";
 
+import { ApiError } from "../api/client";
 import { useSnippetQuery, useSourceQuery } from "../api/evidence";
 import { Button } from "../components/ui/Button";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
@@ -20,6 +21,18 @@ export function EvidencePage() {
     );
   }
   if (snippet.isError) {
+    const is404 = snippet.error instanceof ApiError && snippet.error.status === 404;
+    if (is404) {
+      return (
+        <div className="flex flex-col items-center justify-center py-24 gap-6 text-center">
+          <p className="text-lg font-semibold text-obsidian-text">Snippet not found</p>
+          <p className="text-sm text-obsidian-muted">This evidence snippet doesn't exist or has been removed.</p>
+          <Link to="/projects">
+            <Button variant="secondary">Back to Projects</Button>
+          </Link>
+        </div>
+      );
+    }
     return (
       <ErrorBanner
         message={snippet.error instanceof Error ? snippet.error.message : "Failed to load snippet"}

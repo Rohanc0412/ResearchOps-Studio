@@ -200,8 +200,7 @@ function deriveMetricText(
   const sectionProgress = deriveSectionMetric(events, latestEvent.stage);
   if (sectionProgress) return sectionProgress;
 
-  const stepIndex = Math.min(currentStepIndex, 4);
-  return STEP_PHASE_NAMES[stepIndex] || STEP_PHASE_NAMES[0];
+  return STEP_PHASE_NAMES[Math.min(currentStepIndex, 4)]!;
 }
 
 function deriveSectionMetric(events: RunEvent[], stage: string) {

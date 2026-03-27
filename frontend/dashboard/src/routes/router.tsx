@@ -7,6 +7,7 @@ import { ChatViewPage } from "../pages/ChatViewPage";
 import { ErrorPage } from "../pages/ErrorPage";
 import { EvidencePage } from "../pages/EvidencePage";
 import { LoginPage } from "../pages/LoginPage";
+import { NotFoundPage } from "../pages/NotFoundPage";
 import { ProjectDetailPage } from "../pages/ProjectDetailPage";
 import { ProjectsPage } from "../pages/ProjectsPage";
 import { SecurityPage } from "../pages/SecurityPage";
@@ -28,7 +29,8 @@ export const router = createBrowserRouter([
               { path: "/projects/:projectId/chats/:chatId", element: <ChatViewPage /> },
               { path: "/runs/:runId/artifacts", element: <ArtifactsPage /> },
               { path: "/evidence/snippets/:snippetId", element: <EvidencePage /> },
-              { path: "/security", element: <SecurityPage /> }
+              { path: "/security", element: <SecurityPage /> },
+              { path: "*", element: <NotFoundPage /> }
             ]
           }
         ]

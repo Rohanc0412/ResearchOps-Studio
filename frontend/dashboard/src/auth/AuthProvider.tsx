@@ -82,6 +82,7 @@ function mapAuthUser(payload: Record<string, unknown>): AuthUser | null {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const loggingOutRef = React.useRef(false);
   const [accessToken, setAccessToken] = useState<string | null>(() => {
     try {
       return window.localStorage.getItem(STORAGE_KEY);
@@ -109,6 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      if (loggingOutRef.current) return;
       void refreshSession().catch(() => {
         void clearSession().finally(() => {
           window.location.assign("/login");
@@ -248,6 +250,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function logout(opts?: { redirect?: boolean }) {
+    loggingOutRef.current = true;
     await authFetch("/auth/logout", { method: "POST" });
     await clearSession();
     if (opts?.redirect === false) return;

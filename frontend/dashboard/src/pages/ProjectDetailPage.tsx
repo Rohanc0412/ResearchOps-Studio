@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ChevronRight, Folder, MessageSquare, Plus, Send } from "lucide-react";
+import { ChevronRight, Folder, FlaskConical, MessageSquare, Plus, Send } from "lucide-react";
 
 import { useChatConversationsQuery, useCreateConversationMutation } from "../api/chat";
 import { useProjectQuery } from "../api/projects";
@@ -23,6 +23,7 @@ export function ProjectDetailPage() {
   const conversations = useChatConversationsQuery(id);
   const createConversation = useCreateConversationMutation();
   const [draft, setDraft] = useState("");
+  const [runPipeline, setRunPipeline] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
   const recentChats = useMemo(() => {
@@ -44,7 +45,7 @@ export function ProjectDetailPage() {
       const chat = await createConversation.mutateAsync({ project_id: id, title });
       navigate(
         `/projects/${encodeURIComponent(id)}/chats/${encodeURIComponent(chat.id)}`,
-        { state: initialMessage ? { initialMessage } : undefined }
+        { state: initialMessage || runPipeline ? { initialMessage, runPipeline } : undefined }
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to create chat.";
@@ -111,7 +112,7 @@ export function ProjectDetailPage() {
         <textarea
           className="w-full resize-none bg-transparent px-5 pt-5 pb-3 text-sm font-sans text-obsidian-text placeholder:text-obsidian-muted focus:outline-none"
           rows={4}
-          placeholder="Ask a research question…"
+          placeholder={runPipeline ? "Describe your research topic — a full report will run automatically…" : "Ask a research question…"}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -122,17 +123,32 @@ export function ProjectDetailPage() {
           }}
         />
         <div className="flex items-center justify-between border-t border-obsidian-border-subtle px-4 py-3">
-          <span className="text-xs text-obsidian-muted">
-            Press{" "}
-            <kbd className="rounded border border-obsidian-border px-1 py-0.5 font-mono text-[10px]">
-              Enter
-            </kbd>{" "}
-            to send,{" "}
-            <kbd className="rounded border border-obsidian-border px-1 py-0.5 font-mono text-[10px]">
-              Shift+Enter
-            </kbd>{" "}
-            for newline
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-obsidian-muted">
+              Press{" "}
+              <kbd className="rounded border border-obsidian-border px-1 py-0.5 font-mono text-[10px]">
+                Enter
+              </kbd>{" "}
+              to send,{" "}
+              <kbd className="rounded border border-obsidian-border px-1 py-0.5 font-mono text-[10px]">
+                Shift+Enter
+              </kbd>{" "}
+              for newline
+            </span>
+            <button
+              type="button"
+              aria-pressed={runPipeline}
+              onClick={() => setRunPipeline((p) => !p)}
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                runPipeline
+                  ? "border-obsidian-accent/60 bg-obsidian-accent/20 text-obsidian-accent"
+                  : "border-obsidian-border text-obsidian-muted hover:border-obsidian-accent/30 hover:text-obsidian-accent"
+              }`}
+            >
+              <FlaskConical className="h-3 w-3" />
+              Run research report
+            </button>
+          </div>
           <Button
             size="sm"
             onClick={onSubmit}

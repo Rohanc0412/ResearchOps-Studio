@@ -57,6 +57,12 @@ desktop.ini
 node_modules/
 .next/
 out/
+*.tsbuildinfo
+
+# E2E test screenshots
+e2e*.png
+e2e2*.png
+fix-*.png
 
 # Local DB files
 *.db

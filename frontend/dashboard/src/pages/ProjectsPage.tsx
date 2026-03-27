@@ -82,6 +82,12 @@ export function ProjectsPage() {
         <ErrorBanner
           message={projects.error instanceof Error ? projects.error.message : "Failed to load projects"}
         />
+      ) : rows.length === 0 && q.trim() ? (
+        <EmptyState
+          icon={<Folder className="h-5 w-5" />}
+          title={`No projects matching "${q.trim()}"`}
+          description="Try a different search term or clear the search to see all projects."
+        />
       ) : rows.length === 0 ? (
         <EmptyState
           icon={<Folder className="h-5 w-5" />}
