@@ -194,6 +194,9 @@ class OrchestratorState(BaseModel):
     evaluator_decision: EvaluatorDecision | None = None
     evaluation_reason: str = ""
 
+    # Step labels (LLM-planned at run start, streamed to frontend)
+    step_labels: list[str] | None = None
+
     # Metadata
     iteration_count: int = 0
     max_iterations: int = 5
