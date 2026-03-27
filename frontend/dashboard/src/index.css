@@ -73,3 +73,32 @@ body,
   scrollbar-width: thin;
   scrollbar-color: #1c1c24 transparent;
 }
+
+/* ── Custom keyframes (defined here to survive Tailwind JIT cache misses) ── */
+@keyframes dot-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+@keyframes letter-breathe {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+@keyframes halo-pulse {
+  0%   { box-shadow: 0 0 0 0px rgba(255,255,255,0.55), 0 0 0 0px rgba(255,255,255,0.15); }
+  60%  { box-shadow: 0 0 0 6px rgba(255,255,255,0.08), 0 0 0 12px rgba(255,255,255,0.04); }
+  100% { box-shadow: 0 0 0 10px rgba(255,255,255,0), 0 0 0 18px rgba(255,255,255,0); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+@layer utilities {
+  .animate-dot-blink     { animation: dot-blink 2s ease-in-out infinite; }
+  .animate-letter-breathe { animation: letter-breathe 2.8s ease-in-out infinite; }
+  .animate-halo-pulse    { animation: halo-pulse 2s ease-out infinite; }
+  .animate-shimmer       { animation: shimmer 2.5s linear infinite; }
+}
