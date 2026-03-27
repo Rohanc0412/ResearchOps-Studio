@@ -3,7 +3,6 @@ import { ExternalLink } from "lucide-react";
 
 import { useSnippetQuery, useSourceQuery } from "../api/evidence";
 import { Button } from "../components/ui/Button";
-import { Card } from "../components/ui/Card";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
 
@@ -15,73 +14,111 @@ export function EvidencePage() {
 
   if (snippet.isLoading) {
     return (
-      <Card>
-        <Spinner label="Loading snippet???" />
-      </Card>
+      <div className="flex justify-center py-16">
+        <Spinner label="Loading snippet…" />
+      </div>
     );
   }
   if (snippet.isError) {
-    return <ErrorBanner message={snippet.error instanceof Error ? snippet.error.message : "Failed to load snippet"} />;
+    return (
+      <ErrorBanner
+        message={snippet.error instanceof Error ? snippet.error.message : "Failed to load snippet"}
+      />
+    );
   }
   const s = snippet.data;
   if (!s) return null;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-lg font-semibold text-slate-100">Evidence Snippet</div>
-          <div className="text-sm text-slate-500">
-            id <span className="text-slate-300">{s.id}</span>
-          </div>
+          <h1 className="font-display text-[28px] font-semibold leading-tight text-obsidian-text">
+            Evidence Snippet
+          </h1>
+          <p className="mt-1 font-mono text-sm text-obsidian-muted">
+            id <span className="text-obsidian-text">{s.id}</span>
+          </p>
         </div>
         <Link to="/projects">
-          <Button>Projects</Button>
+          <Button variant="secondary" size="sm" className="shrink-0">
+            Projects
+          </Button>
         </Link>
       </div>
 
-      <Card>
-        <div className="mb-2 text-sm font-semibold text-slate-100">Snippet</div>
-        <pre className="overflow-auto rounded-md border border-slate-900 bg-slate-950 p-3 text-xs text-slate-200">
+      {/* Snippet content */}
+      <div className="flex flex-col gap-3">
+        <div className="text-[11px] font-semibold uppercase tracking-widest text-obsidian-muted">
+          Content
+        </div>
+        <pre className="overflow-auto rounded-xl border border-obsidian-border bg-obsidian-bg p-5 font-mono text-sm leading-relaxed text-obsidian-text">
           {s.text}
         </pre>
         {s.risk_flags?.length ? (
-          <div className="mt-3 text-sm text-amber-200">Risk flags: {s.risk_flags.join(", ")}</div>
-        ) : null}
-      </Card>
-
-      <Card>
-        <div className="mb-2 text-sm font-semibold text-slate-100">Source</div>
-        {source.isLoading ? (
-          <Spinner label="Loading source???" />
-        ) : source.isError ? (
-          <div className="text-sm text-slate-500">Source lookup failed or is unavailable.</div>
-        ) : source.data ? (
-          <div className="flex flex-col gap-2 text-sm text-slate-300">
-            <div>
-              <span className="text-slate-500">Title:</span> {source.data.title ?? "???"}
-            </div>
-            <div>
-              <span className="text-slate-500">Canonical id:</span> {source.data.canonical_id ?? "???"}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500">URL:</span>{" "}
-              {source.data.url ? (
-                <a className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200" href={source.data.url} target="_blank" rel="noreferrer">
-                  Open <ExternalLink className="h-3 w-3" />
-                </a>
-              ) : (
-                "???"
-              )}
-            </div>
+          <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-2.5">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-amber-400/70">
+              Risk flags
+            </span>
+            <span className="text-sm text-amber-300">{s.risk_flags.join(", ")}</span>
           </div>
-        ) : (
-          <div className="text-sm text-slate-500">No source metadata for this snippet.</div>
-        )}
-      </Card>
+        ) : null}
+      </div>
+
+      {/* Source metadata */}
+      <div className="flex flex-col gap-3">
+        <div className="text-[11px] font-semibold uppercase tracking-widest text-obsidian-muted">
+          Source
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-obsidian-border bg-obsidian-surface-elevated">
+          {source.isLoading ? (
+            <div className="flex justify-center p-8">
+              <Spinner label="Loading source…" />
+            </div>
+          ) : source.isError ? (
+            <p className="px-5 py-4 text-sm text-obsidian-muted">
+              Source lookup failed or is unavailable.
+            </p>
+          ) : source.data ? (
+            <dl className="divide-y divide-obsidian-border-subtle">
+              <div className="flex items-baseline gap-4 px-5 py-3.5">
+                <dt className="w-32 shrink-0 font-mono text-xs text-obsidian-muted">title</dt>
+                <dd className="text-sm text-obsidian-text">{source.data.title ?? "—"}</dd>
+              </div>
+              <div className="flex items-baseline gap-4 px-5 py-3.5">
+                <dt className="w-32 shrink-0 font-mono text-xs text-obsidian-muted">canonical_id</dt>
+                <dd className="font-mono text-sm text-obsidian-text">
+                  {source.data.canonical_id ?? "—"}
+                </dd>
+              </div>
+              <div className="flex items-center gap-4 px-5 py-3.5">
+                <dt className="w-32 shrink-0 font-mono text-xs text-obsidian-muted">url</dt>
+                <dd className="text-sm">
+                  {source.data.url ? (
+                    <a
+                      className="inline-flex items-center gap-1.5 text-obsidian-accent hover:brightness-125"
+                      href={source.data.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open source
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  ) : (
+                    <span className="text-obsidian-muted">—</span>
+                  )}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="px-5 py-4 text-sm text-obsidian-muted">
+              No source metadata for this snippet.
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
-
-
-

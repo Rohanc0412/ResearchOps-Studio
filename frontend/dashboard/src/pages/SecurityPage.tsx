@@ -1,11 +1,11 @@
 import { type FormEvent, useState } from "react";
+import { CheckCircle, Copy, ShieldCheck, ShieldOff } from "lucide-react";
 
 import { useAuth } from "../auth/useAuth";
-import { ErrorBanner } from "../components/ui/ErrorBanner";
-import { Button } from "../components/ui/Button";
-import { Card } from "../components/ui/Card";
-import { Input } from "../components/ui/Input";
 import { disableMfa, startMfaEnroll, useMfaStatusQuery, verifyMfaEnroll } from "../api/mfa";
+import { Button } from "../components/ui/Button";
+import { ErrorBanner } from "../components/ui/ErrorBanner";
+import { Input } from "../components/ui/Input";
 
 export function SecurityPage() {
   const auth = useAuth();
@@ -23,6 +23,7 @@ export function SecurityPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isWorking, setIsWorking] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const enabled = statusQuery.data?.enabled ?? false;
   const pending = statusQuery.data?.pending ?? false;
@@ -81,88 +82,192 @@ export function SecurityPage() {
     }
   }
 
+  function copySecret(text: string) {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-8">
+      {/* Page header */}
       <div>
-        <div className="text-2xl font-semibold text-slate-100">Security</div>
-        <div className="text-sm text-slate-400">Manage multi-factor authentication for your account.</div>
+        <h1 className="font-display text-[28px] font-semibold leading-tight text-obsidian-text">
+          Security
+        </h1>
+        <p className="mt-1 text-sm text-obsidian-muted">
+          Manage multi-factor authentication for your account.
+        </p>
       </div>
 
-      {error ? <ErrorBanner title="Security error" message={error} /> : null}
-      {success ? (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-100">
-          {success}
+      {/* Banners */}
+      {error && <ErrorBanner title="Security error" message={error} />}
+      {success && (
+        <div className="flex items-start gap-3 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
+          <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-green-400" />
+          <p className="text-sm font-sans text-green-400">{success}</p>
         </div>
-      ) : null}
+      )}
 
-      <Card className="space-y-4 p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm font-semibold text-slate-100">Authenticator app (TOTP)</div>
-            <div className="text-xs text-slate-500">
-              {enabled ? "Enabled" : pending ? "Setup in progress" : "Not enabled"}
+      {/* MFA card */}
+      <div className="overflow-hidden rounded-xl border border-obsidian-border bg-obsidian-surface-elevated">
+        {/* Card header row */}
+        <div className="flex items-center justify-between gap-4 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-obsidian-accent-dim">
+              {enabled ? (
+                <ShieldCheck className="h-4 w-4 text-obsidian-accent" />
+              ) : (
+                <ShieldOff className="h-4 w-4 text-obsidian-muted" />
+              )}
+            </div>
+            <div>
+              <div className="text-sm font-medium text-obsidian-text">
+                Authenticator app (TOTP)
+              </div>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                {enabled ? (
+                  <>
+                    <span className="h-1.5 w-1.5 rounded-full bg-green-400" />
+                    <span className="text-xs text-green-400">Enabled</span>
+                  </>
+                ) : pending ? (
+                  <>
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                    <span className="text-xs text-amber-400">Setup in progress</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="h-1.5 w-1.5 rounded-full bg-obsidian-muted" />
+                    <span className="text-xs text-obsidian-muted">Not enabled</span>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-          {!enabled ? (
+
+          {!enabled && (
             <Button
-              type="button"
+              variant="secondary"
+              size="sm"
               onClick={() => void handleStart()}
               disabled={isWorking || statusLoading}
+              loading={isWorking && !enroll}
             >
               {pending ? "Restart setup" : "Enable MFA"}
             </Button>
-          ) : null}
+          )}
         </div>
 
-        {enroll ? (
-          <form className="space-y-3" onSubmit={handleVerify}>
-            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-300">
-              <div className="font-semibold text-slate-200">Setup details</div>
-              <div className="mt-2">
-                <span className="text-slate-400">Issuer:</span> {enroll.issuer}
+        {/* Enroll flow */}
+        {enroll && (
+          <form
+            className="flex flex-col gap-5 border-t border-obsidian-border-subtle px-6 py-5"
+            onSubmit={handleVerify}
+          >
+            {/* Secret block */}
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-obsidian-muted">
+                Secret
               </div>
-              <div className="mt-1">
-                <span className="text-slate-400">Account:</span> {enroll.account_name}
-              </div>
-              <div className="mt-2 break-all">
-                <span className="text-slate-400">Secret:</span> {enroll.secret}
-              </div>
-              <div className="mt-2 break-all text-slate-500">
-                <span className="text-slate-400">OTP URI:</span> {enroll.otpauth_uri}
+              <div className="flex items-center gap-2 rounded-lg border border-obsidian-border bg-obsidian-bg px-3 py-2.5">
+                <code className="flex-1 break-all font-mono text-sm text-obsidian-text">
+                  {enroll.secret}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => copySecret(enroll.secret)}
+                  title="Copy secret"
+                  className="shrink-0 cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-obsidian-accent-dim hover:text-obsidian-text focus:outline-none"
+                >
+                  {copied ? (
+                    <CheckCircle className="h-3.5 w-3.5 text-green-400" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </button>
               </div>
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-400">Verification code</label>
+
+            {/* OTP URI */}
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-obsidian-muted">
+                OTP URI
+              </div>
+              <p className="truncate font-mono text-xs text-obsidian-muted" title={enroll.otpauth_uri}>
+                {enroll.otpauth_uri}
+              </p>
+            </div>
+
+            {/* Metadata */}
+            <div className="flex gap-6 text-xs">
+              <div>
+                <span className="text-obsidian-muted">Issuer: </span>
+                <span className="font-mono text-obsidian-text">{enroll.issuer}</span>
+              </div>
+              <div>
+                <span className="text-obsidian-muted">Account: </span>
+                <span className="font-mono text-obsidian-text">{enroll.account_name}</span>
+              </div>
+              <div>
+                <span className="text-obsidian-muted">Period: </span>
+                <span className="font-mono text-obsidian-text">{enroll.period}s</span>
+              </div>
+            </div>
+
+            {/* Verify input */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-obsidian-muted" htmlFor="enroll-code">
+                Verification code
+              </label>
               <Input
+                id="enroll-code"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 placeholder="123456"
                 autoComplete="one-time-code"
               />
             </div>
-            <Button className="w-full" type="submit" disabled={isWorking}>
-              {isWorking ? "Verifying..." : "Confirm and enable"}
-            </Button>
-          </form>
-        ) : null}
 
-        {enabled ? (
-          <form className="space-y-3" onSubmit={handleDisable}>
-            <div className="text-xs text-slate-500">
-              Enter a current code to disable MFA.
-            </div>
-            <Input
-              value={disableCode}
-              onChange={(e) => setDisableCode(e.target.value)}
-              placeholder="123456"
-              autoComplete="one-time-code"
-            />
-            <Button className="w-full" type="submit" disabled={isWorking}>
-              {isWorking ? "Disabling..." : "Disable MFA"}
+            <Button type="submit" loading={isWorking} className="w-full">
+              {isWorking ? "Verifying…" : "Confirm and enable"}
             </Button>
           </form>
-        ) : null}
-      </Card>
+        )}
+
+        {/* Disable flow */}
+        {enabled && (
+          <form
+            className="flex flex-col gap-4 border-t border-obsidian-border-subtle px-6 py-5"
+            onSubmit={handleDisable}
+          >
+            <p className="text-sm text-obsidian-muted">
+              Enter a current TOTP code to disable multi-factor authentication.
+            </p>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-obsidian-muted" htmlFor="disable-code">
+                Current code
+              </label>
+              <Input
+                id="disable-code"
+                value={disableCode}
+                onChange={(e) => setDisableCode(e.target.value)}
+                placeholder="123456"
+                autoComplete="one-time-code"
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="danger"
+              loading={isWorking}
+              className="w-full"
+            >
+              {isWorking ? "Disabling…" : "Disable MFA"}
+            </Button>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams, useParams } from "react-router-dom";
-import { Download, FileText } from "lucide-react";
+import { ChevronLeft, Download, Eye, FileText } from "lucide-react";
 
 import { downloadArtifact, useRunArtifactsQuery } from "../api/artifacts";
 import { Button } from "../components/ui/Button";
-import { Card } from "../components/ui/Card";
+import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
 import { formatTs } from "../utils/format";
@@ -36,74 +36,120 @@ export function ArtifactsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-lg font-semibold text-slate-100">Artifacts</div>
-          <div className="text-sm text-slate-500">
-            Run <span className="text-slate-300">{id}</span>
-          </div>
-        </div>
-        <Button onClick={() => navigate(-1)}>
+    <div className="flex flex-col gap-6">
+      {/* Back + header */}
+      <div className="flex flex-col gap-4">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate(-1)}
+          className="w-fit"
+        >
+          <ChevronLeft className="h-4 w-4" />
           Back
         </Button>
+
+        <div>
+          <h1 className="font-display text-[28px] font-semibold leading-tight text-obsidian-text">
+            Artifacts
+          </h1>
+          <p className="mt-1 font-mono text-sm text-obsidian-muted">
+            Run <span className="text-obsidian-text">{id}</span>
+          </p>
+        </div>
       </div>
 
+      {/* Content */}
       {artifacts.isLoading ? (
-        <Card>
-          <Spinner label="Loading artifacts???" />
-        </Card>
+        <div className="flex justify-center py-16">
+          <Spinner label="Loading artifacts…" />
+        </div>
       ) : artifacts.isError ? (
-        <ErrorBanner message={artifacts.error instanceof Error ? artifacts.error.message : "Failed to load artifacts"} />
+        <ErrorBanner
+          message={artifacts.error instanceof Error ? artifacts.error.message : "Failed to load artifacts"}
+        />
       ) : (artifacts.data?.length ?? 0) === 0 ? (
-        <Card>
-          <div className="text-sm text-slate-500">No artifacts yet.</div>
-        </Card>
+        <EmptyState
+          icon={<FileText className="h-5 w-5" />}
+          title="No artifacts yet"
+          description="Artifacts will appear here once a run completes."
+        />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="flex flex-col gap-3">
+        <div className="grid gap-4 lg:grid-cols-[2fr_3fr]">
+          {/* Artifact list — 40% */}
+          <div className="flex flex-col gap-2">
             {artifacts.data!.map((a) => (
-              <Card key={a.id} className={a.id === focusArtifact?.id ? "border-sky-500/40" : undefined}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-slate-400" />
-                      <div className="text-sm font-medium text-slate-100">{a.type}</div>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">{formatTs(a.created_at)}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button onClick={() => void onDownload(a)}>
-                      <Download className="h-4 w-4" />
-                      Download
-                    </Button>
-                    {a.type.includes("report") ? (
-                      <Button onClick={() => onOpen(a)}>
-                        Open
-                      </Button>
-                    ) : null}
+              <div
+                key={a.id}
+                className={[
+                  "flex items-center gap-3 rounded-xl border px-4 py-3",
+                  "bg-obsidian-surface-elevated transition-colors",
+                  a.id === focusArtifact?.id || a.id === preview?.id
+                    ? "border-obsidian-accent"
+                    : "border-obsidian-border-subtle",
+                ].join(" ")}
+              >
+                {/* Icon + info */}
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-obsidian-accent-dim">
+                  <FileText className="h-3.5 w-3.5 text-obsidian-accent" />
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <span className="inline-block rounded-md border border-obsidian-accent/25 bg-obsidian-accent-dim px-2 py-0.5 font-mono text-[11px] font-medium text-obsidian-accent">
+                    {a.type}
+                  </span>
+                  <div className="mt-0.5 font-mono text-xs text-obsidian-muted">
+                    {formatTs(a.created_at)}
                   </div>
                 </div>
-              </Card>
+
+                {/* Actions */}
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void onDownload(a)}
+                    title="Download"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </Button>
+                  {a.type.includes("report") && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onOpen(a)}
+                      title="Preview"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
 
-          <Card>
-            <div className="mb-2 text-sm font-semibold text-slate-100">Preview</div>
-            {preview ? (
-              <pre className="max-h-[520px] overflow-auto rounded-md border border-slate-900 bg-slate-950 p-3 text-xs text-slate-200">
-                {preview.markdown}
-              </pre>
-            ) : (
-              <div className="text-sm text-slate-500">
-                Select an artifact with embedded markdown metadata to preview. Otherwise use Download.
-              </div>
-            )}
-          </Card>
+          {/* Preview panel — 60% */}
+          <div className="overflow-hidden rounded-xl border border-obsidian-border bg-obsidian-surface-elevated">
+            <div className="border-b border-obsidian-border-subtle px-4 py-3">
+              <span className="text-[11px] font-semibold uppercase tracking-widest text-obsidian-muted">
+                Preview
+              </span>
+            </div>
+            <div className="p-4">
+              {preview ? (
+                <pre className="max-h-[560px] overflow-auto rounded-lg border border-obsidian-border bg-obsidian-bg p-4 font-mono text-xs leading-relaxed text-obsidian-text">
+                  {preview.markdown}
+                </pre>
+              ) : (
+                <p className="py-8 text-center text-sm text-obsidian-muted">
+                  Select an artifact with embedded markdown to preview,
+                  or use the download button to save the file.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
-
-

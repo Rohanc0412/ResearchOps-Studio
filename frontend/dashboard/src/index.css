@@ -1,30 +1,58 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+/* ── Fonts ─────────────────────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+@import url("https://cdn.jsdelivr.net/npm/cal-sans@1.0.1/index.css");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── Base ───────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
     color-scheme: dark;
   }
 
   body {
-    @apply bg-slate-950 text-slate-100 font-sans antialiased;
+    @apply bg-obsidian-bg text-obsidian-text font-sans antialiased;
   }
 
+  /* Default focus ring — accent color, offset from dark bg */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-obsidian-accent ring-offset-1 ring-offset-obsidian-bg;
+  }
+
+  /* Smooth transitions on color/bg/border by default */
+  *,
+  *::before,
+  *::after {
+    transition-property: color, background-color, border-color, box-shadow, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Honour reduced-motion */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
+/* ── Layout ─────────────────────────────────────────────────────────────── */
 html,
 body,
 #root {
   height: 100%;
 }
 
-/* Custom scrollbar styling */
+/* ── Scrollbars (Webkit) ────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -33,16 +61,15 @@ body,
 
 ::-webkit-scrollbar-thumb {
   background: #1c1c24;
-  border-radius: 4px;
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #8a8694;
+  background: #2e2e3a;
 }
 
-/* Firefox */
+/* ── Scrollbars (Firefox) ───────────────────────────────────────────────── */
 * {
   scrollbar-width: thin;
   scrollbar-color: #1c1c24 transparent;
 }
-

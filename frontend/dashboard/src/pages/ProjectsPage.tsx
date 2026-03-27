@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Plus, Search } from "lucide-react";
+import { Folder, Plus, Search } from "lucide-react";
 
 import { useCreateProjectMutation, useProjectsQuery } from "../api/projects";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
+import { Input } from "../components/ui/Input";
 import { Modal } from "../components/ui/Modal";
 import { Spinner } from "../components/ui/Spinner";
 import { formatTs } from "../utils/format";
@@ -44,142 +45,157 @@ export function ProjectsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       {/* Page header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1
-            className="text-3xl font-bold bg-gradient-to-r from-white to-[#a5b4fc] bg-clip-text text-transparent tracking-[-0.02em]"
-            style={{ fontFamily: "'Syne', sans-serif" }}
-          >
+          <h1 className="font-display text-[28px] font-semibold leading-tight text-obsidian-text">
             Projects
           </h1>
-          <p className="mt-1 text-sm font-medium text-slate-500">Create and manage research projects.</p>
+          <p className="mt-1 text-sm text-obsidian-muted">
+            Create and manage research projects.
+          </p>
         </div>
-        <button
-          onClick={() => setOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#9580c4] px-5 py-3 text-sm font-semibold text-white shadow-[0_4px_12px_rgba(149,128,196,0.25)] transition-all hover:bg-[#a792ce] hover:-translate-y-px hover:shadow-[0_6px_18px_rgba(149,128,196,0.35)] active:translate-y-0 active:bg-[#8670b8]"
-        >
+        <Button onClick={() => setOpen(true)} className="shrink-0">
           <Plus className="h-4 w-4" />
           New Project
-        </button>
+        </Button>
       </div>
 
       {/* Search */}
-      <GlassCard>
-        <div className="flex items-center gap-3 p-4">
-          <Search className="h-[18px] w-[18px] flex-shrink-0 text-slate-500" />
-          <input
-            placeholder="Search projects…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="flex-1 rounded-lg border border-white/[0.08] bg-slate-950/70 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500/50 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 transition"
-          />
-        </div>
-      </GlassCard>
+      <div className="flex items-center gap-3 rounded-xl border border-obsidian-border-subtle bg-obsidian-surface-elevated px-4 py-3">
+        <Search className="h-4 w-4 shrink-0 text-obsidian-muted" />
+        <input
+          placeholder="Search projects…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="flex-1 bg-transparent text-sm text-obsidian-text placeholder:text-obsidian-muted focus:outline-none"
+        />
+      </div>
 
-      {/* Projects table */}
+      {/* Content */}
       {projects.isLoading ? (
-        <GlassCard>
-          <div className="p-8">
-            <Spinner label="Loading projects…" />
-          </div>
-        </GlassCard>
+        <div className="flex justify-center py-16">
+          <Spinner label="Loading projects…" />
+        </div>
       ) : projects.isError ? (
-        <ErrorBanner message={projects.error instanceof Error ? projects.error.message : "Failed to load projects"} />
+        <ErrorBanner
+          message={projects.error instanceof Error ? projects.error.message : "Failed to load projects"}
+        />
       ) : rows.length === 0 ? (
         <EmptyState
-          title="No projects"
-          description="Create your first project to start runs."
-          action={<Button onClick={() => setOpen(true)}>New Project</Button>}
+          icon={<Folder className="h-5 w-5" />}
+          title="No projects yet"
+          description="Create your first project to start research runs."
+          action={
+            <Button onClick={() => setOpen(true)}>
+              <Plus className="h-4 w-4" />
+              New Project
+            </Button>
+          }
         />
       ) : (
-        <GlassCard>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-white/[0.06] bg-slate-950/50">
-                <tr>
-                  <th className="px-5 py-4 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Name</th>
-                  <th className="px-5 py-4 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Created</th>
-                  <th className="px-5 py-4 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Last run</th>
-                  <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+        <div className="overflow-hidden rounded-xl border border-obsidian-border">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-obsidian-border bg-obsidian-surface">
+                <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-obsidian-muted">
+                  Name
+                </th>
+                <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-obsidian-muted">
+                  Created
+                </th>
+                <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-obsidian-muted">
+                  Last run
+                </th>
+                <th className="px-5 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-obsidian-muted">
+                  &nbsp;
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-obsidian-border-subtle">
+              {rows.map((p) => (
+                <tr
+                  key={p.id}
+                  className="bg-obsidian-surface-elevated transition-colors hover:bg-obsidian-accent-dim"
+                >
+                  <td className="px-5 py-4">
+                    <div className="font-medium text-obsidian-text">{p.name}</div>
+                    {p.description && (
+                      <div className="mt-0.5 text-xs text-obsidian-muted">{p.description}</div>
+                    )}
+                  </td>
+                  <td className="px-5 py-4 font-mono text-sm text-obsidian-muted">
+                    {formatTs(p.created_at)}
+                  </td>
+                  <td className="px-5 py-4 font-mono text-sm text-obsidian-muted">
+                    {p.last_run_status ?? "—"}
+                  </td>
+                  <td className="px-5 py-4 text-right">
+                    <Link
+                      to={`/projects/${encodeURIComponent(p.id)}`}
+                      className="text-sm font-medium text-obsidian-accent hover:brightness-125"
+                    >
+                      Open →
+                    </Link>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {rows.map((p) => (
-                  <tr key={p.id} className="border-b border-white/[0.04] last:border-0 transition-colors hover:bg-indigo-500/[0.04]">
-                    <td className="px-5 py-5">
-                      <div className="font-semibold text-slate-100">{p.name}</div>
-                      {p.description ? <div className="text-xs text-slate-500">{p.description}</div> : null}
-                    </td>
-                    <td className="px-5 py-5 text-sm text-slate-400">{formatTs(p.created_at)}</td>
-                    <td className="px-5 py-5 text-sm text-slate-400">{p.last_run_status ?? "—"}</td>
-                    <td className="px-5 py-5 text-right">
-                      <Link
-                        to={`/projects/${encodeURIComponent(p.id)}`}
-                        className="inline-block rounded-lg px-3 py-1.5 text-sm font-semibold text-[#9580c4] transition-colors hover:bg-[rgba(149,128,196,0.1)] hover:text-[#a792ce]"
-                      >
-                        Open →
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Create project modal */}
-      <Modal open={open} title="Create Project" onClose={() => setOpen(false)}>
-        <div className="flex flex-col gap-3">
-          <div>
-            <div className="mb-1.5 text-xs font-semibold text-slate-400">Name</div>
-            <input
+      <Modal open={open} title="New Project" onClose={() => setOpen(false)}>
+        <div className="flex flex-col gap-5">
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-obsidian-muted" htmlFor="proj-name">
+              Name
+            </label>
+            <Input
+              id="proj-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Market landscape: LLM evaluation"
-              className="w-full rounded-lg border border-slate-800 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500/50 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 transition"
             />
           </div>
-          <div>
-            <div className="mb-1.5 text-xs font-semibold text-slate-400">Description</div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-obsidian-muted" htmlFor="proj-desc">
+              Description
+              <span className="ml-1 text-obsidian-muted/60">(optional)</span>
+            </label>
             <textarea
+              id="proj-desc"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Optional"
-              rows={4}
-              className="w-full resize-y rounded-lg border border-slate-800 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500/50 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 transition"
+              placeholder="What is this project about?"
+              rows={3}
+              className="w-full resize-y rounded-lg border border-obsidian-border bg-obsidian-bg px-3 py-2 text-sm font-sans text-obsidian-text placeholder:text-obsidian-muted focus:border-obsidian-accent focus:outline-none focus:ring-2 focus:ring-obsidian-accent/20"
             />
           </div>
-          {create.isError ? <ErrorBanner message={create.error instanceof Error ? create.error.message : "Create failed"} /> : null}
-          <div className="flex items-center justify-end gap-3 pt-3">
-            <button
-              onClick={() => setOpen(false)}
-              className="rounded-lg border border-white/10 px-5 py-2.5 text-sm font-medium text-slate-300 transition hover:border-white/[0.15] hover:bg-white/5"
-            >
+
+          {create.isError && (
+            <ErrorBanner
+              message={create.error instanceof Error ? create.error.message : "Create failed"}
+            />
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <Button variant="secondary" onClick={() => setOpen(false)}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => void submitCreate()}
-              disabled={!name.trim() || create.isPending}
-              className="rounded-lg bg-[#9580c4] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_2px_8px_rgba(149,128,196,0.25)] transition hover:bg-[#a792ce] hover:shadow-[0_4px_12px_rgba(149,128,196,0.35)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!name.trim()}
+              loading={create.isPending}
             >
-              {create.isPending ? "Creating…" : "Create"}
-            </button>
+              {create.isPending ? "Creating…" : "Create Project"}
+            </Button>
           </div>
         </div>
       </Modal>
-    </div>
-  );
-}
-
-/** Glassmorphism card with a frosted-glass background and a subtle top-edge gloss. */
-function GlassCard({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`relative overflow-hidden rounded-2xl border border-white/[0.09] bg-[rgba(20,20,26,0.88)] shadow-[0_8px_24px_rgba(0,0,0,0.4)] backdrop-blur-xl ${className ?? ""}`}>
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-white/[0.04] to-transparent" />
-      <div className="relative">{children}</div>
     </div>
   );
 }

@@ -10,7 +10,7 @@ export function Modal({
   title,
   children,
   onClose,
-  className
+  className,
 }: {
   open: boolean;
   title: string;
@@ -31,20 +31,39 @@ export function Modal({
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-950" onClick={onClose} />
-      <div className={cx("relative w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-soft", className)}>
-        <div className="mb-3 flex items-center justify-between">
-          <div className="text-sm font-semibold text-slate-100">{title}</div>
-          <Button onClick={onClose} aria-label="Close">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      {/* Panel */}
+      <div
+        className={cx(
+          "relative w-full max-w-md animate-scale-in",
+          "rounded-2xl border border-obsidian-border bg-obsidian-surface shadow-2xl",
+          className
+        )}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-obsidian-border-subtle px-6 py-4">
+          <h2 className="font-display text-base font-semibold text-obsidian-text">
+            {title}
+          </h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            aria-label="Close modal"
+            className="!px-1.5 !py-1.5"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
-        {children}
+        {/* Body */}
+        <div className="px-6 py-5">{children}</div>
       </div>
     </div>,
     document.body
   );
 }
-
-
-

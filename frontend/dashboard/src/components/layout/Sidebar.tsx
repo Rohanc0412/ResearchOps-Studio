@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Folder, FolderPlus, LogOut, PanelLeftClose, PanelLeftOpen, ShieldCheck } from "lucide-react";
+import {
+  Folder,
+  FolderPlus,
+  LogOut,
+  MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ShieldCheck,
+} from "lucide-react";
 
 import { useChatConversationsQuery } from "../../api/chat";
 import { cx } from "../../utils/format";
@@ -28,164 +36,222 @@ export function Sidebar() {
   return (
     <aside
       className={cx(
-        "group hidden flex-col border-r border-white/[0.06] bg-[#0b0b0e] transition-[width] duration-200 md:flex",
-        collapsed ? "w-16" : "w-64"
+        "hidden flex-col border-r border-obsidian-border bg-obsidian-bg md:flex",
+        "transition-[width] duration-200 ease-in-out",
+        collapsed ? "w-14" : "w-60"
       )}
     >
       {/* Branding header */}
       <div
         className={cx(
-          "flex items-center px-3 py-3",
+          "flex h-14 shrink-0 items-center border-b border-obsidian-border-subtle px-3",
           collapsed ? "justify-center" : "justify-between"
         )}
       >
         {!collapsed && (
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-500">
-              <ShieldCheck className="h-[18px] w-[18px] text-white" />
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-obsidian-accent">
+              <ShieldCheck className="h-4 w-4 text-white" />
             </div>
-            <span className="text-sm font-semibold text-slate-100">ResearchOps Studio</span>
+            <span className="truncate font-display text-sm font-semibold text-obsidian-text">
+              ResearchOps
+            </span>
           </div>
         )}
-        <button
-          type="button"
-          className="p-1 text-slate-400 transition hover:text-slate-200 focus:outline-none"
-          onClick={() => setCollapsed(!collapsed)}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-        </button>
+        {collapsed && (
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-obsidian-accent">
+            <ShieldCheck className="h-4 w-4 text-white" />
+          </div>
+        )}
+        {!collapsed && (
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            title="Collapse sidebar"
+            className="cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-obsidian-accent-dim hover:text-obsidian-text focus:outline-none"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex flex-1 flex-col gap-3 px-2 py-2">
-        {!collapsed ? (
-          <div className="px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Projects</div>
-        ) : null}
+      <nav className="flex flex-1 flex-col overflow-y-auto px-2 py-3">
+        {/* Workspace section */}
+        {!collapsed && (
+          <div className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
+            Workspace
+          </div>
+        )}
 
+        {/* New project button */}
         <button
           type="button"
-          className={cx(
-            "flex items-center gap-2 px-3 py-2 text-sm text-slate-300 focus:outline-none",
-            collapsed && "justify-center px-2 text-xs"
-          )}
           onClick={() => nav("/projects?new=1")}
           title={collapsed ? "New project" : undefined}
+          className={cx(
+            "mb-1 flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-obsidian-muted",
+            "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
+            collapsed && "justify-center px-0"
+          )}
         >
-          <FolderPlus className="h-[18px] w-[18px] text-slate-500" />
-          {!collapsed ? "New project" : null}
+          <FolderPlus className="h-4 w-4 shrink-0" />
+          {!collapsed && <span>New project</span>}
         </button>
 
-        <div className="flex flex-col gap-1">
+        {/* Project list */}
+        <div className="flex flex-col gap-0.5">
           {projects.isLoading ? (
-            <div className={cx("px-2 text-xs text-slate-500", collapsed && "text-center")}>Loading...</div>
+            <div className={cx("px-3 py-1 text-xs text-obsidian-muted", collapsed && "text-center")}>
+              Loading…
+            </div>
           ) : projects.isError ? (
-            <div className={cx("px-2 text-xs text-rose-400", collapsed && "text-center")}>Failed</div>
+            <div className={cx("px-3 py-1 text-xs text-red-400", collapsed && "text-center")}>
+              Failed
+            </div>
           ) : projectItems.length === 0 ? (
-            <div className={cx("px-2 text-xs text-slate-500", collapsed && "text-center")}>No projects</div>
+            <div className={cx("px-3 py-1 text-xs text-obsidian-muted", collapsed && "text-center")}>
+              No projects
+            </div>
           ) : (
             projectItems.map((p) => {
               const isActive = p.id === activeProjectId;
               return (
-                <div key={p.id} className="flex flex-col gap-1">
+                <div key={p.id}>
                   <NavLink
                     to={`/projects/${encodeURIComponent(p.id)}`}
+                    title={collapsed ? p.name : undefined}
                     className={({ isActive: routeActive }) =>
                       cx(
-                        "flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-[rgba(149,128,196,0.1)] hover:text-slate-100",
-                        collapsed && "justify-center px-2 text-xs",
-                        routeActive && "bg-[rgba(99,102,241,0.15)] text-slate-100"
+                        "relative flex items-center gap-2.5 rounded-lg py-2 text-sm",
+                        "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+                        "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
+                        collapsed ? "justify-center px-0" : "px-3",
+                        routeActive
+                          ? "bg-obsidian-accent-dim text-obsidian-text"
+                          : "text-obsidian-muted"
                       )
                     }
-                    title={collapsed ? p.name : undefined}
                   >
-                    <span className={isActive ? "text-indigo-400" : "text-slate-400"}>
-                      <Folder className="h-[18px] w-[18px]" />
-                    </span>
-                    {!collapsed ? p.name : null}
+                    {({ isActive: routeActive }) => (
+                      <>
+                        {/* Active left bar */}
+                        {routeActive && !collapsed && (
+                          <span className="absolute left-0 top-1 h-[calc(100%-8px)] w-0.5 rounded-full bg-obsidian-accent" />
+                        )}
+                        <Folder
+                          className={cx(
+                            "h-4 w-4 shrink-0",
+                            routeActive ? "text-obsidian-accent" : "text-obsidian-muted"
+                          )}
+                        />
+                        {!collapsed && (
+                          <span className="truncate">{p.name}</span>
+                        )}
+                      </>
+                    )}
                   </NavLink>
 
-                  {!collapsed ? (
-                    <div className="ml-6 flex flex-col gap-1">
-                      {isActive && activeChats.length > 0 ? (
-                        <>
-                          <div className="px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Recent</div>
-                          {activeChats.slice(0, 3).map((chat) => (
-                            <SidebarLink
-                              key={chat.id}
-                              to={`/projects/${encodeURIComponent(p.id)}/chats/${encodeURIComponent(chat.id)}`}
-                              label={chat.title ?? "Untitled chat"}
-                              collapsed={collapsed}
-                            />
-                          ))}
-                        </>
-                      ) : null}
+                  {/* Recent chats under active project */}
+                  {!collapsed && isActive && activeChats.length > 0 && (
+                    <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-obsidian-border-subtle pl-3">
+                      {activeChats.slice(0, 3).map((chat) => (
+                        <NavLink
+                          key={chat.id}
+                          to={`/projects/${encodeURIComponent(p.id)}/chats/${encodeURIComponent(chat.id)}`}
+                          className={({ isActive: chatActive }) =>
+                            cx(
+                              "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs",
+                              "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+                              "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
+                              chatActive
+                                ? "text-obsidian-text"
+                                : "text-obsidian-muted"
+                            )
+                          }
+                        >
+                          <MessageSquare className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{chat.title ?? "Untitled chat"}</span>
+                        </NavLink>
+                      ))}
                     </div>
-                  ) : null}
+                  )}
                 </div>
               );
             })
           )}
         </div>
 
-        {/* Account section */}
-        <div className="mt-4 flex flex-col gap-1 border-t border-white/[0.04] pt-3">
-          {!collapsed ? (
-            <div className="px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Account</div>
-          ) : null}
+        {/* Account section — pinned to bottom */}
+        <div className="mt-auto flex flex-col gap-0.5 border-t border-obsidian-border-subtle pt-3">
+          {!collapsed && (
+            <div className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
+              Account
+            </div>
+          )}
+
           <NavLink
             to="/security"
+            title={collapsed ? "Security" : undefined}
             className={({ isActive }) =>
               cx(
-                "flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-[rgba(149,128,196,0.1)] hover:text-slate-100",
-                collapsed && "justify-center px-2 text-xs",
-                isActive && "bg-[rgba(99,102,241,0.15)] text-slate-100"
+                "flex items-center gap-2.5 rounded-lg py-2 text-sm",
+                "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+                "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
+                collapsed ? "justify-center px-0" : "px-3",
+                isActive
+                  ? "bg-obsidian-accent-dim text-obsidian-text"
+                  : "text-obsidian-muted"
               )
             }
-            title={collapsed ? "Security" : undefined}
           >
-            <span className={securityActive ? "text-indigo-400" : "text-slate-400"}>
-              <ShieldCheck className="h-[18px] w-[18px]" />
-            </span>
-            {!collapsed ? "Security" : null}
+            <ShieldCheck
+              className={cx(
+                "h-4 w-4 shrink-0",
+                securityActive ? "text-obsidian-accent" : "text-obsidian-muted"
+              )}
+            />
+            {!collapsed && <span>Security</span>}
           </NavLink>
+
           <button
             type="button"
-            className={cx(
-              "flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-[rgba(149,128,196,0.1)] hover:text-slate-100 focus:outline-none",
-              collapsed && "justify-center px-2 text-xs"
-            )}
             onClick={() => void auth.logout()}
             title={collapsed ? "Logout" : undefined}
+            className={cx(
+              "flex cursor-pointer items-center gap-2.5 rounded-lg py-2 text-sm text-obsidian-muted",
+              "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+              "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
+              collapsed ? "justify-center px-0" : "px-3"
+            )}
           >
-            <span className="text-slate-400">
-              <LogOut className="h-[18px] w-[18px]" />
-            </span>
-            {!collapsed ? "Logout" : null}
+            <LogOut className="h-4 w-4 shrink-0" />
+            {!collapsed && <span>Logout</span>}
           </button>
         </div>
       </nav>
 
-      {/* Version footer */}
-      <div className={cx("px-4 py-4 text-xs text-slate-500", collapsed && "px-3 text-center")}>v0.1</div>
+      {/* Footer */}
+      <div
+        className={cx(
+          "shrink-0 border-t border-obsidian-border-subtle px-4 py-3",
+          collapsed && "flex justify-center"
+        )}
+      >
+        {collapsed ? (
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            title="Expand sidebar"
+            className="cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-obsidian-accent-dim hover:text-obsidian-text focus:outline-none"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </button>
+        ) : (
+          <span className="text-xs text-obsidian-muted">v0.1</span>
+        )}
+      </div>
     </aside>
-  );
-}
-
-function SidebarLink({ to, label, collapsed }: { to: string; label: string; collapsed: boolean }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        cx(
-          "rounded-lg px-3 py-2 text-sm text-slate-300 hover:bg-[rgba(149,128,196,0.1)] hover:text-slate-100",
-          collapsed && "px-2 text-center text-xs",
-          isActive && "bg-[rgba(99,102,241,0.15)] text-slate-100"
-        )
-      }
-      title={collapsed ? label : undefined}
-    >
-      {collapsed ? label.slice(0, 2).toUpperCase() : label}
-    </NavLink>
   );
 }
