@@ -1,6 +1,6 @@
 import type { Report } from "./types";
 
-export const DEFAULT_HOSTED_MODEL = "openai/gpt-4o-mini";
+export const DEFAULT_HOSTED_MODEL = "arcee-ai/trinity-large-preview:free";
 export const CUSTOM_MODEL_VALUE = "__custom__";
 
 export const MODEL_OPTIONS = [
