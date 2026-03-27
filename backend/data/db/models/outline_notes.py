@@ -30,7 +30,7 @@ class OutlineNoteRow(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
-    section_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    section_id: Mapped[str] = mapped_column(String(500), nullable=False)
     notes_json: Mapped[dict] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict, server_default="{}"
     )
