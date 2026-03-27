@@ -8,6 +8,7 @@ sources for the run.
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -549,13 +550,14 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
     raise EmbedError(f"Unknown embedding provider: {provider_name}")
 
 
-def _embedding_text_for_source(source: RetrievedSource) -> str:
+def _embedding_text_for_source(source: RetrievedSource, *, abstract_only: bool = False) -> str:
     title = (source.title or "").strip()
     abstract = (source.abstract or "").strip()
-    if title and abstract:
-        text = f"{title}\n\n{abstract}"
+    if abstract_only or not source.full_text:
+        text = f"{title}\n\n{abstract}" if title and abstract else title or abstract
     else:
-        text = title or abstract
+        full_text = source.full_text.strip()
+        text = f"{title}\n\n{full_text}" if title else full_text
     text = text.strip()
     raw = os.getenv("RETRIEVER_EMBED_TEXT_MAX_CHARS")
     if raw and raw.strip():
@@ -814,7 +816,7 @@ def _rank_sources(
         pending: list[tuple[int, str, str, SourceEmbeddingRow | None]] = []
 
         for idx in topk_indices:
-            text = _embedding_text_for_source(sources_list[idx])
+            text = _embedding_text_for_source(sources_list[idx], abstract_only=True)
             if not text:
                 stats["cache_misses"] += 1
                 continue
@@ -888,6 +890,9 @@ def _select_diverse(
 ) -> list[RankedCandidate]:
     selected: list[RankedCandidate] = []
     intent_counts: dict[str, int] = {intent: 0 for intent in ALLOWED_INTENTS}
+    connector_counts: dict[str, int] = {}
+    max_connector_fraction = _env_float("RETRIEVER_MAX_CONNECTOR_FRACTION", 0.6, min_value=0.0)
+    connector_cap = max(1, math.ceil(target_count * max_connector_fraction))
 
     for candidate in candidates:
         if len(selected) >= target_count:
@@ -895,8 +900,12 @@ def _select_diverse(
         intent = candidate.intent
         if intent_counts.get(intent, 0) >= per_intent_cap:
             continue
+        connector = candidate.source.connector or ""
+        if connector_counts.get(connector, 0) >= connector_cap:
+            continue
         selected.append(candidate)
         intent_counts[intent] = intent_counts.get(intent, 0) + 1
+        connector_counts[connector] = connector_counts.get(connector, 0) + 1
 
     if len(selected) < target_count:
         for candidate in candidates:
@@ -1101,11 +1110,30 @@ def _ingest_selected_sources(
     embed_client = _get_embed_client(llm_provider)
     embedding_provider = _EmbeddingProviderAdapter(embed_client)
 
-    for candidate in selected:
+    # Phase 1: parallel fetch (pure I/O — no DB, no session)
+    max_workers = _env_int("RETRIEVER_INGEST_WORKERS", 4, min_value=1)
+    fetched_map: dict[int, RetrievedSource | None] = {}
+
+    def _fetch_one(args: tuple[int, RankedCandidate]) -> tuple[int, RetrievedSource | None]:
+        idx, candidate = args
+        return idx, _fetch_selected_source_content(connector, candidate.source)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch_one, (idx, c)): idx for idx, c in enumerate(selected)}
+        for future in concurrent.futures.as_completed(futures):
+            orig_idx = futures[future]
+            try:
+                result_idx, fetched = future.result()
+                fetched_map[result_idx] = fetched
+            except Exception as exc:
+                fetched_map[orig_idx] = None
+                logger.warning("Parallel fetch failed for candidate %d: %s", orig_idx, exc)
+
+    # Phase 2: sequential DB ingest (SQLAlchemy sessions are not thread-safe)
+    for idx, candidate in enumerate(selected):
         stats["attempted"] += 1
         source = candidate.source
-        fetched = _fetch_selected_source_content(connector, source)
-        content_source = fetched or source
+        content_source = fetched_map.get(idx) or source
         content, content_origin = _content_for_ingestion(content_source)
         if not content:
             stats["failed"] += 1
