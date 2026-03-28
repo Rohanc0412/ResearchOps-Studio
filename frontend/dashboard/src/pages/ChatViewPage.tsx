@@ -16,6 +16,7 @@ import { ResearchProgressCard } from "../components/run/ResearchProgressCard";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
 import { MODEL_OPTIONS, CUSTOM_MODEL_VALUE, DEFAULT_HOSTED_MODEL, EMPTY_REPORT } from "../features/chat/constants";
+import { ConfigureRunModal, type StageModels } from "../features/chat/components/ConfigureRunModal";
 import { ExportModal } from "../features/chat/components/ExportModal";
 import { ReportSectionView } from "../features/chat/components/ReportSectionView";
 import { ShareModal } from "../features/chat/components/ShareModal";
@@ -28,9 +29,8 @@ import {
   formatActionLabel,
   normalizeChatMarkdown
 } from "../features/chat/lib/messageFormatting";
-import { buildFinalResponse, extractLatestRunId } from "../features/chat/lib/reportArtifacts";
-import { exportReport } from "../features/chat/lib/reportExport";
-import { parseMarkdownToSections } from "../features/chat/lib/reportParser";
+import { buildFinalResponse, extractAllRunIds, extractLatestRunId } from "../features/chat/lib/reportArtifacts";
+import { extractReportTitle, parseMarkdownToSections } from "../features/chat/lib/reportParser";
 import { loadStoredReport, persistReport } from "../features/chat/lib/reportStorage";
 import { deriveRunUpdate } from "../features/chat/lib/runUpdates";
 import type { ActiveRun, ActiveRunStatus, Report } from "../features/chat/types";
@@ -95,6 +95,8 @@ export function ChatViewPage() {
   // PLAIN: Lets the user pick a model from the list or type a custom one.
   const [selectedModel, setSelectedModel] = useState(DEFAULT_HOSTED_MODEL);
   const [customModel, setCustomModel] = useState("");
+  const [showRunModal, setShowRunModal] = useState(false);
+  const [pendingDraft, setPendingDraft] = useState<string | null>(null);
 
   // TECH: runPipelineArmed toggles auto-accepting research pipeline offers.
   // PLAIN: When on, the app auto-starts a research report if offered.
@@ -144,6 +146,10 @@ export function ChatViewPage() {
   // PLAIN: Helps auto-scroll the chat to the newest message.
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
+  // TECH: reportContentRef points to the scrollable report panel div so we can scroll it to top.
+  // PLAIN: Lets us scroll the report panel back to the top when a new run starts.
+  const reportContentRef = useRef<HTMLDivElement | null>(null);
+
   // TECH: initialMessage can be passed through navigation state to auto-send a first message.
   // PLAIN: Sometimes we arrive here with a message already chosen to send.
   const initialMessage = useMemo(() => {
@@ -175,10 +181,13 @@ export function ChatViewPage() {
   // PLAIN: Turn pages into a single message list.
   const messages = flattenInfiniteMessages(messagesQuery.data);
   const latestRunId = useMemo(() => extractLatestRunId(messages), [messages]);
+  const allRunIds = useMemo(() => extractAllRunIds(messages), [messages]);
   const runHydrationRef = useRef<{ chatId: string | null; runId: string | null }>({
     chatId: null,
     runId: null
   });
+  // TECH: Tracks which run IDs have already had an artifact fetch attempted (to avoid re-fetching).
+  const hydratedRunArtifactsRef = useRef<Set<string>>(new Set());
 
   // TECH: Build topbar actions for share/export.
   // PLAIN: Put Share and Export buttons in the header.
@@ -189,6 +198,7 @@ export function ChatViewPage() {
       reportChatIdRef.current = null;
       setReport(EMPTY_REPORT);
       setCompletedRunArtifacts({});
+      hydratedRunArtifactsRef.current = new Set();
       return;
     }
 
@@ -196,6 +206,7 @@ export function ChatViewPage() {
     reportChatIdRef.current = chatId;
     setReport(stored ?? EMPTY_REPORT);
     setCompletedRunArtifacts({});
+    hydratedRunArtifactsRef.current = new Set();
   }, [chatId]);
 
   // TECH: Persist report updates so reopening the chat shows the latest report.
@@ -277,6 +288,37 @@ export function ChatViewPage() {
   useEffect(() => {
     setProgressDetailsOpen(false);
   }, [activeRun?.runId]);
+
+  // TECH: Scroll report panel to top when a new run starts so the progress card is visible.
+  // PLAIN: When a new report job begins, jump to the top of the report area to show progress.
+  useEffect(() => {
+    if (!activeRun?.runId) return;
+    reportContentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [activeRun?.runId]);
+
+  // TECH: Load artifacts for every completed run in the chat history, not just the latest.
+  // PLAIN: Makes sure download links appear for all past runs, not just the most recent one.
+  useEffect(() => {
+    if (!chatId) return;
+
+    const toFetch = allRunIds.filter(
+      (runId) =>
+        runId !== activeRun?.runId &&
+        !hydratedRunArtifactsRef.current.has(runId)
+    );
+    if (toFetch.length === 0) return;
+
+    for (const runId of toFetch) {
+      hydratedRunArtifactsRef.current.add(runId);
+      void apiFetchJson(`/runs/${encodeURIComponent(runId)}/artifacts`, { schema: ArtifactsSchema })
+        .then((artifacts) => {
+          if (artifacts && artifacts.length > 0) {
+            setCompletedRunArtifacts((prev) => ({ ...prev, [runId]: artifacts }));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [chatId, allRunIds, activeRun?.runId]);
 
   // TECH: Apply incoming SSE events to update activeRun UI and detect terminal status.
   // PLAIN: Update the ???progress banner??? as new updates arrive.
@@ -413,8 +455,10 @@ export function ChatViewPage() {
       const parsedSections = parseMarkdownToSections(response);
       if (parsedSections.length === 0) return;
 
+      const parsedTitle = extractReportTitle(response);
       setReport((prev) => ({
         ...prev,
+        title: parsedTitle ?? prev.title,
         sections: parsedSections
       }));
 
@@ -566,7 +610,7 @@ export function ChatViewPage() {
 
   // TECH (Function Summary): Sends a user message to backend, starts run tracking if assistant responds with run_started.
   // PLAIN (Function Summary): Sends the chat message and starts tracking the report job if one begins.
-  async function sendMessage(text: string) {
+  async function sendMessage(text: string, stageModels?: StageModels) {
     // TECH: Trim whitespace to avoid sending empty messages.
     // PLAIN: Don???t send blank messages.
     const trimmed = text.trim();
@@ -595,7 +639,8 @@ export function ChatViewPage() {
         // PLAIN: Tell the system which AI model to use.
         llm_provider: "hosted",
         llm_model: modelValue ? modelValue : undefined,
-        force_pipeline: runPipelineArmed && !isAction
+        force_pipeline: runPipelineArmed && !isAction,
+        stage_models: stageModels ?? undefined,
       });
 
       // TECH: Assistant message can be a special type indicating a background run started.
@@ -639,6 +684,14 @@ export function ChatViewPage() {
     const text = draft.trim();
     if (!text) return;
 
+    // TECH: When pipeline is armed, show model-selection modal before sending.
+    // PLAIN: If you???re about to run a report, pick the models first.
+    if (runPipelineArmed) {
+      setPendingDraft(text);
+      setShowRunModal(true);
+      return;
+    }
+
     try {
       // TECH: Await sendMessage so we know when it's done.
       // PLAIN: Send it and wait for the server to accept it.
@@ -651,6 +704,20 @@ export function ChatViewPage() {
     } catch {
       // TECH: Intentionally keep draft for retry; swallowing error avoids UI crash.
       // PLAIN: If it fails, keep your message so you can try again.
+    }
+  }
+
+  async function handleStartRun(stageModels: StageModels) {
+    setShowRunModal(false);
+    if (!pendingDraft) return;
+    const text = pendingDraft;
+    setPendingDraft(null);
+    try {
+      await sendMessage(text, stageModels);
+      setDraft("");
+      setRunPipelineArmed(false);
+    } catch {
+      // Keep draft for retry.
     }
   }
 
@@ -730,6 +797,7 @@ export function ChatViewPage() {
     setExportNotification(`Exporting as ${format.toUpperCase()}...`);
 
     try {
+      const { exportReport } = await import("../features/chat/lib/reportExport");
       await exportReport(report, format);
       setExportNotification(`Report downloaded as ${format.toUpperCase()}`);
       setTimeout(() => setExportNotification(null), 2000);
@@ -1044,7 +1112,7 @@ export function ChatViewPage() {
         {/* TECH: Shows report title and a status pill that reflects whether a run is active. */}
         {/* PLAIN: Top bar showing ???Live Report??? and whether it???s ready or processing. */}
         <div className="flex items-center justify-between border-b border-slate-800 px-8 py-5">
-          <h2 className="font-mono text-lg font-semibold tracking-tight text-slate-100 md:text-xl">Live Report</h2>
+          <h2 className="font-mono text-lg font-semibold tracking-tight text-slate-100 md:text-xl">{report.title}</h2>
           <div className="flex items-center gap-3">
             <div
               className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3.5 text-[0.7rem] font-medium uppercase tracking-[0.16em] ${reportStatusClasses}`}
@@ -1107,7 +1175,7 @@ export function ChatViewPage() {
         {/* Report Content */}
         {/* TECH: Conditional rendering shows empty-state when no report sections exist; otherwise renders each section. */}
         {/* PLAIN: If there???s no report yet, show a placeholder; otherwise show the report. */}
-        <div className="flex-1 overflow-y-auto p-8">
+        <div ref={reportContentRef} className="flex-1 overflow-y-auto p-8">
           {progressCard ? (
             <ResearchProgressCard
               model={progressCard}
@@ -1142,6 +1210,11 @@ export function ChatViewPage() {
       {/* PLAIN: Popups that appear when needed. */}
       <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} onExport={handleExport} />
       <ShareModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} />
+      <ConfigureRunModal
+        open={showRunModal}
+        onCancel={() => { setShowRunModal(false); setPendingDraft(null); }}
+        onStart={handleStartRun}
+      />
 
       {/* Export Notification */}
       {/* TECH: Toast notification shows export progress/result; disappears after timer in handleExport. */}
