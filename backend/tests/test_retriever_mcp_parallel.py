@@ -40,8 +40,13 @@ def test_mcp_queries_fire_in_parallel():
         results = ret._parallel_mcp_search(plans, mock_connector, mcp_max_per_source=5)
     elapsed = time.monotonic() - start
 
-    # 4 parallel calls each sleeping 0.05s should finish in ~0.05-0.15s, not 0.2s
-    assert elapsed < 0.18, f"Queries did not run in parallel: elapsed={elapsed:.3f}s"
+    # Parallelism check: all calls should start before the first one finished (50ms sleep)
+    call_times.sort()
+    assert call_times[-1] - call_times[0] < 0.05, (
+        f"Calls did not start concurrently: spread={call_times[-1]-call_times[0]:.3f}s"
+    )
+    # Generous upper-bound: 4 serial calls would take 0.2s, parallel should be much less
+    assert elapsed < 0.40, f"Queries took too long: elapsed={elapsed:.3f}s"
     assert mock_connector.search.call_count == 4
 
 

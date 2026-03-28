@@ -1342,13 +1342,14 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         },
     )
 
-    mcp_rate = float(os.getenv("RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND") or "2.0")
+    mcp_rate = _env_float("RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND", 2.0, min_value=0.1)
+    logger.info("MCP rate limit: %.1f req/s (RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND)", mcp_rate)
     mcp_connector = ScientificPapersMCPConnector(max_requests_per_second=mcp_rate)
     mcp_max_per_source = _env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
     retrieved_by_source: dict[str, list[RetrievedSource]] = {}
 
-    all_sources = _parallel_mcp_search(query_plan, mcp_connector, mcp_max_per_source=mcp_max_per_source)
-    for src in all_sources:
+    raw_sources = _parallel_mcp_search(query_plan, mcp_connector, mcp_max_per_source=mcp_max_per_source)
+    for src in raw_sources:
         retrieved_by_source.setdefault(src.connector, []).append(src)
 
     all_sources = [source for sources in retrieved_by_source.values() for source in sources]
