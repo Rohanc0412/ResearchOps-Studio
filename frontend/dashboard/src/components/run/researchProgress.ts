@@ -82,7 +82,7 @@ function deriveCurrentAction(
   // Filter to current-step events
   const stageEvents = evts
     .map((e, i) => ({ e, i }))
-    .filter(({ e }) => currentStages.includes(e.stage) && (e as E).level !== "debug");
+    .filter(({ e }) => currentStages.includes(e.stage) && (e.level as string) !== "debug");
 
   if (stageEvents.length === 0) return null;
 
