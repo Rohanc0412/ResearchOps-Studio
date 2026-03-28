@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from uuid import UUID
 
@@ -63,6 +64,21 @@ def _send_message(
             "force_pipeline": force_pipeline,
         },
     )
+
+
+def _parse_send_response(resp) -> dict:
+    """Parse a /chat/send response that may be JSON or an SSE stream.
+
+    SSE streams contain ``event: answer`` followed by a JSON ``data:`` line.
+    Regular JSON responses are returned directly.
+    """
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[len("data: "):])
+        raise AssertionError("No 'data:' line found in SSE response")
+    return resp.json()
 
 
 def _latest_run_question(app, project_id: str) -> str:
@@ -409,7 +425,7 @@ def test_pipeline_no_returns_quick_answer(api_client) -> None:
         client_message_id="no-1",
     )
     assert resp.status_code == 200
-    assert resp.json()["assistant_message"]["type"] == "chat"
+    assert _parse_send_response(resp)["assistant_message"]["type"] == "chat"
 
     SessionLocal = app.state.SessionLocal
     with session_scope(SessionLocal) as session:
@@ -469,7 +485,7 @@ def test_ambiguous_twice_defaults_quick_answer(api_client) -> None:
         client_message_id="amb-1",
     )
     assert first.status_code == 200
-    assert "quick chat answer" in first.json()["assistant_message"]["content_text"].lower()
+    assert "quick chat answer" in _parse_send_response(first)["assistant_message"]["content_text"].lower()
 
     second = _send_message(
         client,
@@ -479,7 +495,7 @@ def test_ambiguous_twice_defaults_quick_answer(api_client) -> None:
         client_message_id="amb-2",
     )
     assert second.status_code == 200
-    assert second.json()["assistant_message"]["type"] == "chat"
+    assert _parse_send_response(second)["assistant_message"]["type"] == "chat"
 
     SessionLocal = app.state.SessionLocal
     with session_scope(SessionLocal) as session:
@@ -509,7 +525,7 @@ def test_new_topic_clears_pending(api_client) -> None:
         client_message_id="topic-1",
     )
     assert resp.status_code == 200
-    assert resp.json()["assistant_message"]["type"] == "chat"
+    assert _parse_send_response(resp)["assistant_message"]["type"] == "chat"
 
     SessionLocal = app.state.SessionLocal
     with session_scope(SessionLocal) as session:

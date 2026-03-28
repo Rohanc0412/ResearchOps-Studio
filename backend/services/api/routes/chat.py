@@ -889,12 +889,14 @@ def get_conversation_messages(
         )
 
 
-@router.post("/send", response_model=ChatSendResponse)
+@router.post("/send")
 def post_send_chat(
     request: Request, body: ChatSendRequest, identity: Identity = IdentityDep
-) -> ChatSendResponse:
+):
     SessionLocal = request.app.state.SessionLocal
     tenant_id = _tenant_uuid(identity)
+    qa_ctx: _QuickAnswerContext | None = None
+    result: ChatSendResponse | None = None
     now = _now_utc()
     _log_step(
         "start",
@@ -1270,29 +1272,20 @@ def post_send_chat(
                 _log_step("start", conversation_id=convo.id, step="quick_answer_declined")
                 clear_pending_action(convo)
                 pending_action = None
-                _history = _recent_chat_history(
+                _qa_history = _recent_chat_history(
                     session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
                 )
-                answer = next(
-                    (data for event_type, data in _generate_quick_answer(
-                        history=_history,
-                        tenant_id=tenant_id,
-                        conversation_id=convo.id,
-                        message=pending_prompt,
-                        llm_provider=llm_provider,
-                        llm_model=llm_model,
-                    ) if event_type == "answer"),
-                    "I am having trouble generating a response right now.",
-                )
-                assistant_message = create_message(
-                    session=session,
+                qa_ctx = _QuickAnswerContext(
+                    session_local=SessionLocal,
                     tenant_id=tenant_id,
                     conversation_id=convo.id,
-                    role="assistant",
-                    message_type="chat",
-                    content_text=answer,
-                    content_json=None,
-                    client_message_id=None,
+                    user_id=identity.user_id,
+                    user_message_id=user_message.id,
+                    user_message_out=_message_out(user_message),
+                    history=_qa_history,
+                    message=pending_prompt,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
                     metadata_json={"consent": "declined"},
                 )
                 write_audit_log(
@@ -1312,29 +1305,20 @@ def post_send_chat(
                 if ambiguous_count >= 1:
                     clear_pending_action(convo)
                     pending_action = None
-                    _history = _recent_chat_history(
+                    _qa_history = _recent_chat_history(
                         session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
                     )
-                    answer = next(
-                        (data for event_type, data in _generate_quick_answer(
-                            history=_history,
-                            tenant_id=tenant_id,
-                            conversation_id=convo.id,
-                            message=pending_prompt,
-                            llm_provider=llm_provider,
-                            llm_model=llm_model,
-                        ) if event_type == "answer"),
-                        "I am having trouble generating a response right now.",
-                    )
-                    assistant_message = create_message(
-                        session=session,
+                    qa_ctx = _QuickAnswerContext(
+                        session_local=SessionLocal,
                         tenant_id=tenant_id,
                         conversation_id=convo.id,
-                        role="assistant",
-                        message_type="chat",
-                        content_text=answer,
-                        content_json=None,
-                        client_message_id=None,
+                        user_id=identity.user_id,
+                        user_message_id=user_message.id,
+                        user_message_out=_message_out(user_message),
+                        history=_qa_history,
+                        message=pending_prompt,
+                        llm_provider=llm_provider,
+                        llm_model=llm_model,
                         metadata_json={"consent": "default_quick_answer"},
                     )
                 else:
@@ -1508,29 +1492,20 @@ def post_send_chat(
                         _log_step("finish", conversation_id=convo.id, step="offer_pipeline")
                     else:
                         _log_step("start", conversation_id=convo.id, step="quick_answer_default")
-                        _history = _recent_chat_history(
+                        _qa_history = _recent_chat_history(
                             session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
                         )
-                        answer = next(
-                            (data for event_type, data in _generate_quick_answer(
-                                history=_history,
-                                tenant_id=tenant_id,
-                                conversation_id=convo.id,
-                                message=body.message,
-                                llm_provider=llm_provider,
-                                llm_model=llm_model,
-                            ) if event_type == "answer"),
-                            "I am having trouble generating a response right now.",
-                        )
-                        assistant_message = create_message(
-                            session=session,
+                        qa_ctx = _QuickAnswerContext(
+                            session_local=SessionLocal,
                             tenant_id=tenant_id,
                             conversation_id=convo.id,
-                            role="assistant",
-                            message_type="chat",
-                            content_text=answer,
-                            content_json=None,
-                            client_message_id=None,
+                            user_id=identity.user_id,
+                            user_message_id=user_message.id,
+                            user_message_out=_message_out(user_message),
+                            history=_qa_history,
+                            message=body.message,
+                            llm_provider=llm_provider,
+                            llm_model=llm_model,
                             metadata_json={
                                 "router": {
                                     "mode": decision.mode,
@@ -1541,37 +1516,47 @@ def post_send_chat(
                         )
                         _log_step("finish", conversation_id=convo.id, step="quick_answer_default")
 
-        if assistant_message is None:
-            assistant_message = create_message(
-                session=session,
-                tenant_id=tenant_id,
+        if qa_ctx is None:
+            if assistant_message is None:
+                assistant_message = create_message(
+                    session=session,
+                    tenant_id=tenant_id,
+                    conversation_id=convo.id,
+                    role="assistant",
+                    message_type="error",
+                    content_text="I could not process that message. Please try again.",
+                    content_json=None,
+                    client_message_id=None,
+                    metadata_json=None,
+                )
+
+            convo.updated_at = now
+            convo.last_message_at = assistant_message.created_at
+            user_message.metadata_json = {"reply_message_id": str(assistant_message.id)}
+            session.flush()
+
+            _log_step(
+                "finish",
                 conversation_id=convo.id,
-                role="assistant",
-                message_type="error",
-                content_text="I could not process that message. Please try again.",
-                content_json=None,
-                client_message_id=None,
-                metadata_json=None,
+                step="request",
+                extra={
+                    "assistant_message_id": str(assistant_message.id),
+                    "assistant_type": assistant_message.type,
+                },
+            )
+            result = ChatSendResponse(
+                conversation_id=convo.id,
+                user_message=_message_out(user_message),
+                assistant_message=_message_out(assistant_message),
+                pending_action=_extract_pending(convo),
+                idempotent_replay=False,
             )
 
-        convo.updated_at = now
-        convo.last_message_at = assistant_message.created_at
-        user_message.metadata_json = {"reply_message_id": str(assistant_message.id)}
-        session.flush()
+    if qa_ctx is not None:
+        return _StreamingResponse(
+            _stream_quick_answer_body(qa_ctx),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
-        _log_step(
-            "finish",
-            conversation_id=convo.id,
-            step="request",
-            extra={
-                "assistant_message_id": str(assistant_message.id),
-                "assistant_type": assistant_message.type,
-            },
-        )
-        return ChatSendResponse(
-            conversation_id=convo.id,
-            user_message=_message_out(user_message),
-            assistant_message=_message_out(assistant_message),
-            pending_action=_extract_pending(convo),
-            idempotent_replay=False,
-        )
+    return result  # type: ignore[return-value]
