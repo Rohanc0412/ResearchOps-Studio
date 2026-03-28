@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 import unittest.mock as mock
 
 import pytest
@@ -47,32 +48,29 @@ def _call_generate_quick_answer(
     client,
     message: str = "What is the weather today?",
     tavily_key: str = "test-tavily-key",
-):
-    """Call _generate_quick_answer with mocked dependencies.
-
-    conftest.py puts backend/services/api on sys.path, so import as routes.chat.
-    """
+) -> str:
+    """Return just the answer text from the generator (backward-compat helper)."""
+    import uuid
     import routes.chat as chat_mod
 
-    fake_session = mock.MagicMock()
+    fake_history: list = []
 
     with (
         mock.patch.dict(os.environ, {"TAVILY_API_KEY": tavily_key}),
         mock.patch("routes.chat.get_llm_client", return_value=client),
-        mock.patch("routes.chat._recent_chat_history", return_value=[]),
-        mock.patch("routes.chat._log_step"),
-        mock.patch("routes.chat._log_llm_exchange"),
     ):
-        from uuid import uuid4
-        result = chat_mod._generate_quick_answer(
-            session=fake_session,
-            tenant_id=uuid4(),
-            conversation_id=uuid4(),
-            message=message,
-            llm_provider="hosted",
-            llm_model=None,
+        events = list(
+            chat_mod._generate_quick_answer(
+                history=fake_history,
+                tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                conversation_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+                message=message,
+                llm_provider=None,
+                llm_model=None,
+            )
         )
-    return result
+    answer_events = [data for event_type, data in events if event_type == "answer"]
+    return answer_events[0] if answer_events else ""
 
 
 # ---------------------------------------------------------------------------
@@ -152,3 +150,45 @@ def test_llm_error_returns_fallback_string():
     result = _call_generate_quick_answer(client)
 
     assert "trouble" in result
+
+
+# ---------------------------------------------------------------------------
+# New generator tests
+# ---------------------------------------------------------------------------
+
+def _collect_events(client, message="What is the weather today?", tavily_key="test-key"):
+    """Call _generate_quick_answer and collect all (event_type, data) tuples."""
+    import routes.chat as chat_mod
+
+    with (
+        mock.patch.dict(os.environ, {"TAVILY_API_KEY": tavily_key}),
+        mock.patch("routes.chat.get_llm_client", return_value=client),
+        mock.patch("routes.chat.search", return_value=[]) as mock_search,
+    ):
+        events = list(
+            chat_mod._generate_quick_answer(
+                history=[],
+                tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                conversation_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+                message=message,
+                llm_provider=None,
+                llm_model=None,
+            )
+        )
+    return events, mock_search
+
+
+def test_generator_emits_answer_without_search():
+    client = _make_client()  # no tool calls
+    events, mock_search = _collect_events(client)
+    assert events == [("answer", "Final answer")]
+    mock_search.assert_not_called()
+
+
+def test_generator_emits_status_then_answer_with_search():
+    client = _make_client(tool_call_response=_tool_call_msg("weather today"))
+    events, mock_search = _collect_events(client)
+    types = [e[0] for e in events]
+    assert types == ["status", "answer"]
+    assert events[0][1] == "Searching the web..."
+    mock_search.assert_called_once_with("weather today")

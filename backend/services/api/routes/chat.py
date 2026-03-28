@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Generator as _Generator
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -461,13 +462,14 @@ def _build_prompt(history: list[ChatMessageRow], message: str) -> str:
 
 def _generate_quick_answer(
     *,
-    session,
+    history: list,
     tenant_id: UUID,
     conversation_id: UUID,
     message: str,
     llm_provider: str | None,
     llm_model: str | None,
-) -> str:
+) -> _Generator[tuple[str, str], None, None]:
+    """Yield ("status", message) before web search and ("answer", text) at end."""
     _log_step("start", conversation_id=conversation_id, step="quick_answer")
     response_text: str | None = None
 
@@ -485,7 +487,8 @@ def _generate_quick_answer(
             step="quick_answer",
             extra={"chars": len(response_text), "reason": "llm_unavailable"},
         )
-        return response_text
+        yield ("answer", response_text)
+        return
     if client is None:
         response_text = "I am not configured to generate a response right now."
         _log_step(
@@ -494,24 +497,21 @@ def _generate_quick_answer(
             step="quick_answer",
             extra={"chars": len(response_text), "reason": "llm_missing"},
         )
-        return response_text
+        yield ("answer", response_text)
+        return
 
-    history = _recent_chat_history(
-        session=session, tenant_id=tenant_id, conversation_id=conversation_id, limit=6
-    )
     prompt = _build_prompt(history, message)
     system = "You are a helpful assistant. Provide a concise response without citations."
 
     try:
         if not use_tools or not hasattr(client, "generate_with_tools"):
-            # Plain path — no Tavily key or client doesn't support tools
             _log_llm_exchange("request", conversation_id, prompt)
             response = client.generate(prompt, system=system, max_tokens=512, temperature=0.4)
             _log_llm_exchange("response", conversation_id, response)
             response_text = response
-            return response
+            yield ("answer", response_text)
+            return
 
-        # Tool-calling path
         messages: list[dict] = [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
@@ -523,6 +523,7 @@ def _generate_quick_answer(
         tool_calls = first_message.get("tool_calls") or []
 
         if tool_calls:
+            yield ("status", "Searching the web...")
             tool_call = tool_calls[0]
             fn_args = tool_call.get("function", {}).get("arguments", "{}")
             try:
@@ -558,11 +559,11 @@ def _generate_quick_answer(
             response_text = (first_message.get("content") or "").strip()
 
         _log_llm_exchange("response", conversation_id, response_text or "")
-        return response_text or "I am having trouble generating a response right now."
+        yield ("answer", response_text or "I am having trouble generating a response right now.")
 
     except LLMError:
         response_text = "I am having trouble generating a response right now."
-        return response_text
+        yield ("answer", response_text)
     finally:
         if response_text is not None:
             _log_step(
@@ -1175,13 +1176,19 @@ def post_send_chat(
                 _log_step("start", conversation_id=convo.id, step="quick_answer_declined")
                 clear_pending_action(convo)
                 pending_action = None
-                answer = _generate_quick_answer(
-                    session=session,
-                    tenant_id=tenant_id,
-                    conversation_id=convo.id,
-                    message=pending_prompt,
-                    llm_provider=llm_provider,
-                    llm_model=llm_model,
+                _history = _recent_chat_history(
+                    session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
+                )
+                answer = next(
+                    (data for event_type, data in _generate_quick_answer(
+                        history=_history,
+                        tenant_id=tenant_id,
+                        conversation_id=convo.id,
+                        message=pending_prompt,
+                        llm_provider=llm_provider,
+                        llm_model=llm_model,
+                    ) if event_type == "answer"),
+                    "I am having trouble generating a response right now.",
                 )
                 assistant_message = create_message(
                     session=session,
@@ -1211,13 +1218,19 @@ def post_send_chat(
                 if ambiguous_count >= 1:
                     clear_pending_action(convo)
                     pending_action = None
-                    answer = _generate_quick_answer(
-                        session=session,
-                        tenant_id=tenant_id,
-                        conversation_id=convo.id,
-                        message=pending_prompt,
-                        llm_provider=llm_provider,
-                        llm_model=llm_model,
+                    _history = _recent_chat_history(
+                        session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
+                    )
+                    answer = next(
+                        (data for event_type, data in _generate_quick_answer(
+                            history=_history,
+                            tenant_id=tenant_id,
+                            conversation_id=convo.id,
+                            message=pending_prompt,
+                            llm_provider=llm_provider,
+                            llm_model=llm_model,
+                        ) if event_type == "answer"),
+                        "I am having trouble generating a response right now.",
                     )
                     assistant_message = create_message(
                         session=session,
@@ -1401,13 +1414,19 @@ def post_send_chat(
                         _log_step("finish", conversation_id=convo.id, step="offer_pipeline")
                     else:
                         _log_step("start", conversation_id=convo.id, step="quick_answer_default")
-                        answer = _generate_quick_answer(
-                            session=session,
-                            tenant_id=tenant_id,
-                            conversation_id=convo.id,
-                            message=body.message,
-                            llm_provider=llm_provider,
-                            llm_model=llm_model,
+                        _history = _recent_chat_history(
+                            session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
+                        )
+                        answer = next(
+                            (data for event_type, data in _generate_quick_answer(
+                                history=_history,
+                                tenant_id=tenant_id,
+                                conversation_id=convo.id,
+                                message=body.message,
+                                llm_provider=llm_provider,
+                                llm_model=llm_model,
+                            ) if event_type == "answer"),
+                            "I am having trouble generating a response right now.",
                         )
                         assistant_message = create_message(
                             session=session,
