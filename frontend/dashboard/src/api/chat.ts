@@ -30,7 +30,7 @@ import {
 } from "@tanstack/react-query";
 import { z } from "zod";
 
-import { apiFetchJson } from "./client";
+import { apiFetch, apiFetchJson } from "./client";
 import { ChatConversationSchema, ChatMessageSchema, type ChatMessage } from "../types/dto";
 
 /* ============================================================================
@@ -650,7 +650,11 @@ export function finalizeAssistantMessageInCache(params: {
  * - onSuccess: replace optimistic with server messages
  */
 
-export function useSendChatMessageMutationInfinite(conversationId: string, pageSize = 50) {
+export function useSendChatMessageMutationInfinite(
+  conversationId: string,
+  pageSize = 50,
+  callbacks?: { onStatus?: () => void }
+) {
   const qc = useQueryClient();
 
   return useMutation({
@@ -669,12 +673,54 @@ export function useSendChatMessageMutationInfinite(conversationId: string, pageS
       llm_model?: string;
       force_pipeline?: boolean;
       stage_models?: Record<string, string | null>;
-    }) =>
-      apiFetchJson("/chat/send", {
+    }) => {
+      const response = await apiFetch("/chat/send", {
         method: "POST",
-        body: input,
-        schema: SendResponseSchema
-      }),
+        body: JSON.stringify(input)
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => null);
+        throw new Error(`API request failed (${response.status}): ${body ?? ""}`);
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+
+      if (contentType.includes("text/event-stream")) {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentEvent = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              const data: unknown = JSON.parse(line.slice(6));
+              if (currentEvent === "status") {
+                callbacks?.onStatus?.();
+              } else if (currentEvent === "answer") {
+                return SendResponseSchema.parse(data);
+              }
+            } else if (line === "") {
+              currentEvent = "";
+            }
+          }
+        }
+        throw new Error("SSE stream ended without answer event");
+      }
+
+      const json = (await response.json()) as unknown;
+      return SendResponseSchema.parse(json);
+    },
 
     /**
      * onMutate
