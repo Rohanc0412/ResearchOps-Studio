@@ -22,8 +22,6 @@ def test_balanced_profile_tier_values():
 
 def test_resolve_uses_stage_models_override(monkeypatch):
     """Explicit stage_models entry wins over balanced profile."""
-    monkeypatch.setenv("HOSTED_LLM_BASE_URL", "https://example.com")
-    monkeypatch.setenv("HOSTED_LLM_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL_CHEAP", "cheap-model")
     monkeypatch.setenv("LLM_MODEL_CAPABLE", "capable-model")
     from llm import resolve_model_for_stage
@@ -87,3 +85,14 @@ def test_get_llm_client_for_stage_accepts_stage_models(monkeypatch):
     client = get_llm_client_for_stage("draft", "hosted", None, stage_models={"draft": None})
     assert client is not None
     assert client.model_name == "default-model"
+
+
+def test_operator_env_var_beats_stage_models(monkeypatch):
+    """LLM_MODEL_{STAGE} operator env var wins over stage_models user override."""
+    monkeypatch.setenv("HOSTED_LLM_BASE_URL", "https://example.com")
+    monkeypatch.setenv("HOSTED_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL_DRAFT", "operator-model")
+    from llm import get_llm_client_for_stage
+    client = get_llm_client_for_stage("draft", "hosted", None, stage_models={"draft": "user-model"})
+    assert client is not None
+    assert client.model_name == "operator-model"
