@@ -27,6 +27,54 @@ class LLMError(RuntimeError):
     """Raised when an LLM request fails."""
 
 
+# Stage names must match the strings passed to get_llm_client_for_stage() in each node.
+BALANCED_PROFILE: dict[str, str] = {
+    "retrieve": "cheap",
+    "outline": "capable",
+    "draft": "capable",
+    "evaluate": "cheap",
+    "repair": "capable",
+}
+
+
+def resolve_model_for_stage(
+    stage: str,
+    stage_models: dict[str, str | None] | None,
+    provider: str | None,
+    model: str | None,
+) -> str | None:
+    """
+    Resolve the model name for a pipeline stage using the 4-level priority chain:
+    1. Explicit stage_models[stage] override (non-null)
+    2. Balanced profile tier env var (LLM_MODEL_CAPABLE or LLM_MODEL_CHEAP)
+    3. run-level llm_model argument
+    4. HOSTED_LLM_MODEL env var global default
+    """
+    # Level 1: explicit user override
+    if stage_models is not None:
+        override = stage_models.get(stage)
+        if override is not None:
+            return override
+
+    # Level 2: balanced profile tier
+    tier = BALANCED_PROFILE.get(stage)
+    if tier == "capable":
+        tier_model = os.getenv("LLM_MODEL_CAPABLE") or os.getenv("LLM_MODEL_CHEAP")
+    elif tier == "cheap":
+        tier_model = os.getenv("LLM_MODEL_CHEAP")
+    else:
+        tier_model = None
+    if tier_model:
+        return tier_model.strip() or None
+
+    # Level 3: run-level model
+    if model:
+        return model
+
+    # Level 4: global default
+    return os.getenv("HOSTED_LLM_MODEL")
+
+
 @dataclass
 class OpenAICompatibleClient:
     base_url: str
@@ -146,14 +194,21 @@ def get_llm_client_for_stage(
     stage: str,
     provider: str | None = None,
     model: str | None = None,
+    *,
+    stage_models: dict[str, str | None] | None = None,
 ) -> LLMProvider | None:
     stage_key = stage.strip().upper().replace("-", "_")
+    # Operator-level env override (highest priority — sits above user stage_models)
     provider_override = os.getenv(f"LLM_PROVIDER_{stage_key}") or os.getenv(
         f"LLM_{stage_key}_PROVIDER"
     )
     model_override = os.getenv(f"LLM_MODEL_{stage_key}") or os.getenv(f"LLM_{stage_key}_MODEL")
-    resolved_provider = provider or provider_override
-    resolved_model = model or model_override
+    resolved_provider = provider_override or provider
+    # If operator has set an explicit stage env var, use it directly (skip routing)
+    if model_override:
+        resolved_model = model_override
+    else:
+        resolved_model = resolve_model_for_stage(stage, stage_models, provider, model)
     timeout_seconds = _resolve_timeout_seconds(stage_key)
     return get_llm_client(
         resolved_provider,
