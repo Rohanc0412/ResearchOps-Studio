@@ -116,11 +116,16 @@ export default {
           from: { transform: "rotate(0deg)" },
           to:   { transform: "rotate(360deg)" },
         },
+        breathe: {
+          "0%, 100%": { opacity: "0.3" },
+          "50%":      { opacity: "1" },
+        },
       },
       animation: {
         "fade-in":  "fade-in 150ms cubic-bezier(0.4, 0, 0.2, 1)",
         "scale-in": "scale-in 150ms cubic-bezier(0.4, 0, 0.2, 1)",
         spin:       "spin 700ms linear infinite",
+        breathe:    "breathe 2s ease-in-out infinite",
       },
     },
   },
