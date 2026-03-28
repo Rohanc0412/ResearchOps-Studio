@@ -38,8 +38,10 @@ from db.repositories.corpus import (
     list_source_author_names,
 )
 from embeddings import (
+    MODEL_EMBED_RAM_GB,
     SentenceTransformerEmbedClient,
     get_embed_worker_pool,
+    get_free_ram_gb,
     get_hf_client,
     get_ollama_client,
     get_sentence_transformer_client,
@@ -169,6 +171,7 @@ def _build_query_plan(
     question: str,
     llm_provider: str | None,
     llm_model: str | None,
+    stage_models: dict[str, str | None] | None = None,
 ) -> tuple[list[QueryPlan], bool]:
     base = " ".join(question.split())
     if not base:
@@ -181,6 +184,7 @@ def _build_query_plan(
         max_queries=max_queries,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        stage_models=stage_models,
     )
     if not llm_plans:
         raise ValueError("LLM query generation failed or returned no queries.")
@@ -291,9 +295,10 @@ def _build_query_plan_with_llm(
     max_queries: int,
     llm_provider: str | None,
     llm_model: str | None,
+    stage_models: dict[str, str | None] | None = None,
 ) -> list[QueryPlan]:
     try:
-        llm_client = get_llm_client_for_stage("retrieve", llm_provider, llm_model)
+        llm_client = get_llm_client_for_stage("retrieve", llm_provider, llm_model, stage_models=stage_models)
     except LLMError as exc:
         logger.warning(
             "LLM client unavailable for query generation",
@@ -322,7 +327,7 @@ def _build_query_plan_with_llm(
 
     intents = ", ".join(ALLOWED_INTENTS)
     prompt = (
-        "Generate 6 to 10 diverse academic search queries for the research question below.\n"
+        f"Generate exactly {max_queries} diverse academic search queries for the research question below.\n"
         "Return ONLY JSON with this schema:\n"
         "{\n"
         '  "queries": [\n'
@@ -653,11 +658,13 @@ def _embed_texts_batched(
     # Use multiprocess pool for local SentenceTransformer when workers > 1
     if isinstance(client, SentenceTransformerEmbedClient):
         cpu_cap = max(1, (os.cpu_count() or 2) // 2)
-        n_workers = min(
-            _env_int("RETRIEVER_EMBED_WORKERS", min(2, cpu_cap), min_value=1),
-            cpu_cap,
-        )
-        if n_workers > 1:
+        free_ram = get_free_ram_gb()
+        ram_cap = max(1, int(free_ram / MODEL_EMBED_RAM_GB)) if free_ram is not None else cpu_cap
+        hard_cap = _env_int("RETRIEVER_EMBED_MODELS", 3, min_value=1)
+        # pool_size = model instances (RAM-bound); n_chunks = parallelism hint (can exceed pool_size)
+        pool_size = min(cpu_cap, ram_cap, hard_cap)
+        n_chunks = _env_int("RETRIEVER_EMBED_CHUNKS", pool_size, min_value=1)
+        if pool_size > 1:
             try:
                 pool = get_embed_worker_pool(
                     model_name=client.model_name,
@@ -666,9 +673,9 @@ def _embed_texts_batched(
                     max_seq_length=client.max_seq_length,
                     dtype=client.dtype,
                     trust_remote_code=client.trust_remote_code,
-                    n_workers=n_workers,
+                    n_workers=pool_size,
                 )
-                return pool.encode(texts)
+                return pool.encode(texts, n_chunks=n_chunks)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("EmbedWorkerPool failed, falling back to sequential: %s", exc)
     # Sequential fallback (Ollama, HF, or pool unavailable / workers=1)
@@ -1241,6 +1248,7 @@ def _plan_step_labels(
     question: str,
     llm_provider: str | None,
     llm_model: str | None,
+    stage_models: dict[str, str | None] | None = None,
 ) -> list[str] | None:
     """Return 6 LLM-planned step labels tailored to the research question.
 
@@ -1248,7 +1256,7 @@ def _plan_step_labels(
     Never raises.
     """
     try:
-        llm_client = get_llm_client_for_stage("retrieve", llm_provider, llm_model)
+        llm_client = get_llm_client_for_stage("retrieve", llm_provider, llm_model, stage_models=stage_models)
         if llm_client is None:
             return None
 
@@ -1318,12 +1326,14 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         question=question,
         llm_provider=state.llm_provider,
         llm_model=state.llm_model,
+        stage_models=state.stage_models,
     )
 
     query_plan, llm_used = _build_query_plan(
         question=question,
         llm_provider=state.llm_provider,
         llm_model=state.llm_model,
+        stage_models=state.stage_models,
     )
     if not query_plan:
         raise ValueError("Question is required for retrieval")

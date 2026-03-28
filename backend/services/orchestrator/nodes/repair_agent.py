@@ -562,7 +562,7 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
         return state
 
     try:
-        llm_client = get_llm_client_for_stage("repair", state.llm_provider, state.llm_model)
+        llm_client = get_llm_client_for_stage("repair", state.llm_provider, state.llm_model, stage_models=state.stage_models)
     except LLMError as exc:
         raise ValueError("LLM repair is required but unavailable.") from exc
     if not llm_client:
@@ -696,7 +696,8 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
         if isinstance(edits_json, dict):
             repair_logs.append(edits_json)
 
-    draft_lines: list[str] = [f"# Research Report: {state.user_query}", ""]
+    report_title = (state.outline and state.outline.report_title) or f"Research Report: {state.user_query}"
+    draft_lines: list[str] = [f"# {report_title}", ""]
     for section_id in ordered_ids:
         section = outline_by_id[section_id]
         text = section_texts.get(section_id, "")

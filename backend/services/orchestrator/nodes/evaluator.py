@@ -23,15 +23,26 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
-from llm import LLMError, json_response_format
+from llm import LLMError, get_llm_client_for_stage, json_response_format
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name, "").strip().lower()
+    if val in {"1", "true", "yes", "on"}:
+        return True
+    if val in {"0", "false", "no", "off"}:
+        return False
+    return default
+
 
 EVALUATION_SCHEMA = {
     "type": "object",
     "properties": {
         "section_id": {"type": "string"},
+        "grounding_score": {"type": "integer"},
         "verdict": {"type": "string"},
         "issues": {
             "type": "array",
@@ -48,7 +59,7 @@ EVALUATION_SCHEMA = {
             },
         },
     },
-    "required": ["section_id", "verdict", "issues"],
+    "required": ["section_id", "grounding_score", "verdict", "issues"],
     "additionalProperties": False,
 }
 
@@ -172,20 +183,31 @@ def _evaluate_section_with_llm(
     snippets: list[EvidenceSnippetRef],
 ) -> dict:
     snippet_payload = _snippet_payload(snippets)
+    system = (
+        "You are an expert research evaluator. "
+        "Your job is to judge how well a drafted section is grounded in the provided evidence snippets."
+    )
     prompt = (
-        "Evaluate the drafted section for citation structure and grounding.\n"
+        "Rate the semantic grounding of the drafted section against the evidence snippets.\n\n"
+        "GROUNDING SCORE DEFINITION:\n"
+        "  grounding_score = (factual sentences supported by evidence) / (total factual sentences) × 100\n"
+        "  - Transitional sentences that make no factual claim are excluded from the count.\n"
+        "  - A sentence is SUPPORTED if at least one snippet provides direct evidence for the claim.\n"
+        "  - A sentence is UNSUPPORTED if no snippet backs it up.\n"
+        "  - A sentence is OVERSTATED if snippets only partially support the strength of the claim.\n"
+        "  - A sentence is CONTRADICTED if a snippet directly contradicts the claim.\n\n"
+        "VERDICT RULE: verdict = 'pass' if grounding_score >= 70, else 'fail'.\n\n"
         "Return ONLY valid JSON with this schema:\n"
         "{\n"
         '  "section_id": "...",\n'
+        '  "grounding_score": 0-100,\n'
         '  "verdict": "pass" | "fail",\n'
         '  "issues": [\n'
         "    {\n"
         '      "sentence_index": 0,\n'
-        '      "problem": '
-        '"unsupported|contradicted|missing_citation|invalid_citation|'
-        'not_in_pack|overstated",\n'
-        '      "notes": "...",\n'
-        '      "citations": ["snippet_id_1"]\n'
+        '      "problem": "unsupported|contradicted|overstated|missing_citation|invalid_citation|not_in_pack",\n'
+        '      "notes": "Brief explanation of the grounding problem.",\n'
+        '      "citations": ["snippet_id_that_supports_or_should_support_this"]\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -197,15 +219,11 @@ def _evaluate_section_with_llm(
         "Evidence snippets (id + text):\n"
         + json.dumps(snippet_payload, indent=2, ensure_ascii=True)
         + "\n\n"
-        "Rules:\n"
-        "- Every factual sentence must have at least one [CITE:...] at the end.\n"
-        "- Transitional sentences may be uncited.\n"
-        "- Every cited snippet_id must exist and be in the evidence pack.\n"
-        "- Verify cited snippets support the sentence.\n"
-        "- Never invent snippet_ids.\n"
-        "- Do not include markdown, no backticks, no commentary.\n"
+        "Additional rules:\n"
+        "- List ALL sentences with grounding problems, not just the worst.\n"
+        "- Never invent snippet_ids; only reference IDs from the provided list.\n"
+        "- Do not include markdown, backticks, or commentary outside the JSON.\n"
     )
-    system = "You are a strict citation validator and fact checker for research drafts."
     try:
         _log_llm_exchange("request", section.section_id, prompt)
         response = llm_client.generate(
@@ -246,8 +264,20 @@ def _evaluate_section_with_llm(
     if issues and verdict == "pass":
         verdict = "fail"
 
+    # Extract and clamp grounding_score.
+    raw_score = payload.get("grounding_score")
+    try:
+        grounding_score = max(0, min(100, int(raw_score)))
+    except (TypeError, ValueError):
+        grounding_score = 85 if verdict == "pass" else 45
+
+    # If issues exist the score cannot honestly be 100.
+    if issues and grounding_score == 100:
+        grounding_score = 85
+
     return {
         "section_id": section.section_id,
+        "grounding_score": grounding_score,
         "verdict": verdict,
         "issues": issues,
     }
@@ -358,7 +388,22 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     if not draft_sections:
         raise ValueError("Draft sections not found for evaluation.")
 
+    # Acquire LLM client unless disabled via env.
+    llm_client = None
+    if _env_bool("EVALUATOR_LLM_ENABLED", True):
+        try:
+            llm_client = get_llm_client_for_stage("evaluate", state.llm_provider, state.llm_model, stage_models=state.stage_models)
+        except LLMError:
+            logger.warning(
+                "LLM client unavailable for evaluator; falling back to pass-through.",
+                extra={"stage": "evaluate"},
+            )
+
     pass_count = 0
+    fail_count = 0
+    grounding_scores: list[int] = []
+    failed_section_ids: set[str] = set()
+    last_section_id = outline.sections[-1].section_id if outline.sections else None
 
     for section in outline.sections:
         section_text = draft_sections.get(section.section_id)
@@ -374,13 +419,48 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             data={"section_id": section.section_id},
         )
 
+        verdict = "pass"
+        issues: list[dict] = []
+        grounding_score = 100  # default when LLM is off
+
+        if llm_client is not None:
+            snippets = _load_section_snippets(
+                session,
+                tenant_id=state.tenant_id,
+                run_id=state.run_id,
+                section_id=section.section_id,
+                state_snippets=state.section_evidence_snippets,
+            )
+            try:
+                result = _evaluate_section_with_llm(
+                    llm_client,
+                    section=section,
+                    section_text=section_text,
+                    snippets=snippets,
+                )
+                verdict = result["verdict"]
+                issues = result["issues"]
+                grounding_score = result["grounding_score"]
+            except Exception:
+                logger.warning(
+                    "LLM evaluation failed for section %s; defaulting to pass.",
+                    section.section_id,
+                    extra={"stage": "evaluate", "section_id": section.section_id},
+                    exc_info=True,
+                )
+                verdict = "pass"
+                issues = []
+                grounding_score = 100
+
+        grounding_scores.append(grounding_score)
+
         _persist_section_review(
             session,
             tenant_id=state.tenant_id,
             run_id=state.run_id,
             section_id=section.section_id,
-            verdict="pass",
-            issues=[],
+            verdict=verdict,
+            issues=issues,
         )
 
         emit_run_event(
@@ -389,10 +469,23 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             run_id=state.run_id,
             event_type="evaluate.section_completed",
             stage="evaluate",
-            data={"section_id": section.section_id, "verdict": "pass"},
+            data={
+                "section_id": section.section_id,
+                "verdict": verdict,
+                "grounding_score": grounding_score,
+            },
         )
 
-        pass_count += 1
+        if verdict == "pass":
+            pass_count += 1
+        else:
+            fail_count += 1
+            failed_section_ids.add(section.section_id)
+
+    overall_grounding_pct = (
+        round(sum(grounding_scores) / len(grounding_scores))
+        if grounding_scores else 100
+    )
 
     emit_run_event(
         session=session,
@@ -400,11 +493,47 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         run_id=state.run_id,
         event_type="evaluate.summary",
         stage="evaluate",
-        data={"pass_count": pass_count, "fail_count": 0},
+        data={
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "overall_grounding_pct": overall_grounding_pct,
+        },
     )
 
     state.iteration_count += 1
-    state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
-    state.evaluation_reason = "Evaluation rules are currently disabled"
+
+    # Route to repair only if:
+    # - overall grounding is below the 70% threshold, AND
+    # - at least one non-last section failed (repair node requires a next section), AND
+    # - repair hasn't already run this cycle (repair_attempts < 1)
+    overall_grounding = overall_grounding_pct / 100
+    repairable_failures = failed_section_ids - ({last_section_id} if last_section_id else set())
+
+    if overall_grounding < 0.70 and repairable_failures and state.repair_attempts < 1:
+        state.evaluator_decision = EvaluatorDecision.CONTINUE_REPAIR
+        state.evaluation_reason = (
+            f"Overall grounding score {overall_grounding_pct}% is below the 70% threshold; "
+            f"{len(repairable_failures)} section(s) flagged for repair."
+        )
+    else:
+        state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
+        if fail_count == 0:
+            state.evaluation_reason = (
+                f"All sections passed (overall grounding {overall_grounding_pct}%)."
+            )
+        elif overall_grounding >= 0.70:
+            state.evaluation_reason = (
+                f"Grounding score {overall_grounding_pct}% meets the 70% threshold; exporting."
+            )
+        elif not repairable_failures:
+            state.evaluation_reason = (
+                f"Grounding score {overall_grounding_pct}% is below threshold but only the "
+                "last section is affected — skipping repair (no next section available)."
+            )
+        else:
+            state.evaluation_reason = (
+                f"Grounding score {overall_grounding_pct}% is below threshold but repair "
+                "limit already reached; exporting as-is."
+            )
 
     return state

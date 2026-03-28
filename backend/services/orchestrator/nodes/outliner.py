@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 OUTLINE_SCHEMA = {
     "type": "object",
     "properties": {
+        "report_title": {"type": "string"},
         "sections": {
             "type": "array",
             "minItems": 1,
@@ -55,7 +56,7 @@ OUTLINE_SCHEMA = {
             },
         }
     },
-    "required": ["sections"],
+    "required": ["report_title", "sections"],
     "additionalProperties": False,
 }
 
@@ -103,7 +104,7 @@ def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     vetted_sources = state.vetted_sources
 
     try:
-        llm_client = get_llm_client_for_stage("outline", state.llm_provider, state.llm_model)
+        llm_client = get_llm_client_for_stage("outline", state.llm_provider, state.llm_model, stage_models=state.stage_models)
     except LLMError as exc:
         raise ValueError("LLM outline generation is required but unavailable.") from exc
 
@@ -175,6 +176,7 @@ def _generate_outline_with_llm(
         "Create a structured report outline grounded in the sources below.\n"
         "Return ONLY valid JSON with this schema:\n"
         "{\n"
+        '  "report_title": "A concise, descriptive title for the report (not the raw question)",\n'
         '  "run_id": "...",\n'
         '  "sections": [\n'
         "    {\n"
@@ -193,6 +195,7 @@ def _generate_outline_with_llm(
         + "\n".join(source_lines or ["- (no sources available)"])
         + "\n\n"
         "Rules:\n"
+        "- report_title must be a short, noun-phrase title (≤12 words) that captures the research topic; do NOT copy the question verbatim\n"
         f"- Total sections should be {min_sections} to {max_sections}\n"
         "- Section titles must be unique\n"
         "- section_id values should be short stable slugs derived from the section title\n"

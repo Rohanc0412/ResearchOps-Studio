@@ -373,14 +373,15 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
     section_evidence_snippets = state.section_evidence_snippets
 
     try:
-        llm_client = get_llm_client_for_stage("draft", state.llm_provider, state.llm_model)
+        llm_client = get_llm_client_for_stage("draft", state.llm_provider, state.llm_model, stage_models=state.stage_models)
     except LLMError as exc:
         raise ValueError("LLM drafting is required but the LLM client is unavailable.") from exc
     if not llm_client:
         raise ValueError("LLM drafting is required but no LLM client is configured.")
 
 
-    draft_lines: list[str] = [f"# Research Report: {state.user_query}", ""]
+    report_title = (state.outline and state.outline.report_title) or f"Research Report: {state.user_query}"
+    draft_lines: list[str] = [f"# {report_title}", ""]
     drafted_sections: list[tuple[OutlineSection, str, str]] = []
     prior_summary: str | None = None
 
@@ -429,7 +430,7 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
             llm_client,
             section,
             section_snippets,
-            report_title=state.user_query,
+            report_title=report_title,
             section_index=i + 1,
             total_sections=len(outline.sections),
             prev_title=prev_title,
