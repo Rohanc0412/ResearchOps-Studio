@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import atexit
+import math
 import os
+import threading
 from collections.abc import Iterable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -335,3 +339,137 @@ def get_hf_client(
     )
     _HF_CLIENTS[cache_key] = client
     return client
+
+
+# ── Multiprocess embedding pool (local SentenceTransformer only) ──────────────
+
+# Module-level state inside each worker process
+_worker_model = None
+
+
+def _worker_init(
+    model_name: str,
+    device: str,
+    normalize_embeddings: bool,
+    max_seq_length: int | None,
+    dtype: str | None,
+    trust_remote_code: bool,
+) -> None:
+    """Load the SentenceTransformer model inside the worker process."""
+    global _worker_model
+    from sentence_transformers import SentenceTransformer
+
+    model_kwargs: dict = {}
+    _dtype = None
+    if dtype:
+        try:
+            import torch
+            _dtype = getattr(torch, dtype)
+            model_kwargs["dtype"] = _dtype
+        except Exception:
+            pass
+
+    init_kwargs: dict = {"device": device}
+    if model_kwargs:
+        init_kwargs["model_kwargs"] = model_kwargs
+    if trust_remote_code:
+        init_kwargs["trust_remote_code"] = True
+    try:
+        _worker_model = SentenceTransformer(model_name, **init_kwargs)
+    except TypeError:
+        init_kwargs.pop("model_kwargs", None)
+        init_kwargs.pop("trust_remote_code", None)
+        _worker_model = SentenceTransformer(model_name, **init_kwargs)
+        if _dtype is not None:
+            _worker_model = _worker_model.to(dtype=_dtype)
+    if max_seq_length:
+        _worker_model.max_seq_length = max_seq_length
+
+
+def _worker_encode(texts: list[str]) -> list[list[float]]:
+    """Encode texts in a worker process using the pre-loaded model."""
+    return _worker_model.encode(
+        texts,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+    ).tolist()
+
+
+class EmbedWorkerPool:
+    """
+    Pool of worker processes each pre-loading a SentenceTransformer model.
+
+    Splits text lists across workers and collects results in original order.
+    Only useful for local (CPU/GPU) SentenceTransformer inference.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        device: str,
+        normalize_embeddings: bool,
+        max_seq_length: int | None,
+        dtype: str | None,
+        trust_remote_code: bool,
+        n_workers: int,
+    ) -> None:
+        self._n_workers = n_workers
+        self._executor = ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_worker_init,
+            initargs=(model_name, device, normalize_embeddings, max_seq_length, dtype, trust_remote_code),
+        )
+        atexit.register(self.shutdown)
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        """Distribute texts across workers and return embeddings in original order."""
+        if not texts:
+            return []
+        if self._n_workers <= 1 or len(texts) <= 1:
+            return self._executor.submit(_worker_encode, texts).result()
+        # Split into N equal chunks
+        chunk_size = math.ceil(len(texts) / self._n_workers)
+        chunks = [texts[i : i + chunk_size] for i in range(0, len(texts), chunk_size)]
+        futures = [self._executor.submit(_worker_encode, chunk) for chunk in chunks]
+        result: list[list[float]] = []
+        for f in futures:
+            result.extend(f.result())
+        return result
+
+    def shutdown(self) -> None:
+        try:
+            self._executor.shutdown(wait=False)
+        except Exception:
+            pass
+
+
+# Singleton pool (one per process, created lazily)
+_EMBED_WORKER_POOL: EmbedWorkerPool | None = None
+_EMBED_WORKER_POOL_LOCK = threading.Lock()
+
+
+def get_embed_worker_pool(
+    *,
+    model_name: str,
+    device: str,
+    normalize_embeddings: bool,
+    max_seq_length: int | None,
+    dtype: str | None,
+    trust_remote_code: bool,
+    n_workers: int,
+) -> EmbedWorkerPool:
+    """Return the singleton EmbedWorkerPool, creating it on first call."""
+    global _EMBED_WORKER_POOL
+    with _EMBED_WORKER_POOL_LOCK:
+        if _EMBED_WORKER_POOL is None:
+            _EMBED_WORKER_POOL = EmbedWorkerPool(
+                model_name=model_name,
+                device=device,
+                normalize_embeddings=normalize_embeddings,
+                max_seq_length=max_seq_length,
+                dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                n_workers=n_workers,
+            )
+        return _EMBED_WORKER_POOL
