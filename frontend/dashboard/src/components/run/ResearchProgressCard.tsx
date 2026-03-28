@@ -214,7 +214,7 @@ export function ResearchProgressCard({
             <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
               Recent updates
             </div>
-            <div className="text-xs text-slate-600">{model.recentEvents.length} events</div>
+            <div className="text-xs text-slate-600">{model.currentAction ? model.recentEvents.length + 1 : model.recentEvents.length} events</div>
           </div>
 
           {!model.currentAction && model.recentEvents.length === 0 ? (
