@@ -38,6 +38,8 @@ from db.repositories.corpus import (
     list_source_author_names,
 )
 from embeddings import (
+    SentenceTransformerEmbedClient,
+    get_embed_worker_pool,
     get_hf_client,
     get_ollama_client,
     get_sentence_transformer_client,
@@ -648,6 +650,35 @@ def _embed_texts_batched(
 ) -> list[list[float]]:
     if not texts:
         return []
+    # Use multiprocess pool for local SentenceTransformer when workers > 1
+    # Use isinstance with a fallback name-check to handle dual sys.path import scenarios
+    # (e.g. 'embeddings' and 'services.orchestrator.embeddings' both loaded in tests).
+    _is_local_client = isinstance(client, SentenceTransformerEmbedClient) or (
+        type(client).__name__ == "SentenceTransformerEmbedClient"
+        and hasattr(client, "model_name")
+        and hasattr(client, "device")
+    )
+    if _is_local_client:
+        n_workers = _env_int(
+            "RETRIEVER_EMBED_WORKERS",
+            min(2, max(1, (os.cpu_count() or 2) // 2)),
+            min_value=1,
+        )
+        if n_workers > 1:
+            try:
+                pool = get_embed_worker_pool(
+                    model_name=client.model_name,
+                    device=client.device,
+                    normalize_embeddings=client.normalize_embeddings,
+                    max_seq_length=client.max_seq_length,
+                    dtype=client.dtype,
+                    trust_remote_code=client.trust_remote_code,
+                    n_workers=n_workers,
+                )
+                return pool.encode(texts)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("EmbedWorkerPool failed, falling back to sequential: %s", exc)
+    # Sequential fallback (Ollama, HF, or pool unavailable / workers=1)
     embeddings: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
