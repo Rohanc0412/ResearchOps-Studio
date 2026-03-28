@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from collections.abc import Generator as _Generator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -35,6 +36,7 @@ from db.repositories.chat import (
 from db.repositories.project_runs import create_run, get_latest_report_title, get_project_for_user
 from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse as _StreamingResponse
 from job_queue import enqueue_run_job
 from llm import LLMError, get_llm_client
 from middlewares.auth import IdentityDep
@@ -63,6 +65,26 @@ WEB_SEARCH_TOOL: dict = {
         },
     },
 }
+
+
+def _format_sse_event(event: str, data: dict) -> str:
+    """Format a single SSE event string."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@dataclass
+class _QuickAnswerContext:
+    session_local: object
+    tenant_id: UUID
+    conversation_id: UUID
+    user_id: str
+    user_message_id: UUID
+    user_message_out: "ChatMessageOut"
+    history: list
+    message: str
+    llm_provider: str | None
+    llm_model: str | None
+    metadata_json: dict | None
 
 
 def _resolve_chat_model(llm_model: str | None) -> str | None:
@@ -572,6 +594,78 @@ def _generate_quick_answer(
                 step="quick_answer",
                 extra={"chars": len(response_text)},
             )
+
+
+def _stream_quick_answer_body(
+    ctx: _QuickAnswerContext,
+) -> _Generator[bytes, None, None]:
+    """SSE generator: yields status event (if web search), then saves assistant
+    message in a new DB session and yields the final answer event."""
+    now = _now_utc()
+    answer: str = "I am having trouble generating a response right now."
+
+    try:
+        for event_type, event_data in _generate_quick_answer(
+            history=ctx.history,
+            tenant_id=ctx.tenant_id,
+            conversation_id=ctx.conversation_id,
+            message=ctx.message,
+            llm_provider=ctx.llm_provider,
+            llm_model=ctx.llm_model,
+        ):
+            if event_type == "status":
+                yield _format_sse_event(
+                    "status", {"type": "status", "message": event_data}
+                ).encode()
+            elif event_type == "answer":
+                answer = event_data
+    except Exception:
+        logger.exception(
+            "Error in quick answer stream",
+            extra={"conversation_id": str(ctx.conversation_id)},
+        )
+
+    with session_scope(ctx.session_local) as session:
+        assistant_message = create_message(
+            session=session,
+            tenant_id=ctx.tenant_id,
+            conversation_id=ctx.conversation_id,
+            role="assistant",
+            message_type="chat",
+            content_text=answer,
+            content_json=None,
+            client_message_id=None,
+            metadata_json=ctx.metadata_json,
+        )
+        user_msg = get_message_by_id(
+            session=session,
+            tenant_id=ctx.tenant_id,
+            message_id=ctx.user_message_id,
+        )
+        if user_msg is not None:
+            user_msg.metadata_json = {"reply_message_id": str(assistant_message.id)}
+
+        convo = get_conversation_for_user(
+            session=session,
+            tenant_id=ctx.tenant_id,
+            conversation_id=ctx.conversation_id,
+            created_by_user_id=ctx.user_id,
+        )
+        if convo is not None:
+            convo.updated_at = now
+            convo.last_message_at = assistant_message.created_at
+
+        session.flush()
+
+        response_payload = ChatSendResponse(
+            conversation_id=ctx.conversation_id,
+            user_message=ctx.user_message_out,
+            assistant_message=_message_out(assistant_message),
+            pending_action=None,
+            idempotent_replay=False,
+        ).model_dump(mode="json")
+
+    yield _format_sse_event("answer", response_payload).encode()
 
 
 class ConversationCreate(BaseModel):
