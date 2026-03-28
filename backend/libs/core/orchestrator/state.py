@@ -62,6 +62,7 @@ class OutlineModel(BaseModel):
 
     sections: list[OutlineSection]
     total_estimated_words: int | None = None
+    report_title: str | None = None
 
 
 class Claim(BaseModel):
@@ -151,6 +152,7 @@ class OrchestratorState(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     llm_provider: str | None = None
     llm_model: str | None = None
+    stage_models: dict[str, str | None] = Field(default_factory=dict)
 
     # Stage 1: Retrieval inputs
     generated_queries: list[str] = Field(default_factory=list)
