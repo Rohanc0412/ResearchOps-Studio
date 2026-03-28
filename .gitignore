@@ -59,10 +59,15 @@ node_modules/
 out/
 *.tsbuildinfo
 
-# E2E test screenshots
+# Screenshots / E2E test images
+screenshots/
 e2e*.png
 e2e2*.png
 fix-*.png
+
+# AI planning artifacts (superpowers brainstorming outputs)
+docs/superpowers/
+docs/e2e-test-report-*.md
 
 # Local DB files
 *.db
