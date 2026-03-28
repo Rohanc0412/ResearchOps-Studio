@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -38,9 +39,35 @@ from llm import LLMError, get_llm_client
 from middlewares.auth import IdentityDep
 from pydantic import BaseModel, ConfigDict, Field
 from research import RESEARCH_JOB_TYPE
+from search.tavily import search
 from sqlalchemy import func, select
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+WEB_SEARCH_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the web for current information. Use when the question requires "
+            "up-to-date facts, recent events, or information beyond your training data."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query"},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+def _resolve_chat_model(llm_model: str | None) -> str | None:
+    """Return CHAT_SEARCH_MODEL if set, else fall back to llm_model."""
+    override = os.getenv("CHAT_SEARCH_MODEL", "").strip()
+    return override or llm_model or None
 
 
 ACTION_PREFIX = "__ACTION__:"
@@ -443,8 +470,13 @@ def _generate_quick_answer(
 ) -> str:
     _log_step("start", conversation_id=conversation_id, step="quick_answer")
     response_text: str | None = None
+
+    resolved_model = _resolve_chat_model(llm_model)
+    tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
+    use_tools = bool(tavily_key)
+
     try:
-        client = get_llm_client(llm_provider, llm_model)
+        client = get_llm_client(llm_provider, resolved_model)
     except LLMError:
         response_text = "I am not configured to generate a response right now."
         _log_step(
@@ -469,12 +501,65 @@ def _generate_quick_answer(
     )
     prompt = _build_prompt(history, message)
     system = "You are a helpful assistant. Provide a concise response without citations."
+
     try:
+        if not use_tools or not hasattr(client, "generate_with_tools"):
+            # Plain path — no Tavily key or client doesn't support tools
+            _log_llm_exchange("request", conversation_id, prompt)
+            response = client.generate(prompt, system=system, max_tokens=512, temperature=0.4)
+            _log_llm_exchange("response", conversation_id, response)
+            response_text = response
+            return response
+
+        # Tool-calling path
+        messages: list[dict] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
         _log_llm_exchange("request", conversation_id, prompt)
-        response = client.generate(prompt, system=system, max_tokens=512, temperature=0.4)
-        _log_llm_exchange("response", conversation_id, response)
-        response_text = response
-        return response
+        first_message = client.generate_with_tools(
+            messages, [WEB_SEARCH_TOOL], max_tokens=512, temperature=0.4
+        )
+        tool_calls = first_message.get("tool_calls") or []
+
+        if tool_calls:
+            tool_call = tool_calls[0]
+            fn_args = tool_call.get("function", {}).get("arguments", "{}")
+            try:
+                args = json.loads(fn_args)
+                query = args.get("query", "")
+                results = search(query)
+                tool_result = json.dumps(
+                    [{"title": r.title, "url": r.url, "snippet": r.snippet} for r in results]
+                )
+            except Exception:
+                tool_result = "[]"
+
+            tool_call_id = tool_call.get("id", "call_0")
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": first_message.get("content"),
+                    "tool_calls": tool_calls,
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": tool_result,
+                }
+            )
+            final_message = client.generate_with_tools(
+                messages, [WEB_SEARCH_TOOL], max_tokens=512, temperature=0.4
+            )
+            response_text = (final_message.get("content") or "").strip()
+        else:
+            response_text = (first_message.get("content") or "").strip()
+
+        _log_llm_exchange("response", conversation_id, response_text or "")
+        return response_text or "I am having trouble generating a response right now."
+
     except LLMError:
         response_text = "I am having trouble generating a response right now."
         return response_text
