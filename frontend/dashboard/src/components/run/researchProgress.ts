@@ -64,6 +64,42 @@ const FALLBACK_STEP_LABELS: string[] = [
   "Export the final report.",
 ];
 
+function deriveCurrentAction(
+  events: RunEvent[],
+  currentStepIndex: number,
+  status: ProgressStatus
+): { event: RunEvent; originalIndex: number } | null {
+  if (status !== "running") return null;
+
+  // Collect all stages that map to the current step index
+  const currentStages = Object.entries(STAGE_TO_STEP_INDEX)
+    .filter(([, idx]) => idx === currentStepIndex)
+    .map(([stage]) => stage);
+
+  type E = RunEvent & { event_type?: string };
+  const evts = events as E[];
+
+  // Filter to current-step events
+  const stageEvents = evts
+    .map((e, i) => ({ e, i }))
+    .filter(({ e }) => currentStages.includes(e.stage));
+
+  if (stageEvents.length === 0) return null;
+
+  // Prefer events whose event_type ends with "_started" or ".started"
+  const inProgressEvents = stageEvents.filter(({ e }) => {
+    const et = (e as E).event_type ?? "";
+    return et.endsWith("_started") || et.endsWith(".started");
+  });
+
+  const chosen =
+    inProgressEvents.length > 0
+      ? inProgressEvents[inProgressEvents.length - 1]
+      : stageEvents[stageEvents.length - 1];
+
+  return chosen ? { event: chosen.e, originalIndex: chosen.i } : null;
+}
+
 export function buildResearchProgressCardModel({
   activeRun,
   chatTitle,
@@ -91,6 +127,27 @@ export function buildResearchProgressCardModel({
   const completedCount = activeRun?.status === "succeeded" ? STEP_IDS.length : Math.max(0, currentStepIndex);
   const progressRatio = deriveProgressRatio(activeRun?.status ?? "running", currentStepIndex, latestEvent);
 
+  const currentActionData = deriveCurrentAction(
+    events,
+    currentStepIndex,
+    activeRun?.status ?? "running"
+  );
+
+  const currentAction: ResearchProgressEventRow | null = currentActionData
+    ? {
+        id: `current-${currentActionData.event.ts}-${currentActionData.event.message}`,
+        ts: currentActionData.event.ts,
+        message: humanizeEventMessage(currentActionData.event),
+        detail: humanizeEventDetail(currentActionData.event),
+        level: currentActionData.event.level,
+      }
+    : null;
+
+  // Exclude the chosen currentAction event from recentEvents to avoid duplication
+  const recentEventsSource = currentActionData
+    ? events.filter((_, i) => i !== currentActionData.originalIndex)
+    : events;
+
   return {
     title,
     steps: STEP_IDS.map((id, index) => ({
@@ -109,7 +166,7 @@ export function buildResearchProgressCardModel({
     metricText: deriveMetricText(activeRun?.status ?? "running", latestEvent, events, currentStepIndex),
     progressRatio,
     status: activeRun?.status ?? "running",
-    recentEvents: events.slice(-6).reverse().map((event, index) => ({
+    recentEvents: recentEventsSource.slice(-6).reverse().map((event, index) => ({
       id: `${event.ts}-${event.message}-${index}`,
       ts: event.ts,
       message: humanizeEventMessage(event),
@@ -117,6 +174,7 @@ export function buildResearchProgressCardModel({
       level: event.level
     })),
     stepMetrics: deriveStepMetrics(events, activeRun?.status ?? "running"),
+    currentAction,
   };
 }
 
