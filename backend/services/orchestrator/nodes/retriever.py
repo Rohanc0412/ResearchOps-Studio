@@ -651,14 +651,7 @@ def _embed_texts_batched(
     if not texts:
         return []
     # Use multiprocess pool for local SentenceTransformer when workers > 1
-    # Use isinstance with a fallback name-check to handle dual sys.path import scenarios
-    # (e.g. 'embeddings' and 'services.orchestrator.embeddings' both loaded in tests).
-    _is_local_client = isinstance(client, SentenceTransformerEmbedClient) or (
-        type(client).__name__ == "SentenceTransformerEmbedClient"
-        and hasattr(client, "model_name")
-        and hasattr(client, "device")
-    )
-    if _is_local_client:
+    if isinstance(client, SentenceTransformerEmbedClient):
         n_workers = _env_int(
             "RETRIEVER_EMBED_WORKERS",
             min(2, max(1, (os.cpu_count() or 2) // 2)),
