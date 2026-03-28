@@ -34,8 +34,8 @@ currentAction: ResearchProgressEventRow | null;
 1. Identify the current active step (the step with `state === "current"`)
 2. Resolve the stage(s) for that step index using `STAGE_TO_STEP_INDEX` (e.g. step 3 → `draft`, `repair`)
 3. Filter all incoming events to those matching those stages, excluding `level === "debug"`
-4. Within that filtered list, prefer events whose `event_type` suffix matches an **in-progress set**:
-   - `mcp_running`, `section_started`, `drafting`, `running`, `processing`
+4. Within that filtered list, prefer events whose `event_type` contains a **started** suffix pattern:
+   - Matches: `section_started`, `rerank.started`, `export.started` (any `event_type` ending in `_started` or `.started`)
    - Pick the most recent match
 5. If no in-progress event exists, fall back to the most recent non-debug event for that stage
 6. Humanize via the same `humanizeEvent()` path used for `recentEvents` — no new message format
