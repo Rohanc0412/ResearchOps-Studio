@@ -80,8 +80,10 @@ def _call_generate_quick_answer(
 def test_plain_text_response_no_search():
     """When LLM returns plain text, Tavily is never called."""
     client = _make_client(plain_text="The sky is blue.")
-    result = _call_generate_quick_answer(client)
-    assert result == "The sky is blue."
+    events, mock_search = _collect_events(client)
+    answer_events = [data for event_type, data in events if event_type == "answer"]
+    assert answer_events[0] == "The sky is blue."
+    mock_search.assert_not_called()
 
 
 def test_tool_call_triggers_search_and_returns_final_answer():
