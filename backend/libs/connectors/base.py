@@ -122,7 +122,7 @@ class RateLimiter:
     def __init__(self, max_requests: int, window_seconds: float):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
-        self.requests: list[float] = []
+        self._requests: list[float] = []
         self._lock = threading.Lock()
 
     def acquire(self) -> None:
@@ -131,12 +131,12 @@ class RateLimiter:
             with self._lock:
                 now = time.time()
                 cutoff = now - self.window_seconds
-                self.requests = [t for t in self.requests if t > cutoff]
-                if len(self.requests) < self.max_requests:
-                    self.requests.append(now)
+                self._requests = [t for t in self._requests if t > cutoff]
+                if len(self._requests) < self.max_requests:
+                    self._requests.append(now)
                     return
-                oldest = self.requests[0]
-                sleep_time = self.window_seconds - (now - oldest) + 0.05
+                oldest = self._requests[0]
+                sleep_time = self.window_seconds - (now - oldest) + 0.05  # small buffer to avoid tight re-lock spin
             # Sleep outside the lock so other threads can check concurrently
             if sleep_time > 0:
                 time.sleep(sleep_time)
