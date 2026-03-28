@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -29,7 +30,7 @@ from db.repositories.chat import (
     record_last_action,
     set_pending_action,
 )
-from db.repositories.project_runs import create_run, get_project_for_user
+from db.repositories.project_runs import create_run, get_latest_report_title, get_project_for_user
 from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request
 from job_queue import enqueue_run_job
@@ -37,7 +38,7 @@ from llm import LLMError, get_llm_client
 from middlewares.auth import IdentityDep
 from pydantic import BaseModel, ConfigDict, Field
 from research import RESEARCH_JOB_TYPE
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -140,6 +141,103 @@ def _title_from_message(message: str) -> str:
     return (text[:30] + ("..." if len(text) > 30 else "")).strip()
 
 
+def _count_chat_messages(session, tenant_id: UUID, conversation_id: UUID) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(ChatMessageRow)
+        .where(
+            ChatMessageRow.tenant_id == tenant_id,
+            ChatMessageRow.conversation_id == conversation_id,
+            ChatMessageRow.type == "chat",
+            ChatMessageRow.role.in_(["user", "assistant"]),
+        )
+    )
+    return session.execute(stmt).scalar_one() or 0
+
+
+def _generate_title_with_llm(
+    history: list[ChatMessageRow],
+    report_title: str | None,
+    llm_provider: str | None,
+    llm_model: str | None,
+) -> str | None:
+    try:
+        client = get_llm_client(llm_provider, llm_model)
+    except LLMError:
+        return None
+    if client is None:
+        return None
+
+    lines = []
+    if report_title:
+        lines.append(f"Research topic: {report_title}")
+    lines.append("Conversation:")
+    for msg in history[-10:]:
+        prefix = "User" if msg.role == "user" else "Assistant"
+        text = (msg.content_text or "").strip()
+        if text:
+            lines.append(f"{prefix}: {text[:200]}")
+
+    prompt = (
+        "\n".join(lines)
+        + "\n\nWrite a short title (5–8 words) for this conversation. "
+        "Return only the title, no punctuation at the end."
+    )
+    try:
+        title = client.generate(
+            prompt,
+            system="You generate concise conversation titles.",
+            max_tokens=20,
+            temperature=0.4,
+        )
+        title = title.strip().strip('"').strip("'")
+        return title if title else None
+    except LLMError:
+        return None
+
+
+def _maybe_update_title(
+    *,
+    session,
+    tenant_id: UUID,
+    convo,
+    first_message: str,
+    user_type: str,
+    llm_provider: str | None,
+    llm_model: str | None,
+) -> None:
+    if user_type != "chat":
+        return
+
+    count = _count_chat_messages(session, tenant_id, convo.id)
+
+    if count < 5:
+        if convo.title is None:
+            report_title = (
+                get_latest_report_title(
+                    session=session, tenant_id=tenant_id, project_id=convo.project_id
+                )
+                if convo.project_id
+                else None
+            )
+            convo.title = report_title or _title_from_message(first_message)
+    elif count in (5, 6) and (convo.title is None or (convo.title or "").endswith("...")):
+        report_title = (
+            get_latest_report_title(
+                session=session, tenant_id=tenant_id, project_id=convo.project_id
+            )
+            if convo.project_id
+            else None
+        )
+        history = _recent_chat_history(
+            session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=10
+        )
+        convo.title = (
+            _generate_title_with_llm(history, report_title, llm_provider, llm_model)
+            or convo.title
+        )
+
+
 def _pending_action_payload(
     *,
     prompt: str,
@@ -147,6 +245,7 @@ def _pending_action_payload(
     llm_model: str | None,
     created_at: datetime,
     ambiguous_count: int = 0,
+    stage_models: dict[str, str | None] | None = None,
 ) -> dict:
     payload = {
         "type": "start_research_run",
@@ -158,6 +257,8 @@ def _pending_action_payload(
         payload["llm_provider"] = llm_provider
     if llm_model:
         payload["llm_model"] = llm_model
+    if stage_models:
+        payload["stage_models"] = stage_models
     return payload
 
 
@@ -438,6 +539,7 @@ class ChatSendRequest(BaseModel):
     llm_provider: str | None = Field(default=None, pattern="^(hosted)$")
     llm_model: str | None = Field(default=None, min_length=1)
     force_pipeline: bool = False
+    stage_models: dict[str, str | None] | None = None
 
 
 class ChatSendResponse(BaseModel):
@@ -725,8 +827,15 @@ def post_send_chat(
             },
         )
 
-        if convo.title is None and user_type == "chat":
-            convo.title = _title_from_message(body.message)
+        _maybe_update_title(
+            session=session,
+            tenant_id=tenant_id,
+            convo=convo,
+            first_message=body.message,
+            user_type=user_type,
+            llm_provider=body.llm_provider,
+            llm_model=body.llm_model,
+        )
 
         pending = _extract_pending(convo)
         assistant_message: ChatMessageRow | None = None
@@ -747,6 +856,7 @@ def post_send_chat(
                 llm_provider=llm_provider,
                 llm_model=llm_model,
                 created_at=now,
+                stage_models=body.stage_models,
             )
             set_pending_action(convo, pending)
             decision_override = "yes"
@@ -757,6 +867,7 @@ def post_send_chat(
             pending_prompt = str(pending.get("prompt") or "").strip()
             pending_provider = pending.get("llm_provider") or llm_provider
             pending_model = pending.get("llm_model") or llm_model
+            pending_stage_models = pending.get("stage_models") or body.stage_models
             if pending_provider not in (None, "hosted"):
                 pending_provider = None
             llm_provider = pending_provider
@@ -828,6 +939,7 @@ def post_send_chat(
                                 "research_goal": "report",
                                 "llm_provider": llm_provider,
                                 "llm_model": llm_model,
+                                "stage_models": json.dumps(pending_stage_models) if pending_stage_models else None,
                             },
                         )
                         emit_run_event(
@@ -1040,6 +1152,7 @@ def post_send_chat(
                         llm_model=llm_model,
                         created_at=now,
                         ambiguous_count=ambiguous_count + 1,
+                        stage_models=body.stage_models,
                     )
                     set_pending_action(convo, pending_action)
                     assistant_message = create_message(
@@ -1150,6 +1263,7 @@ def post_send_chat(
                             llm_provider=llm_provider,
                             llm_model=llm_model,
                             created_at=now,
+                            stage_models=body.stage_models,
                         )
                         set_pending_action(convo, pending_action)
                         assistant_message = create_message(

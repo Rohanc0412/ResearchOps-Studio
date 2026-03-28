@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 from uuid import UUID
 
@@ -29,6 +30,15 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
     research_goal = inputs.get("research_goal") or inputs.get("output_type")
     llm_provider = inputs.get("llm_provider")
     llm_model = inputs.get("llm_model")
+    stage_models_raw = inputs.get("stage_models")
+    stage_models: dict[str, str | None] | None = None
+    if isinstance(stage_models_raw, str):
+        try:
+            stage_models = _json.loads(stage_models_raw)
+        except (ValueError, TypeError):
+            stage_models = None
+    elif isinstance(stage_models_raw, dict):
+        stage_models = stage_models_raw
 
     if not user_query:
         raise ValueError("run input missing user_query")
@@ -44,6 +54,7 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
             "research_goal": research_goal,
             "llm_provider": llm_provider,
             "llm_model": llm_model,
+            "stage_models": stage_models,
         },
     )
     try:
@@ -64,6 +75,7 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
                 research_goal=research_goal,
                 llm_provider=llm_provider,
                 llm_model=llm_model,
+                stage_models=stage_models,
             )
         )
         logger.info(

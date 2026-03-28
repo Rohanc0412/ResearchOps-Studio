@@ -111,6 +111,7 @@ async def run_orchestrator(
     research_goal: str | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    stage_models: dict[str, str | None] | None = None,
     max_iterations: int = 5,
 ) -> OrchestratorState:
     """
@@ -159,6 +160,7 @@ async def run_orchestrator(
         research_goal=research_goal,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        stage_models=stage_models or {},
         max_iterations=max_iterations,
         started_at=datetime.now(UTC),
     )
