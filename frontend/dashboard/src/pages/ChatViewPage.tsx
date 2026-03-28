@@ -141,6 +141,7 @@ export function ChatViewPage() {
   // TECH: debounceRef is used to throttle rapid SSE updates to reduce re-renders.
   // PLAIN: Prevents the screen from updating too rapidly and looking jittery.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // TECH: runStatusCheckRef throttles status lookups when SSE drops.
   // PLAIN: Avoids repeatedly polling the server if the stream fails.
@@ -232,14 +233,22 @@ export function ChatViewPage() {
     // PLAIN: Lock it immediately so it doesn???t send twice.
     initialMessageSentRef.current = true;
 
-    // TECH: Fire-and-forget sendMessage; catch errors to avoid unhandled promise rejection.
-    // PLAIN: Send it in the background; ignore failures here.
-    void sendMessage(initialMessage).catch(() => {});
-
     // TECH: Clear navigation state so refresh/back doesn't re-send.
     // PLAIN: Remove the "auto send" flag after first use.
     navigate(location.pathname, { replace: true, state: {} });
-  }, [initialMessage, chatId, location.pathname, navigate]);
+
+    // TECH: When pipeline is armed (runPipeline nav state), show model-selection modal
+    // instead of auto-sending, so the user can configure per-stage models.
+    if (runPipelineArmed) {
+      setPendingDraft(initialMessage);
+      setShowRunModal(true);
+      return;
+    }
+
+    // TECH: Fire-and-forget sendMessage; catch errors to avoid unhandled promise rejection.
+    // PLAIN: Send it in the background; ignore failures here.
+    void sendMessage(initialMessage).catch(() => {});
+  }, [initialMessage, chatId, location.pathname, navigate, runPipelineArmed]);
 
   // Scroll to bottom when messages change
   // TECH: Auto-scroll chat window when a new message arrives (messages.length changes).
@@ -426,6 +435,9 @@ export function ChatViewPage() {
           : prev
       );
     }, 120);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, [activeRun, sse.events]);
 
   // TECH: If SSE drops, check run status so the UI doesn't hang.
@@ -469,11 +481,19 @@ export function ChatViewPage() {
       const firstSection = parsedSections[0];
       if (firstSection) {
         setHighlightedSection(firstSection.id);
-        setTimeout(() => setHighlightedSection(null), 2000);
+        if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = setTimeout(() => setHighlightedSection(null), 2000);
       }
     },
     [setHighlightedSection, setReport, setCompletedRunArtifacts]
   );
+
+  // Clean up highlight timeout on unmount to prevent state updates on unmounted component.
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+    };
+  }, []);
 
   async function handleRunCompletion(status: ActiveRunStatus) {
     // TECH: Must have an activeRun to know runId.
@@ -758,7 +778,9 @@ export function ChatViewPage() {
     try {
       // TECH: Ask backend to restart or re-queue the run.
       // PLAIN: Tell the server to try again.
-      await retryRun.mutateAsync();
+      const modelValue =
+        selectedModel === CUSTOM_MODEL_VALUE ? customModel.trim() : selectedModel.trim();
+      await retryRun.mutateAsync(modelValue || undefined);
 
       // TECH: Reset UI state to running.
       // PLAIN: Show that the job is working again.
@@ -1194,6 +1216,7 @@ export function ChatViewPage() {
               onToggleExpanded={() => setProgressDetailsOpen((prev) => !prev)}
               onCancel={activeRun?.status === "running" ? () => void onAnswerNow() : undefined}
               onRetry={activeRun?.status === "failed" ? () => void onRetry() : undefined}
+              runId={activeRun?.runId}
             />
           ) : null}
 

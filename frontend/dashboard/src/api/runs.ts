@@ -29,8 +29,12 @@ export function useCancelRunMutation(runId: string) {
 export function useRetryRunMutation(runId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () =>
-      apiFetchJson(`/runs/${encodeURIComponent(runId)}/retry`, { method: "POST", schema: OkSchema }),
+    mutationFn: async (llmModel?: string) =>
+      apiFetchJson(`/runs/${encodeURIComponent(runId)}/retry`, {
+        method: "POST",
+        schema: OkSchema,
+        body: llmModel ? { llm_model: llmModel } : undefined,
+      }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["runs", runId] });
     }

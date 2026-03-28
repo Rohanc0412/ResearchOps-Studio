@@ -687,33 +687,44 @@ export function useSendChatMessageMutationInfinite(
       const contentType = response.headers.get("content-type") ?? "";
 
       if (contentType.includes("text/event-stream")) {
-        const reader = response.body!.getReader();
+        if (!response.body) throw new Error("SSE response body is missing");
+        const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
         let currentEvent = "";
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
 
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              currentEvent = line.slice(7).trim();
-            } else if (line.startsWith("data: ")) {
-              const data: unknown = JSON.parse(line.slice(6));
-              if (currentEvent === "status") {
-                callbacks?.onStatus?.();
-              } else if (currentEvent === "answer") {
-                return SendResponseSchema.parse(data);
+            for (const line of lines) {
+              if (line.startsWith("event: ")) {
+                currentEvent = line.slice(7).trim();
+              } else if (line.startsWith("data: ")) {
+                let data: unknown;
+                try {
+                  data = JSON.parse(line.slice(6));
+                } catch {
+                  // Malformed SSE data line — skip and continue reading
+                  continue;
+                }
+                if (currentEvent === "status") {
+                  callbacks?.onStatus?.();
+                } else if (currentEvent === "answer") {
+                  return SendResponseSchema.parse(data);
+                }
+              } else if (line === "") {
+                currentEvent = "";
               }
-            } else if (line === "") {
-              currentEvent = "";
             }
           }
+        } finally {
+          reader.cancel().catch(() => {});
         }
         throw new Error("SSE stream ended without answer event");
       }

@@ -3,11 +3,12 @@ import { useState } from "react";
 type ShareModalProps = {
   isOpen: boolean;
   onClose: () => void;
+  shareUrl?: string;
 };
 
-export function ShareModal({ isOpen, onClose }: ShareModalProps) {
+export function ShareModal({ isOpen, onClose, shareUrl }: ShareModalProps) {
   const [copied, setCopied] = useState(false);
-  const shareLink = "https://researchops.studio/reports/shared-report";
+  const shareLink = shareUrl ?? window.location.href;
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(shareLink);
@@ -24,7 +25,7 @@ export function ShareModal({ isOpen, onClose }: ShareModalProps) {
         onClick={(event) => event.stopPropagation()}
       >
         <h3 className="mb-5 text-lg font-semibold text-slate-100">Share report</h3>
-        <p className="mb-4 text-sm text-slate-400">Anyone with this link can view the report</p>
+        <p className="mb-4 text-sm text-slate-400">Share this link with team members who have access to this workspace</p>
         <div className="flex gap-2 rounded-lg border border-slate-700 bg-slate-900 p-3">
           <input
             type="text"

@@ -171,7 +171,10 @@ export function LoginPage() {
     setError(null);
     setSuccess(null);
     setIsSubmitting(false);
+    setEmail("");
+    setPassword("");
     setConfirmPassword("");
+    setUsername("");
     setMode(next);
   }
 

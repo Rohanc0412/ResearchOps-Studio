@@ -11,6 +11,7 @@ from app_services.project_runs import (
     cancel_user_run,
     get_user_run_or_404,
     list_user_run_artifacts,
+    list_user_run_snippets,
     retry_user_run,
     run_to_web,
 )
@@ -258,9 +259,14 @@ def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep)
         return OkResponse()
 
 
+class RetryRunBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    llm_model: str | None = Field(default=None, min_length=1)
+
+
 @router.post("/{run_id}/retry", response_model=WebRunOut)
 def retry_run_endpoint(
-    request: Request, run_id: UUID, identity: Identity = IdentityDep
+    request: Request, run_id: UUID, body: RetryRunBody = RetryRunBody(), identity: Identity = IdentityDep
 ) -> WebRunOut:
     """Retry a failed or blocked run.
 
@@ -286,6 +292,7 @@ def retry_run_endpoint(
             tenant_id=_tenant_uuid(identity),
             run_id=run_id,
             identity=identity,
+            llm_model=body.llm_model,
         )
         return WebRunOut.model_validate(run_to_web(run))
 
@@ -297,6 +304,20 @@ def get_artifacts_for_run(
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
         return list_user_run_artifacts(
+            session=session,
+            tenant_id=_tenant_uuid(identity),
+            run_id=run_id,
+            user_id=identity.user_id,
+        )
+
+
+@router.get("/{run_id}/snippets")
+def get_snippets_for_run(
+    request: Request, run_id: UUID, identity: Identity = IdentityDep
+) -> list[dict]:
+    SessionLocal = request.app.state.SessionLocal
+    with session_scope(SessionLocal) as session:
+        return list_user_run_snippets(
             session=session,
             tenant_id=_tenant_uuid(identity),
             run_id=run_id,

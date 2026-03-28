@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams, useParams } from "react-router-dom";
-import { ChevronLeft, Download, Eye, FileText } from "lucide-react";
+import { useNavigate, useSearchParams, useParams, Link } from "react-router-dom";
+import { ChevronLeft, Download, ExternalLink, Eye, FileText, FlaskConical } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import { downloadArtifact, useRunArtifactsQuery } from "../api/artifacts";
+import { downloadArtifact, useRunArtifactsQuery, useRunSnippetsQuery } from "../api/artifacts";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
@@ -18,6 +20,8 @@ export function ArtifactsPage() {
   const focus = sp.get("focus");
 
   const artifacts = useRunArtifactsQuery(id);
+  const snippets = useRunSnippetsQuery(id);
+  const [tab, setTab] = useState<"artifacts" | "evidence">("artifacts");
   const [preview, setPreview] = useState<{ id: string; markdown: string } | null>(null);
 
   const focusArtifact = useMemo(() => {
@@ -59,8 +63,67 @@ export function ArtifactsPage() {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-obsidian-border">
+        {(["artifacts", "evidence"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            className={[
+              "flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors",
+              tab === t
+                ? "border-b-2 border-obsidian-accent text-obsidian-text"
+                : "text-obsidian-muted hover:text-obsidian-text",
+            ].join(" ")}
+          >
+            {t === "artifacts" ? <FileText className="h-3.5 w-3.5" /> : <FlaskConical className="h-3.5 w-3.5" />}
+            {t.charAt(0).toUpperCase() + t.slice(1)}
+          </button>
+        ))}
+      </div>
+
       {/* Content */}
-      {artifacts.isLoading ? (
+      {tab === "evidence" ? (
+        snippets.isLoading ? (
+          <div className="flex justify-center py-16">
+            <Spinner label="Loading evidence…" />
+          </div>
+        ) : snippets.isError ? (
+          <ErrorBanner
+            message={snippets.error instanceof Error ? snippets.error.message : "Failed to load evidence"}
+          />
+        ) : (snippets.data?.length ?? 0) === 0 ? (
+          <EmptyState
+            icon={<FlaskConical className="h-5 w-5" />}
+            title="No evidence snippets"
+            description="Evidence snippets are collected during the Retrieve stage."
+          />
+        ) : (
+          <div className="flex flex-col gap-2">
+            {(snippets.data ?? []).map((s) => (
+              <Link
+                key={s.id}
+                to={`/evidence/snippets/${encodeURIComponent(s.id)}`}
+                className="flex items-start gap-3 rounded-xl border border-obsidian-border bg-obsidian-surface-elevated px-4 py-3 transition-colors hover:border-obsidian-accent"
+              >
+                <FlaskConical className="mt-0.5 h-3.5 w-3.5 shrink-0 text-obsidian-accent" />
+                <div className="min-w-0 flex-1">
+                  {s.source_title && (
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="truncate font-mono text-[11px] font-medium text-obsidian-accent">
+                        {s.source_title}
+                      </span>
+                      {s.source_url && <ExternalLink className="h-3 w-3 shrink-0 text-obsidian-muted" />}
+                    </div>
+                  )}
+                  <p className="font-mono text-xs leading-relaxed text-obsidian-muted line-clamp-2">{s.text}</p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )
+      ) : artifacts.isLoading ? (
         <div className="flex justify-center py-16">
           <Spinner label="Loading artifacts…" />
         </div>
@@ -78,7 +141,7 @@ export function ArtifactsPage() {
         <div className="grid gap-4 lg:grid-cols-[2fr_3fr]">
           {/* Artifact list — 40% */}
           <div className="flex flex-col gap-2">
-            {artifacts.data!.map((a) => (
+            {(artifacts.data ?? []).map((a) => (
               <div
                 key={a.id}
                 className={[
@@ -137,9 +200,9 @@ export function ArtifactsPage() {
             </div>
             <div className="p-4">
               {preview ? (
-                <pre className="max-h-[560px] overflow-auto rounded-lg border border-obsidian-border bg-obsidian-bg p-4 font-mono text-xs leading-relaxed text-obsidian-text">
-                  {preview.markdown}
-                </pre>
+                <div className="prose prose-invert prose-sm max-h-[560px] max-w-none overflow-auto rounded-lg border border-obsidian-border bg-obsidian-bg p-4 text-obsidian-text">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{preview.markdown}</ReactMarkdown>
+                </div>
               ) : (
                 <p className="py-8 text-center text-sm text-obsidian-muted">
                   Select an artifact with embedded markdown to preview,
@@ -153,3 +216,4 @@ export function ArtifactsPage() {
     </div>
   );
 }
+

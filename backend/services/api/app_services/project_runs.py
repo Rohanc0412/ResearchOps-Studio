@@ -9,7 +9,12 @@ from core.runs import RunNotFoundError, RunTransitionError, request_cancel, retr
 from core.runs.lifecycle import emit_run_event
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
+from db.models.section_evidence import SectionEvidenceRow
+from db.models.snippets import SnippetRow
+from db.models.snapshots import SnapshotRow
+from db.models.sources import SourceRow
 from db.repositories.artifacts import list_artifacts
+from db.repositories.corpus import get_source
 from db.repositories.project_runs import (
     create_project,
     create_run,
@@ -19,6 +24,7 @@ from db.repositories.project_runs import (
     get_run_for_user,
     get_run_usage_metrics,
     list_projects_for_user,
+    patch_run_usage_metrics,
 )
 from fastapi import HTTPException, Request
 from job_queue import enqueue_run_job
@@ -255,6 +261,7 @@ def retry_user_run(
     tenant_id: UUID,
     run_id: UUID,
     identity: Identity,
+    llm_model: str | None = None,
 ):
     get_user_run_or_404(
         session=session,
@@ -268,6 +275,8 @@ def retry_user_run(
             tenant_id=tenant_id,
             run_id=run_id,
         )
+        if llm_model:
+            patch_run_usage_metrics(run, {"llm_model": llm_model})
         job_type = get_run_usage_metrics(run).get("job_type")
         if not isinstance(job_type, str) or not job_type:
             job_type = RESEARCH_JOB_TYPE
@@ -289,6 +298,53 @@ def retry_user_run(
         return run
     except (RunNotFoundError, RunTransitionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def list_user_run_snippets(
+    *,
+    session: Session,
+    tenant_id: UUID,
+    run_id: UUID,
+    user_id: str,
+) -> list[dict]:
+    from sqlalchemy import select
+
+    get_user_run_or_404(session=session, tenant_id=tenant_id, run_id=run_id, user_id=user_id)
+
+    # Single query: join section_evidence → snippet → snapshot → source to avoid N+1.
+    # All tenant_id guards are applied in the WHERE clause.
+    rows = session.execute(
+        select(
+            SnippetRow.id,
+            SnippetRow.text,
+            SourceRow.id.label("source_id"),
+            SourceRow.title.label("source_title"),
+            SourceRow.url.label("source_url"),
+        )
+        .select_from(SectionEvidenceRow)
+        .join(SnippetRow, SnippetRow.id == SectionEvidenceRow.snippet_id)
+        .join(SnapshotRow, SnapshotRow.id == SnippetRow.snapshot_id)
+        .join(SourceRow, SourceRow.id == SnapshotRow.source_id)
+        .where(
+            SectionEvidenceRow.tenant_id == tenant_id,
+            SectionEvidenceRow.run_id == run_id,
+            SnippetRow.tenant_id == tenant_id,
+            SnapshotRow.tenant_id == tenant_id,
+            SourceRow.tenant_id == tenant_id,
+        )
+        .distinct(SnippetRow.id)
+    ).all()
+
+    return [
+        {
+            "id": str(row.id),
+            "text": row.text[:300] + ("…" if len(row.text) > 300 else ""),
+            "source_id": str(row.source_id) if row.source_id else None,
+            "source_title": row.source_title,
+            "source_url": row.source_url,
+        }
+        for row in rows
+    ]
 
 
 def list_user_run_artifacts(

@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from datetime import datetime
 
 from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
@@ -33,8 +32,6 @@ DRAFT_SECTION_SCHEMA = {
     "required": ["section_id", "section_text", "section_summary", "status"],
     "additionalProperties": False,
 }
-
-_CITATION_PATTERN = re.compile(r"\[CITE:([a-f0-9-]+)\]")
 
 
 def _print_llm_exchange(label: str, section_id: str, content: str) -> None:
@@ -127,84 +124,6 @@ def _extract_json_payload(text: str) -> dict | list | None:
         return json.loads(snippet)
     except json.JSONDecodeError:
         return None
-
-
-def _extract_citations(text: str) -> list[str]:
-    return _CITATION_PATTERN.findall(text)
-
-
-def _word_count(text: str) -> int:
-    return len(re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", text))
-
-
-def _split_into_sentences(text: str) -> list[str]:
-    cleaned = text.strip()
-    if not cleaned:
-        return []
-    parts = re.split(r"(?<=[.!?])\s+", cleaned)
-    return [part.strip() for part in parts if part.strip()]
-
-
-def _citations_at_sentence_end(sentence: str) -> bool:
-    cleaned = sentence.strip()
-    if not cleaned:
-        return True
-    if cleaned[-1] in ".!?":
-        cleaned = cleaned[:-1].rstrip()
-    tail_match = re.search(r"(\[CITE:[^\]]+\](?:\s+\[CITE:[^\]]+\])*)$", cleaned)
-    if not tail_match:
-        return False
-    tail = tail_match.group(1)
-    all_cites = re.findall(r"\[CITE:[^\]]+\]", cleaned)
-    tail_cites = re.findall(r"\[CITE:[^\]]+\]", tail)
-    return len(all_cites) == len(tail_cites)
-
-
-def _resolve_citation_ids(
-    section_text: str,
-    allowed_snippet_ids: set[str],
-) -> tuple[str, list[str]]:
-    if not section_text:
-        return section_text, []
-
-    allowed_lower = {cid.lower(): cid for cid in allowed_snippet_ids}
-
-    def resolve_id(cited: str) -> str | None:
-        if cited in allowed_lower:
-            return allowed_lower[cited]
-        matches = [full for lower, full in allowed_lower.items() if lower.startswith(cited)]
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
-    invalid: list[str] = []
-
-    def replace(match: re.Match[str]) -> str:
-        raw = match.group(1).lower()
-        resolved = resolve_id(raw)
-        if resolved is None:
-            invalid.append(match.group(1))
-            return match.group(0)
-        return f"[CITE:{resolved}]"
-
-    updated = _CITATION_PATTERN.sub(replace, section_text)
-    return updated, invalid
-
-
-def _validate_section_text(section_text: str, allowed_snippet_ids: set[str]) -> str:
-    updated_text, invalid = _resolve_citation_ids(section_text, allowed_snippet_ids)
-    if invalid:
-        invalid_sorted = sorted(set(invalid))
-        raise ValueError(f"Section cites snippets not in evidence pack: {invalid_sorted}")
-
-    for sentence in _split_into_sentences(updated_text):
-        if "[CITE:" not in sentence:
-            continue
-        if not _citations_at_sentence_end(sentence):
-            raise ValueError("Citations must appear only at the end of each cited sentence.")
-    return updated_text
-
-
 def _build_snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
     payload: list[dict] = []
     for snippet in snippets:
@@ -215,17 +134,6 @@ def _build_snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
             }
         )
     return payload
-
-
-def _validate_section_length(section_text: str) -> None:
-    min_words = _env_int("DRAFT_SECTION_MIN_WORDS", 50, min_value=0)
-    if min_words <= 0:
-        return
-    count = _word_count(section_text)
-    if count < min_words:
-        raise ValueError(f"Section length must be at least {min_words} words, got {count}.")
-
-
 def _generate_section_with_llm(
     llm_client,
     section: OutlineSection,

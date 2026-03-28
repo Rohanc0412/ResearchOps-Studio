@@ -381,13 +381,21 @@ def _ensure_snippets_from_abstracts(
         return
 
     source_ids = [source.source_id for source in vetted_sources]
-    exists_any = (
-        session.query(SnippetRow.id)
+    # Only skip the abstract fallback if embeddings with the right model already exist.
+    # Checking for SnippetRow alone is not enough — old snippets may exist but be embedded
+    # under a different model name, in which case the evidence search would still return nothing.
+    exists_embedding = (
+        session.query(SnippetEmbeddingRow.id)
+        .join(SnippetRow, SnippetRow.id == SnippetEmbeddingRow.snippet_id)
         .join(SnapshotRow, SnapshotRow.id == SnippetRow.snapshot_id)
-        .filter(SnippetRow.tenant_id == tenant_id, SnapshotRow.source_id.in_(source_ids))
+        .filter(
+            SnippetEmbeddingRow.tenant_id == tenant_id,
+            SnippetEmbeddingRow.embedding_model == embedding_model,
+            SnapshotRow.source_id.in_(source_ids),
+        )
         .first()
     )
-    if exists_any:
+    if exists_embedding:
         return
 
     new_snippets: list[tuple[SnippetRow, str]] = []
@@ -540,6 +548,12 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
         n = len(texts)
         section_vector_lists.append((section, all_query_vectors[idx : idx + n]))
         idx += n
+
+    # Commit all pending work (retriever snippets/embeddings + abstract fallback) so that
+    # the per-thread sessions spawned by _parallel_search_sections can see the data.
+    # Without this commit, newly ingested embeddings from the current run are invisible
+    # to the new sessions because they are in an uncommitted transaction.
+    session.commit()
 
     # Parallel: run all section searches concurrently (each thread gets its own session)
     _bind = session.get_bind()

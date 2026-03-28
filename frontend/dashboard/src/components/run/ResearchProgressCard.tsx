@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Check, ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ExternalLink, RotateCcw } from "lucide-react";
 
 import { cx, formatTs } from "../../utils/format";
 import type { ResearchProgressCardModel } from "./researchProgress";
@@ -10,6 +10,7 @@ type ResearchProgressCardProps = {
   onToggleExpanded: () => void;
   onCancel?: () => void;
   onRetry?: () => void;
+  runId?: string;
 };
 
 export function ResearchProgressCard({
@@ -17,7 +18,8 @@ export function ResearchProgressCard({
   expanded,
   onToggleExpanded,
   onCancel,
-  onRetry
+  onRetry,
+  runId,
 }: ResearchProgressCardProps) {
   const isRunning = model.status === "running";
   const isFailed  = model.status === "failed";
@@ -206,6 +208,19 @@ export function ResearchProgressCard({
           </button>
         )}
       </div>
+
+      {/* ── Artifacts link (shown when run succeeds) ─────────────── */}
+      {model.status === "succeeded" && runId && (
+        <div className="mt-3 flex items-center gap-3">
+          <a
+            href={`/runs/${encodeURIComponent(runId)}/artifacts`}
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.12] bg-white/[0.04] px-3 py-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-white/60 transition hover:border-white/25 hover:text-white/80"
+          >
+            <ExternalLink className="h-3 w-3" />
+            View Artifacts
+          </a>
+        </div>
+      )}
 
       {/* ── Expanded events log ──────────────────────────────────── */}
       {expanded && (

@@ -20,6 +20,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 _CITATION_PATTERN = re.compile(r"\[CITE:([a-f0-9-]+)\]")
+# Broader pattern catches any remaining [CITE:...] tokens with non-UUID IDs that slipped through
+_CITATION_STRAY_PATTERN = re.compile(r"\[CITE:[^\]]*\]")
 
 
 @instrument_node("export")
@@ -248,9 +250,26 @@ def _apply_citation_footnotes(
         return f"[^{footnote_num}]"
 
     final_text = _CITATION_PATTERN.sub(replace_citation, markdown)
+    # Strip any [CITE:...] tokens with non-UUID IDs that the LLM may have invented
+    final_text = _CITATION_STRAY_PATTERN.sub("", final_text)
+
     if footnotes:
         final_text += "\n\n---\n\n## References\n\n"
         final_text += "\n\n".join(footnotes)
+    elif vetted_sources:
+        # No inline citations resolved — fall back to a plain numbered list of all
+        # vetted sources so the report always has a References section.
+        fallback: list[str] = []
+        for i, source in enumerate(vetted_sources, start=1):
+            authors_str = ", ".join(source.authors[:3]) if source.authors else "Unknown"
+            if source.authors and len(source.authors) > 3:
+                authors_str += " et al."
+            entry = f"{i}. {authors_str}. {source.title}. {source.year or 'n.d.'}."
+            if source.url:
+                entry += f" [{source.url}]({source.url})"
+            fallback.append(entry)
+        final_text += "\n\n---\n\n## References\n\n"
+        final_text += "\n\n".join(fallback)
 
     return final_text
 

@@ -1,6 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
+const RunSnippetSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  source_id: z.string().nullable(),
+  source_title: z.string().nullable(),
+  source_url: z.string().nullable(),
+});
+export type RunSnippet = z.infer<typeof RunSnippetSchema>;
+const RunSnippetsSchema = z.array(RunSnippetSchema);
+
 import { apiFetch, apiFetchJson } from "./client";
 import { ArtifactSchema } from "../types/dto";
 
@@ -11,6 +21,14 @@ export function useRunArtifactsQuery(runId: string) {
     queryKey: ["runs", runId, "artifacts"],
     queryFn: async () => apiFetchJson(`/runs/${encodeURIComponent(runId)}/artifacts`, { schema: ArtifactsSchema }),
     enabled: Boolean(runId)
+  });
+}
+
+export function useRunSnippetsQuery(runId: string) {
+  return useQuery({
+    queryKey: ["runs", runId, "snippets"],
+    queryFn: async () => apiFetchJson(`/runs/${encodeURIComponent(runId)}/snippets`, { schema: RunSnippetsSchema }),
+    enabled: Boolean(runId),
   });
 }
 
