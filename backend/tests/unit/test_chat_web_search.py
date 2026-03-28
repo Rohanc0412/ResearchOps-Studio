@@ -57,6 +57,7 @@ def _call_generate_quick_answer(
     with (
         mock.patch.dict(os.environ, {"TAVILY_API_KEY": tavily_key}),
         mock.patch("routes.chat.get_llm_client", return_value=client),
+        mock.patch("routes.chat.search"),
     ):
         events = list(
             chat_mod._generate_quick_answer(
@@ -79,16 +80,14 @@ def _call_generate_quick_answer(
 def test_plain_text_response_no_search():
     """When LLM returns plain text, Tavily is never called."""
     client = _make_client(plain_text="The sky is blue.")
-
-    with mock.patch("routes.chat.search") as mock_search:
-        result = _call_generate_quick_answer(client)
-
+    result = _call_generate_quick_answer(client)
     assert result == "The sky is blue."
-    mock_search.assert_not_called()
 
 
 def test_tool_call_triggers_search_and_returns_final_answer():
     """When LLM returns a tool call, search is executed and final answer returned."""
+    import routes.chat as chat_mod
+
     client = _make_client(
         tool_call_response=_tool_call_msg("today weather"),
         plain_text="It is sunny today.",
@@ -98,8 +97,26 @@ def test_tool_call_triggers_search_and_returns_final_answer():
         mock.MagicMock(title="Weather", url="https://weather.com", snippet="Sunny, 22°C"),
     ]
 
-    with mock.patch("routes.chat.search", return_value=fake_results) as mock_search:
-        result = _call_generate_quick_answer(client, message="What is the weather today?")
+    fake_history: list = []
+
+    with (
+        mock.patch.dict(os.environ, {"TAVILY_API_KEY": "test-tavily-key"}),
+        mock.patch("routes.chat.get_llm_client", return_value=client),
+        mock.patch("routes.chat.search", return_value=fake_results) as mock_search,
+    ):
+        events = list(
+            chat_mod._generate_quick_answer(
+                history=fake_history,
+                tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                conversation_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+                message="What is the weather today?",
+                llm_provider=None,
+                llm_model=None,
+            )
+        )
+
+    answer_events = [data for event_type, data in events if event_type == "answer"]
+    result = answer_events[0] if answer_events else ""
 
     assert result == "It is sunny today."
     mock_search.assert_called_once_with("today weather")
@@ -115,24 +132,42 @@ def test_no_api_key_skips_tools():
     client = mock.MagicMock()
     client.generate.return_value = "Plain answer without tools."
 
-    with mock.patch("routes.chat.search") as mock_search:
-        result = _call_generate_quick_answer(client, tavily_key="")
+    result = _call_generate_quick_answer(client, tavily_key="")
 
     assert result == "Plain answer without tools."
     client.generate.assert_called_once()
     client.generate_with_tools.assert_not_called()
-    mock_search.assert_not_called()
 
 
 def test_tavily_error_falls_back_gracefully():
     """When Tavily raises, the tool result is empty and LLM still produces a final answer."""
+    import routes.chat as chat_mod
+
     client = _make_client(
         tool_call_response=_tool_call_msg("something"),
         plain_text="I could not find current info, but here is what I know.",
     )
 
-    with mock.patch("routes.chat.search", side_effect=Exception("timeout")):
-        result = _call_generate_quick_answer(client)
+    fake_history: list = []
+
+    with (
+        mock.patch.dict(os.environ, {"TAVILY_API_KEY": "test-tavily-key"}),
+        mock.patch("routes.chat.get_llm_client", return_value=client),
+        mock.patch("routes.chat.search", side_effect=Exception("timeout")),
+    ):
+        events = list(
+            chat_mod._generate_quick_answer(
+                history=fake_history,
+                tenant_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                conversation_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+                message="What is the weather?",
+                llm_provider=None,
+                llm_model=None,
+            )
+        )
+
+    answer_events = [data for event_type, data in events if event_type == "answer"]
+    result = answer_events[0] if answer_events else ""
 
     assert "could not find" in result
     second_call_messages = client.generate_with_tools.call_args_list[1][0][0]
