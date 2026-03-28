@@ -152,6 +152,53 @@ class OpenAICompatibleClient:
                 return repaired
         return content
 
+    def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        *,
+        max_tokens: int = 512,
+        temperature: float = 0.4,
+    ) -> dict:
+        """Call the LLM with tool definitions. Returns the raw message dict from choices[0].
+
+        The returned dict may contain:
+        - "content": str | None — text response (None when tool_calls is set)
+        - "tool_calls": list | None — tool call requests from the model
+        """
+        url = f"{self.base_url.rstrip('/')}/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "tools": tools,
+        }
+        try:
+            response = httpx.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
+            response.raise_for_status()
+        except Exception as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                resp = exc.response
+                body = resp.text if resp is not None else ""
+                if body and len(body) > 600:
+                    body = body[:600] + "...(truncated)"
+                status = resp.status_code if resp is not None else "unknown"
+                raise LLMError(
+                    f"Hosted LLM request failed: HTTP {status}. Response: {body or 'no body'}"
+                ) from exc
+            raise LLMError(f"Hosted LLM request failed: {exc}") from exc
+
+        data = response.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise LLMError("Hosted LLM response missing choices")
+        return choices[0].get("message", {})
+
 
 def get_llm_client(
     provider: str | None = None,
