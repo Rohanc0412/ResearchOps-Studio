@@ -345,6 +345,7 @@ def get_hf_client(
 
 # Module-level state inside each worker process
 _worker_model = None
+_worker_normalize_embeddings: bool = True
 
 
 def _worker_init(
@@ -356,7 +357,8 @@ def _worker_init(
     trust_remote_code: bool,
 ) -> None:
     """Load the SentenceTransformer model inside the worker process."""
-    global _worker_model
+    global _worker_model, _worker_normalize_embeddings
+    _worker_normalize_embeddings = normalize_embeddings
     from sentence_transformers import SentenceTransformer
 
     model_kwargs: dict = {}
@@ -390,7 +392,7 @@ def _worker_encode(texts: list[str]) -> list[list[float]]:
     """Encode texts in a worker process using the pre-loaded model."""
     return _worker_model.encode(
         texts,
-        normalize_embeddings=True,
+        normalize_embeddings=_worker_normalize_embeddings,
         show_progress_bar=False,
         convert_to_numpy=True,
     ).tolist()
