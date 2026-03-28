@@ -11,6 +11,7 @@ Provides:
 
 from __future__ import annotations
 
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -113,42 +114,32 @@ class RetrievedSource:
 
 class RateLimiter:
     """
-    Simple rate limiter with sliding window.
+    Thread-safe rate limiter with sliding window.
 
     Ensures we don't exceed API rate limits.
     """
 
     def __init__(self, max_requests: int, window_seconds: float):
-        """
-        Initialize rate limiter.
-
-        Args:
-            max_requests: Maximum requests allowed in window
-            window_seconds: Time window in seconds
-        """
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.requests: list[float] = []
+        self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        """Wait until we can make another request."""
-        now = time.time()
-
-        # Remove requests outside the window
-        cutoff = now - self.window_seconds
-        self.requests = [t for t in self.requests if t > cutoff]
-
-        # If at limit, wait
-        if len(self.requests) >= self.max_requests:
-            oldest = self.requests[0]
-            sleep_time = self.window_seconds - (now - oldest) + 0.1
+        """Block until a request slot is available."""
+        while True:
+            with self._lock:
+                now = time.time()
+                cutoff = now - self.window_seconds
+                self.requests = [t for t in self.requests if t > cutoff]
+                if len(self.requests) < self.max_requests:
+                    self.requests.append(now)
+                    return
+                oldest = self.requests[0]
+                sleep_time = self.window_seconds - (now - oldest) + 0.05
+            # Sleep outside the lock so other threads can check concurrently
             if sleep_time > 0:
                 time.sleep(sleep_time)
-            # Retry acquire
-            return self.acquire()
-
-        # Record this request
-        self.requests.append(now)
 
 
 class ConnectorError(Exception):
