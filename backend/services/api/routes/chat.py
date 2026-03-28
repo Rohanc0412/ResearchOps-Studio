@@ -1553,6 +1553,12 @@ def post_send_chat(
             )
 
     if qa_ctx is not None:
+        _log_step(
+            "finish",
+            conversation_id=qa_ctx.conversation_id,
+            step="request",
+            extra={"mode": "stream"},
+        )
         return _StreamingResponse(
             _stream_quick_answer_body(qa_ctx),
             media_type="text/event-stream",

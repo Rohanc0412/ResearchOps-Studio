@@ -67,18 +67,18 @@ def _send_message(
 
 
 def _parse_send_response(resp) -> dict:
-    """Parse a /chat/send response that may be JSON or an SSE stream.
-
-    SSE streams contain ``event: answer`` followed by a JSON ``data:`` line.
-    Regular JSON responses are returned directly.
-    """
+    """Parse a /send response that may be plain JSON or SSE text/event-stream.
+    For SSE, returns the payload of the 'answer' event."""
     content_type = resp.headers.get("content-type", "")
-    if "text/event-stream" in content_type:
-        for line in resp.text.splitlines():
-            if line.startswith("data: "):
-                return json.loads(line[len("data: "):])
-        raise AssertionError("No 'data:' line found in SSE response")
-    return resp.json()
+    if "text/event-stream" not in content_type:
+        return resp.json()
+    current_event = ""
+    for line in resp.text.splitlines():
+        if line.startswith("event: "):
+            current_event = line[len("event: "):].strip()
+        elif line.startswith("data: ") and current_event == "answer":
+            return json.loads(line[len("data: "):])
+    raise ValueError("SSE stream contained no 'answer' event")
 
 
 def _latest_run_question(app, project_id: str) -> str:
