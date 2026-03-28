@@ -27,6 +27,7 @@ export type ResearchProgressCardModel = {
   status: ProgressStatus;
   recentEvents: ResearchProgressEventRow[];
   stepMetrics: (string | null)[];
+  currentAction: ResearchProgressEventRow | null;
 };
 
 type BuildResearchProgressCardModelArgs = {
