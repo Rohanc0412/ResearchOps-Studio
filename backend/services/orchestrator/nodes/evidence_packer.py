@@ -27,7 +27,12 @@ from embeddings import (
     get_sentence_transformer_client,
 )
 from retrieval.search import search_snippets
+import logging
+
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingClient(Protocol):
@@ -205,10 +210,7 @@ def _embed_texts_batched(
                 )
                 return pool.encode(texts)
             except Exception as exc:  # noqa: BLE001
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    "EmbedWorkerPool failed, falling back to sequential: %s", exc
-                )
+                logger.warning("EmbedWorkerPool failed, falling back to sequential: %s", exc)
     embeddings: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
@@ -265,6 +267,11 @@ def _parallel_search_sections(
             executor.submit(_search_one, section_id, query_embedding): section_id
             for section_id, query_embedding in section_queries
         }
+        # Fail-fast: any thread exception re-raises here, aborting the entire evidence pack.
+        # This is intentional — a pgvector error on one section likely indicates a systemic issue
+        # (e.g., the embedding model or DB is unavailable) and proceeding with partial evidence
+        # would silently produce an under-evidenced report. Unlike retrieval (Task 4), there is no
+        # graceful degradation path here.
         for future in concurrent.futures.as_completed(futures):
             section_id, results = future.result()
             out[section_id] = results
@@ -485,7 +492,13 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
         raise ValueError("Mismatch between outline sections and query embeddings.")
 
     # Parallel: run all section searches concurrently (each thread gets its own session)
-    engine = session.get_bind()
+    _bind = session.get_bind()
+    if not isinstance(_bind, Engine):
+        raise TypeError(
+            f"evidence_pack_node requires a session bound to an Engine, got {type(_bind).__name__}. "
+            "Parallel section search requires per-thread sessions constructed from an Engine."
+        )
+    engine = _bind
     search_inputs = [
         (section.section_id, query_embedding)
         for (section, _), query_embedding in zip(section_queries, query_vectors, strict=True)

@@ -16,7 +16,8 @@ def test_section_searches_run_in_parallel():
         with call_lock:
             call_times.append(time.monotonic())
         time.sleep(0.10)  # simulate pgvector query latency
-        return []
+        # Return min_required results to avoid triggering relaxed-search path
+        return [{"snippet_id": f"s{i}", "similarity": 0.9 - i * 0.1} for i in range(5)]
 
     import services.orchestrator.nodes.evidence_packer as ep
 
@@ -45,7 +46,8 @@ def test_section_searches_run_in_parallel():
                 )
                 elapsed = time.monotonic() - start
 
-    # Parallelism check: total elapsed is far less than sequential would take (4 * 0.10 = 0.40s)
+    # Parallelism check: total elapsed is far less than sequential would take
+    # 4 sections * 0.10s = 0.40s sequentially; parallel should be much faster
     # All 4 calls must start within 1.5× the sleep window (well under sequential spread of 0.30s)
     call_times.sort()
     assert call_times[-1] - call_times[0] < 0.15, (
