@@ -1282,6 +1282,35 @@ def _plan_step_labels(
         return None
 
 
+def _parallel_mcp_search(
+    query_plan: list,
+    connector,
+    *,
+    mcp_max_per_source: int,
+) -> list:
+    """Search all query-plan entries in parallel using ThreadPoolExecutor."""
+    parallel_queries = _env_int("RETRIEVER_MCP_PARALLEL_QUERIES", 6, min_value=1)
+
+    def _search_one(plan) -> list:
+        try:
+            sources = connector.search(query=plan.query, max_results=mcp_max_per_source)
+            for src in sources:
+                meta = dict(src.extra_metadata or {})
+                meta.update({"intent": plan.intent, "query": plan.query})
+                src.extra_metadata = meta
+            return sources
+        except Exception as exc:
+            logger.warning("MCP retrieval failed for query '%s': %s", plan.query, exc)
+            return []
+
+    all_sources: list = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_queries) as executor:
+        futures = [executor.submit(_search_one, plan) for plan in query_plan]
+        for future in concurrent.futures.as_completed(futures):
+            all_sources.extend(future.result())
+    return all_sources
+
+
 @instrument_node("retrieve")
 def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     question = state.user_query
@@ -1313,20 +1342,14 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         },
     )
 
-    mcp_connector = ScientificPapersMCPConnector()
+    mcp_rate = float(os.getenv("RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND") or "2.0")
+    mcp_connector = ScientificPapersMCPConnector(max_requests_per_second=mcp_rate)
     mcp_max_per_source = _env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
     retrieved_by_source: dict[str, list[RetrievedSource]] = {}
 
-    for plan in query_plan:
-        try:
-            sources = mcp_connector.search(query=plan.query, max_results=mcp_max_per_source)
-            for src in sources:
-                meta = dict(src.extra_metadata or {})
-                meta.update({"intent": plan.intent, "query": plan.query})
-                src.extra_metadata = meta
-                retrieved_by_source.setdefault(src.connector, []).append(src)
-        except Exception as exc:
-            logger.warning("MCP retrieval failed for query '%s': %s", plan.query, exc)
+    all_sources = _parallel_mcp_search(query_plan, mcp_connector, mcp_max_per_source=mcp_max_per_source)
+    for src in all_sources:
+        retrieved_by_source.setdefault(src.connector, []).append(src)
 
     all_sources = [source for sources in retrieved_by_source.values() for source in sources]
     deduped_sources, dedup_stats = deduplicate_sources(all_sources, prefer_connector="openalex")
