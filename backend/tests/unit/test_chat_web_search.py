@@ -50,7 +50,6 @@ def _call_generate_quick_answer(
     tavily_key: str = "test-tavily-key",
 ) -> str:
     """Return just the answer text from the generator (backward-compat helper)."""
-    import uuid
     import routes.chat as chat_mod
 
     fake_history: list = []
