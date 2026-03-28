@@ -109,7 +109,7 @@ export function SecurityPage() {
       {/* Banners */}
       {error && <ErrorBanner title="Security error" message={error} />}
       {success && (
-        <div className="flex items-start gap-3 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
+        <div className="flex items-start gap-3 rounded-lg border-[#1a3320] bg-[#142a1a] px-4 py-3">
           <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-green-400" />
           <p className="text-sm font-sans text-green-400">{success}</p>
         </div>
@@ -120,7 +120,7 @@ export function SecurityPage() {
         {/* Card header row */}
         <div className="flex items-center justify-between gap-4 px-6 py-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-obsidian-accent-dim">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#1e1b2e]">
               {enabled ? (
                 <ShieldCheck className="h-4 w-4 text-obsidian-accent" />
               ) : (
@@ -168,7 +168,7 @@ export function SecurityPage() {
         {/* Enroll flow */}
         {enroll && (
           <form
-            className="flex flex-col gap-5 border-t border-obsidian-border-subtle px-6 py-5"
+            className="flex flex-col gap-5 border-t border-obsidian-border px-6 py-5"
             onSubmit={handleVerify}
           >
             {/* QR code */}
@@ -194,7 +194,7 @@ export function SecurityPage() {
                   type="button"
                   onClick={() => copySecret(enroll.secret)}
                   title="Copy secret"
-                  className="shrink-0 cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-obsidian-accent-dim hover:text-obsidian-text focus:outline-none"
+                  className="shrink-0 cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-[#1e1b2e] hover:text-obsidian-text focus:outline-none"
                 >
                   {copied ? (
                     <CheckCircle className="h-3.5 w-3.5 text-green-400" />
@@ -254,7 +254,7 @@ export function SecurityPage() {
         {/* Disable flow */}
         {enabled && (
           <form
-            className="flex flex-col gap-4 border-t border-obsidian-border-subtle px-6 py-5"
+            className="flex flex-col gap-4 border-t border-obsidian-border px-6 py-5"
             onSubmit={handleDisable}
           >
             <p className="text-sm text-obsidian-muted">

@@ -18,8 +18,10 @@ from db.repositories.project_runs import (
 
 
 def test_project_and_run_visibility_is_scoped_to_creator() -> None:
+    import db.models  # noqa: F401 — registers all models with Base.metadata
+
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine, tables=[ProjectRow.__table__, RunRow.__table__])
+    Base.metadata.create_all(engine)
 
     SessionLocal = sessionmaker(bind=engine, future=True)
     tenant_id = UUID("00000000-0000-0000-0000-000000000001")

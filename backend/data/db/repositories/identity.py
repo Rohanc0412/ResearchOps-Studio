@@ -68,10 +68,10 @@ def create_user(
     return user
 
 
-def get_user_by_id(session: Session, *, user_id: UUID) -> AuthUserRow | None:
+def get_user_by_id(session: Session, *, tenant_id: UUID, user_id: UUID) -> AuthUserRow | None:
     stmt = (
         select(AuthUserRow)
-        .where(AuthUserRow.id == user_id)
+        .where(AuthUserRow.tenant_id == tenant_id, AuthUserRow.id == user_id)
         .options(selectinload(AuthUserRow.user_roles))
     )
     return session.execute(stmt).scalar_one_or_none()

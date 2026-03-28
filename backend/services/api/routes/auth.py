@@ -292,17 +292,16 @@ def register(request: Request, response: Response, body: RegisterIn) -> AuthToke
 
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        user = create_user(
-            session=session,
-            tenant_id=tenant_id,
-            username=username,
-            email=email,
-            password_hash=password_hash,
-            role_names=["owner"],
-            is_active=True,
-        )
         try:
-            session.flush()
+            user = create_user(
+                session=session,
+                tenant_id=tenant_id,
+                username=username,
+                email=email,
+                password_hash=password_hash,
+                role_names=["owner"],
+                is_active=True,
+            )
         except IntegrityError as e:
             raise HTTPException(status_code=409, detail="Username already exists") from e
 
@@ -381,7 +380,7 @@ def refresh(request: Request, response: Response) -> AuthTokensOut:
         if _utc(token_row.expires_at) <= now:
             raise HTTPException(status_code=401, detail="Refresh token expired")
 
-        user = get_user_by_id(session, user_id=token_row.user_id)
+        user = get_user_by_id(session, tenant_id=token_row.tenant_id, user_id=token_row.user_id)
         if user is None or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid refresh token")
 
@@ -523,7 +522,7 @@ def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> di
             )
             raise HTTPException(status_code=401, detail="Invalid or expired reset token")
 
-        user = get_user_by_id(session, user_id=reset_row.user_id)
+        user = get_user_by_id(session, tenant_id=reset_row.tenant_id, user_id=reset_row.user_id)
         if user is None or not user.is_active:
             logger.warning(
                 "Password reset confirm rejected (invalid user)",
@@ -680,13 +679,18 @@ def mfa_verify(request: Request, response: Response, body: MfaChallengeIn) -> Au
     except ValueError as e:
         raise HTTPException(status_code=401, detail="Invalid MFA token") from e
 
+    tenant_claim = claims.get("tenant_id")
+    if not isinstance(tenant_claim, str) or not tenant_claim:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+    try:
+        tenant_uuid_from_claim = UUID(tenant_claim)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail="Invalid MFA token") from e
+
     SessionLocal = request.app.state.SessionLocal
     with session_scope(SessionLocal) as session:
-        user = get_user_by_id(session, user_id=user_uuid)
+        user = get_user_by_id(session, tenant_id=tenant_uuid_from_claim, user_id=user_uuid)
         if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid MFA token")
-        tenant_claim = claims.get("tenant_id")
-        if isinstance(tenant_claim, str) and tenant_claim != str(user.tenant_id):
             raise HTTPException(status_code=401, detail="Invalid MFA token")
         factor = _mfa_factor(session, user_id=user.id)
         if factor is None:

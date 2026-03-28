@@ -20,8 +20,10 @@ from db.models.snapshots import SnapshotRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
 from db.models.snippets import SnippetRow
 from embeddings import (
+    MODEL_EMBED_RAM_GB,
     SentenceTransformerEmbedClient,
     get_embed_worker_pool,
+    get_free_ram_gb,
     get_hf_client,
     get_ollama_client,
     get_sentence_transformer_client,
@@ -193,11 +195,13 @@ def _embed_texts_batched(
         return []
     if isinstance(client, SentenceTransformerEmbedClient):
         cpu_cap = max(1, (os.cpu_count() or 2) // 2)
-        n_workers = min(
-            _env_int("RETRIEVER_EMBED_WORKERS", min(2, cpu_cap), min_value=1),
-            cpu_cap,
-        )
-        if n_workers > 1:
+        free_ram = get_free_ram_gb()
+        ram_cap = max(1, int(free_ram / MODEL_EMBED_RAM_GB)) if free_ram is not None else cpu_cap
+        hard_cap = _env_int("RETRIEVER_EMBED_MODELS", 3, min_value=1)
+        # pool_size = model instances (RAM-bound); n_chunks = parallelism hint (can exceed pool_size)
+        pool_size = min(cpu_cap, ram_cap, hard_cap)
+        n_chunks = _env_int("RETRIEVER_EMBED_CHUNKS", pool_size, min_value=1)
+        if pool_size > 1:
             try:
                 pool = get_embed_worker_pool(
                     model_name=client.model_name,
@@ -206,9 +210,9 @@ def _embed_texts_batched(
                     max_seq_length=client.max_seq_length,
                     dtype=client.dtype,
                     trust_remote_code=client.trust_remote_code,
-                    n_workers=n_workers,
+                    n_workers=pool_size,
                 )
-                return pool.encode(texts)
+                return pool.encode(texts, n_chunks=n_chunks)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("EmbedWorkerPool failed, falling back to sequential: %s", exc)
     embeddings: list[list[float]] = []
@@ -219,7 +223,7 @@ def _embed_texts_batched(
 
 
 def _parallel_search_sections(
-    section_queries: list[tuple[str, list[float]]],
+    section_queries: list[tuple[str, list[list[float]]]],
     engine,
     *,
     tenant_id,
@@ -232,40 +236,49 @@ def _parallel_search_sections(
     """
     Run search_snippets for each section in parallel.
 
+    Each section receives a list of query embeddings (one per search angle).
+    All angles are searched, results merged, and duplicates removed keeping the
+    highest similarity score per snippet.
+
     Each thread creates its own SQLAlchemy session (sessions are not thread-safe).
     Returns a dict mapping section_id → raw search results.
     """
     parallel = _env_int("EVIDENCE_PACK_PARALLEL_SECTIONS", 4, min_value=1)
 
-    def _search_one(section_id: str, query_embedding: list[float]) -> tuple[str, list[dict]]:
+    def _search_one(section_id: str, query_embeddings: list[list[float]]) -> tuple[str, list[dict]]:
         with Session(engine) as s:
-            results = list(search_snippets(
-                session=s,
-                tenant_id=tenant_id,
-                query_embedding=query_embedding,
-                embedding_model=embedding_model,
-                limit=search_limit,
-                min_similarity=min_similarity,
-                source_ids=source_ids or None,
-            ))
-            if len(results) < min_required:
-                relaxed = list(search_snippets(
+            all_results: list[dict] = []
+            for qe in query_embeddings:
+                all_results.extend(search_snippets(
                     session=s,
                     tenant_id=tenant_id,
-                    query_embedding=query_embedding,
+                    query_embedding=qe,
                     embedding_model=embedding_model,
-                    limit=search_limit + 30,
-                    min_similarity=max(0.0, min_similarity - 0.15),
+                    limit=search_limit,
+                    min_similarity=min_similarity,
                     source_ids=source_ids or None,
                 ))
-                results = _dedupe_results(results + relaxed)
-        return section_id, results
+            merged = _dedupe_results(all_results)
+            if len(merged) < min_required:
+                relaxed: list[dict] = []
+                for qe in query_embeddings:
+                    relaxed.extend(search_snippets(
+                        session=s,
+                        tenant_id=tenant_id,
+                        query_embedding=qe,
+                        embedding_model=embedding_model,
+                        limit=search_limit + 30,
+                        min_similarity=max(0.0, min_similarity - 0.15),
+                        source_ids=source_ids or None,
+                    ))
+                merged = _dedupe_results(merged + relaxed)
+        return section_id, merged
 
     out: dict[str, list[dict]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as executor:
         futures = {
-            executor.submit(_search_one, section_id, query_embedding): section_id
-            for section_id, query_embedding in section_queries
+            executor.submit(_search_one, section_id, query_embeddings): section_id
+            for section_id, query_embeddings in section_queries
         }
         # Fail-fast: any thread exception re-raises here, aborting the entire evidence pack.
         # This is intentional — a pgvector error on one section likely indicates a systemic issue
@@ -282,14 +295,40 @@ def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _section_query_text(section: OutlineSection) -> str:
-    parts = [
-        section.title,
-        section.goal,
-        " ".join(section.key_points),
-        " ".join(section.suggested_evidence_themes),
-    ]
-    return " ".join(part for part in parts if part).strip()
+def _section_query_texts(section: OutlineSection, max_queries: int = 5) -> list[str]:
+    """Return up to max_queries search strings for a section.
+
+    Generates one query per angle rather than one combined blob:
+      1. title + goal  (main intent)
+      2. title + each key point  (specific angles)
+      3. each evidence theme  (specific topics)
+
+    More queries → more diverse snippet candidates → better evidence coverage.
+    """
+    queries: list[str] = []
+
+    # 1. Main query: title + goal
+    main = " ".join(p for p in [section.title, section.goal] if p).strip()
+    if main:
+        queries.append(main)
+
+    # 2. One query per key point (prefixed with title for context)
+    for kp in section.key_points:
+        if len(queries) >= max_queries:
+            break
+        kp = kp.strip()
+        if kp:
+            queries.append(f"{section.title} {kp}".strip() if section.title else kp)
+
+    # 3. One query per evidence theme
+    for theme in section.suggested_evidence_themes:
+        if len(queries) >= max_queries:
+            break
+        theme = theme.strip()
+        if theme:
+            queries.append(theme)
+
+    return queries or ([section.title] if section.title else ["research"])
 
 
 def _dedupe_results(results: Iterable[dict]) -> list[dict]:
@@ -477,19 +516,30 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
     evidence_refs: dict[str, EvidenceSnippetRef] = {}
     section_snippet_refs: dict[str, list[EvidenceSnippetRef]] = {}
 
-    section_queries: list[tuple[OutlineSection, str]] = []
+    max_queries_per_section = _env_int("EVIDENCE_MAX_QUERIES_PER_SECTION", 5, min_value=1)
+    section_queries: list[tuple[OutlineSection, list[str]]] = []
     for section in outline.sections:
-        query_text = _section_query_text(section)
-        if query_text:
-            section_queries.append((section, query_text))
+        query_texts = _section_query_texts(section, max_queries=max_queries_per_section)
+        if query_texts:
+            section_queries.append((section, query_texts))
 
-    query_vectors = _embed_texts_batched(
+    # Flatten all query texts into one list for a single batch embed call, then reshape.
+    all_query_texts = [text for _, texts in section_queries for text in texts]
+    all_query_vectors = _embed_texts_batched(
         embed_client,
-        [query for _, query in section_queries],
+        all_query_texts,
         batch_size=embed_batch_size,
     )
-    if len(query_vectors) != len(section_queries):
-        raise ValueError("Mismatch between outline sections and query embeddings.")
+    if len(all_query_vectors) != len(all_query_texts):
+        raise ValueError("Mismatch between section query texts and embeddings.")
+
+    # Reshape flat vector list back into per-section lists.
+    section_vector_lists: list[tuple[OutlineSection, list[list[float]]]] = []
+    idx = 0
+    for section, texts in section_queries:
+        n = len(texts)
+        section_vector_lists.append((section, all_query_vectors[idx : idx + n]))
+        idx += n
 
     # Parallel: run all section searches concurrently (each thread gets its own session)
     _bind = session.get_bind()
@@ -500,8 +550,8 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
         )
     engine = _bind
     search_inputs = [
-        (section.section_id, query_embedding)
-        for (section, _), query_embedding in zip(section_queries, query_vectors, strict=True)
+        (section.section_id, query_embeddings)
+        for section, query_embeddings in section_vector_lists
     ]
     section_raw_results = _parallel_search_sections(
         search_inputs,
@@ -515,7 +565,7 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
     )
 
     # Sequential: post-process and persist (DB writes use main session)
-    for (section, _), query_embedding in zip(section_queries, query_vectors, strict=True):
+    for section, _ in section_vector_lists:
         results = section_raw_results.get(section.section_id, [])
         results = sorted(results, key=lambda item: item["similarity"], reverse=True)
         selected = _select_diverse_snippets(

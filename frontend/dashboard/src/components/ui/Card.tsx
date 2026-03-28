@@ -4,7 +4,7 @@ import { cx } from "../../utils/format";
 type CardVariant = "default" | "flat" | "highlighted";
 
 const variantClasses: Record<CardVariant, string> = {
-  default:     "border-obsidian-border-subtle bg-obsidian-surface-elevated shadow-surface",
+  default:     "border-obsidian-border bg-obsidian-surface-elevated shadow-surface",
   flat:        "border-transparent bg-obsidian-surface-elevated",
   highlighted: "border-obsidian-accent bg-obsidian-surface-elevated shadow-accent",
 };

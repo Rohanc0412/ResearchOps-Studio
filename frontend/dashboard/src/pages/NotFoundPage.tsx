@@ -8,7 +8,7 @@ export function NotFoundPage() {
 
   return (
     <div className="flex flex-col items-center justify-center py-24 gap-6 text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-obsidian-accent-dim">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#1e1b2e]">
         <FolderOpen className="h-7 w-7 text-obsidian-accent" />
       </div>
       <div>

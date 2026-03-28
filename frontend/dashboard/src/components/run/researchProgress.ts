@@ -55,11 +55,11 @@ const STAGE_TO_STEP_INDEX: Record<string, number> = {
 };
 
 const FALLBACK_STEP_LABELS: string[] = [
-  "Search papers and collect evidence.",
-  "Structure the report outline.",
-  "Package evidence per section.",
-  "Draft each section with citations.",
-  "Review quality and evidence coverage.",
+  "Search papers and rank the best sources.",
+  "Plan the report structure and sections.",
+  "Find supporting snippets for each section.",
+  "Write each section with citations.",
+  "Check quality and fix weak sections.",
   "Export the final report.",
 ];
 
@@ -242,9 +242,9 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
   let step0: string | null = null;
   if (queryCount !== null || foundTotal !== null || selectedTotal !== null) {
     const parts: string[] = [];
-    if (queryCount !== null) parts.push(`${queryCount} q`);
+    if (queryCount !== null) parts.push(`${queryCount} queries`);
     if (foundTotal !== null) parts.push(`${foundTotal} found`);
-    if (selectedTotal !== null) parts.push(`${selectedTotal} sel.`);
+    if (selectedTotal !== null) parts.push(`${selectedTotal} selected`);
     step0 = parts.join(" · ");
   }
 
@@ -368,37 +368,37 @@ function humanizeEventMessage(event: RunEvent) {
   const sectionLabel = prettifyIdentifier(readSectionId(event.payload));
 
   if (event.stage === "retrieve") {
-    if (message.includes("plan")) return "Planning the search strategy.";
-    if (message.includes("query")) return "Collecting search queries and source targets.";
-    if (message.includes("rerank")) return "Ranking the strongest sources to cite.";
-    if (message.includes("completed")) return "Collected evidence from the latest literature.";
-    return "Collecting recent evidence and literature.";
+    if (message.includes("plan")) return "Planning which searches to run.";
+    if (message.includes("query")) return "Running searches across academic databases.";
+    if (message.includes("rerank")) return "Ranking and selecting the best sources.";
+    if (message.includes("completed")) return "Sources collected and ranked.";
+    return "Searching for relevant papers and sources.";
   }
 
   if (event.stage === "outline") {
-    return "Structuring the report into major themes.";
+    return "Planning the report structure and sections.";
   }
 
   if (event.stage === "ingest" || event.stage === "evidence_pack") {
-    if (sectionLabel) return `Packaging evidence for ${sectionLabel}.`;
-    return "Packaging evidence and study notes for drafting.";
+    if (sectionLabel) return `Finding supporting snippets for ${sectionLabel}.`;
+    return "Finding supporting snippets for each section.";
   }
 
   if (event.stage === "draft") {
-    if (message.includes("section_started") && sectionLabel) return `Drafting ${sectionLabel}.`;
-    if (message.includes("section_completed") && sectionLabel) return `Drafted ${sectionLabel}.`;
-    return "Comparing findings and drafting the report.";
+    if (message.includes("section_started") && sectionLabel) return `Writing ${sectionLabel}.`;
+    if (message.includes("section_completed") && sectionLabel) return `Finished writing ${sectionLabel}.`;
+    return "Writing each section with citations.";
   }
 
   if (event.stage === "evaluate" || event.stage === "validate" || event.stage === "repair" || event.stage === "factcheck") {
     if (message.includes("section_started") && sectionLabel) return `Reviewing ${sectionLabel}.`;
     if (message.includes("section_completed") && sectionLabel) return `Reviewed ${sectionLabel}.`;
-    if (event.stage === "repair") return "Repairing sections that need stronger support.";
-    return "Checking quality, evidence coverage, and consistency.";
+    if (event.stage === "repair") return "Strengthening sections with weak evidence.";
+    return "Checking quality, citations, and consistency.";
   }
 
   if (event.stage === "export") {
-    return "Exporting the final report artifacts.";
+    return "Preparing the final report for download.";
   }
 
   return sentenceCase(message.replace(/[._]/g, " "));

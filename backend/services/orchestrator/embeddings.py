@@ -342,6 +342,55 @@ def get_hf_client(
     return client
 
 
+# ── Free RAM detection (no psutil dependency) ─────────────────────────────────
+
+# Approximate RAM consumed per bge-m3 worker process.
+MODEL_EMBED_RAM_GB: float = 1.5
+
+
+def get_free_ram_gb() -> float | None:
+    """Return available system RAM in GiB using platform-specific APIs.
+
+    Supports Windows (GlobalMemoryStatusEx) and Linux (/proc/meminfo).
+    Returns None when the value cannot be determined so callers can fall back
+    to the CPU-count cap instead.
+    """
+    import platform
+
+    system = platform.system()
+    try:
+        if system == "Windows":
+            import ctypes
+            import ctypes.wintypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.wintypes.DWORD),
+                    ("dwMemoryLoad", ctypes.wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            stat = _MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(stat)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))  # type: ignore[attr-defined]
+            return stat.ullAvailPhys / (1024**3)
+        if system == "Linux":
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    if line.startswith("MemAvailable:"):
+                        kb = int(line.split()[1])
+                        return kb / (1024**2)
+    except Exception:
+        pass
+    return None
+
+
 # ── Multiprocess embedding pool (local SentenceTransformer only) ──────────────
 
 # Module-level state inside each worker process
@@ -436,14 +485,20 @@ class EmbedWorkerPool:
         # handlers that may depend on the model being unloaded.
         atexit.register(self.shutdown)
 
-    def encode(self, texts: list[str]) -> list[list[float]]:
-        """Distribute texts across workers and return embeddings in original order."""
+    def encode(self, texts: list[str], *, n_chunks: int | None = None) -> list[list[float]]:
+        """Distribute texts across workers and return embeddings in original order.
+
+        n_chunks controls how many pieces the text list is split into before being
+        submitted to the pool. It can exceed the pool size — extra chunks simply queue
+        behind the running ones, improving load balancing when chunk lengths vary.
+        Defaults to the pool size when not specified.
+        """
         if not texts:
             return []
         if self._n_workers <= 1 or len(texts) <= 1:
             return self._executor.submit(_worker_encode, texts).result()
-        # Split into N equal chunks
-        chunk_size = math.ceil(len(texts) / self._n_workers)
+        count = max(1, n_chunks if n_chunks is not None else self._n_workers)
+        chunk_size = math.ceil(len(texts) / count)
         chunks = [texts[i : i + chunk_size] for i in range(0, len(texts), chunk_size)]
         futures = [self._executor.submit(_worker_encode, chunk) for chunk in chunks]
         result: list[list[float]] = []

@@ -1188,7 +1188,7 @@ export function ChatViewPage() {
 
           {report.sections.length === 0 ? (
             <div className="py-20 text-center text-slate-500">
-              <div className="mb-4 text-5xl opacity-50">????</div>
+              <div className="mb-4 text-5xl opacity-50">📊</div>
               <p className="text-sm">Your report will appear here</p>
               <p className="mt-2 text-xs text-slate-600">Start a conversation to generate content</p>
             </div>

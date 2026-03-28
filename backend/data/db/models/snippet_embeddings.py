@@ -4,7 +4,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from pgvector.sqlalchemy import Vector
+try:
+    from pgvector.sqlalchemy import Vector as _Vector
+
+    _PGVECTOR_AVAILABLE = True
+except ImportError:
+    _Vector = None  # type: ignore[assignment,misc]
+    _PGVECTOR_AVAILABLE = False
+
 from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
@@ -26,6 +33,15 @@ if TYPE_CHECKING:
 
 _EMBEDDING_DIMS = 1024
 
+# Build the column type once at import time so that Vector() is only called
+# when pgvector is available.  On SQLite (and when pgvector is absent) the
+# column falls back to a plain JSON array.
+_embedding_col_type = (
+    JSON().with_variant(_Vector(_EMBEDDING_DIMS), "postgresql")
+    if _PGVECTOR_AVAILABLE
+    else JSON()
+)
+
 
 class SnippetEmbeddingRow(Base):
     __tablename__ = "snippet_embeddings"
@@ -45,9 +61,7 @@ class SnippetEmbeddingRow(Base):
     snippet_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
     embedding_model: Mapped[str] = mapped_column(String(200), nullable=False)
     dims: Mapped[int] = mapped_column(Integer(), nullable=False)
-    embedding: Mapped[list[float]] = mapped_column(
-        JSON().with_variant(Vector(_EMBEDDING_DIMS), "postgresql"), nullable=False
-    )
+    embedding: Mapped[list[float]] = mapped_column(_embedding_col_type, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )

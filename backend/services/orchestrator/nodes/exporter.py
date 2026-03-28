@@ -98,6 +98,8 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     run_row.finished_at = now
     run_row.updated_at = now
     run_row.status = RunStatusDb.succeeded
+    if state.outline and state.outline.report_title:
+        run_row.report_title = state.outline.report_title
     if warnings:
         usage = dict(get_run_usage_metrics(run_row))
         usage["warnings"] = warnings
@@ -171,7 +173,8 @@ def _assemble_report(
     warnings: list[str] = []
 
     if sections and drafts:
-        lines: list[str] = [f"# Research Report: {state.user_query}", ""]
+        report_title = (state.outline and state.outline.report_title) or f"Research Report: {state.user_query}"
+        lines: list[str] = [f"# {report_title}", ""]
         for section in sections:
             lines.append(f"## {section.section_order}. {section.title}")
             lines.append("")
@@ -211,6 +214,7 @@ def _apply_citation_footnotes(
 
     citation_counter = 0
     citation_ids_used: dict[str, int] = {}
+    source_ids_used: dict[str, int] = {}
     footnotes: list[str] = []
 
     def replace_citation(match: re.Match) -> str:
@@ -222,10 +226,15 @@ def _apply_citation_footnotes(
 
         if snippet_id in citation_ids_used:
             footnote_num = citation_ids_used[snippet_id]
+        elif str(source.source_id) in source_ids_used:
+            # Different snippet from the same source — reuse existing footnote number.
+            footnote_num = source_ids_used[str(source.source_id)]
+            citation_ids_used[snippet_id] = footnote_num
         else:
             citation_counter += 1
             footnote_num = citation_counter
             citation_ids_used[snippet_id] = footnote_num
+            source_ids_used[str(source.source_id)] = footnote_num
 
             authors_str = ", ".join(source.authors[:3]) if source.authors else "Unknown"
             if source.authors and len(source.authors) > 3:

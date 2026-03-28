@@ -28,7 +28,8 @@ def test_section_searches_run_in_parallel():
     fake_session_ctx.__enter__ = mock.Mock(return_value=fake_session_instance)
     fake_session_ctx.__exit__ = mock.Mock(return_value=False)
 
-    section_queries = [(f"s{i}", [0.1 * i] * 10) for i in range(4)]
+    # Each section now receives a list of query embeddings (one per search angle)
+    section_queries = [(f"s{i}", [[0.1 * i] * 10]) for i in range(4)]
 
     with mock.patch("services.orchestrator.nodes.evidence_packer.search_snippets", side_effect=fake_search_snippets):
         with mock.patch("services.orchestrator.nodes.evidence_packer.Session", return_value=fake_session_ctx):

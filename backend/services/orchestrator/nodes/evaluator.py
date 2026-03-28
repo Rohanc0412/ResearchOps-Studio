@@ -359,6 +359,10 @@ def _persist_section_review(
     )
     now = datetime.utcnow()
     if row:
+        # Clear old issues and flush before inserting new ones to avoid
+        # UniqueViolation on (review_id, issue_order) during re-evaluation.
+        row.issues = []
+        session.flush()
         row.verdict = verdict
         row.issues_json = issues
         row.reviewed_at = now

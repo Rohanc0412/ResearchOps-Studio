@@ -17,6 +17,7 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    bind.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(bind)
 
 

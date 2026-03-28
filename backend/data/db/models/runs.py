@@ -73,6 +73,7 @@ class RunRow(Base):
         String(50), nullable=False, server_default="report"
     )
     client_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    report_title: Mapped[str | None] = mapped_column(Text(), nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -148,7 +149,12 @@ class RunRow(Base):
         payload: dict[str, object] = {}
         for row in self.usage_metrics:
             if row.metric_text is not None:
-                payload[row.metric_name] = row.metric_text
+                if row.metric_text == "true":
+                    payload[row.metric_name] = True
+                elif row.metric_text == "false":
+                    payload[row.metric_name] = False
+                else:
+                    payload[row.metric_name] = row.metric_text
             elif row.metric_number is not None:
                 payload[row.metric_name] = int(row.metric_number)
         return payload

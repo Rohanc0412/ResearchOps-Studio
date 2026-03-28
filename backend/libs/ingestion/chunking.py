@@ -62,18 +62,24 @@ def chunk_text(
     while start < len(text):
         end = min(start + max_chars, len(text))
 
+        found_para = False
         if end < len(text):
-            search_start = start + int(max_chars * 0.8)
+            # Search the full window with rfind so we take the latest possible
+            # paragraph or sentence break, ensuring chunks are as full as possible.
+            search_start = start
             search_region = text[search_start:end]
             para_break = search_region.rfind("\n\n")
 
             if para_break != -1:
                 end = search_start + para_break + 2
+                found_para = True
             else:
                 sentence_pattern = r"[.!?][\s\n]+"
-                matches = list(re.finditer(sentence_pattern, text[search_start:end]))
+                # Prefer a break in the last 40% of the window for sentence splits
+                sentence_search_start = start + int(max_chars * 0.6)
+                matches = list(re.finditer(sentence_pattern, text[sentence_search_start:end]))
                 if matches:
-                    end = search_start + matches[-1].end()
+                    end = sentence_search_start + matches[-1].end()
 
         chunk_value = text[start:end]
         chunks.append(
@@ -86,7 +92,11 @@ def chunk_text(
         )
 
         if end < len(text):
-            start = max(start + 1, end - overlap_chars)
+            if found_para:
+                # Don't overlap back past a paragraph boundary
+                start = end
+            else:
+                start = max(start + 1, end - overlap_chars)
         else:
             break
 

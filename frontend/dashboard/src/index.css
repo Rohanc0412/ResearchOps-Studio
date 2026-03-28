@@ -21,17 +21,10 @@
     @apply outline-none ring-2 ring-obsidian-accent ring-offset-1 ring-offset-obsidian-bg;
   }
 
-  /* Smooth transitions on color/bg/border by default.
-     Intentionally excludes box-shadow and opacity — those are used by
-     halo-pulse, dot-blink, and letter-breathe animations and a global
-     transition on those properties interferes with the keyframe animations. */
-  *,
-  *::before,
-  *::after {
-    transition-property: color, background-color, border-color;
-    transition-duration: 150ms;
-    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  }
+  /* DO NOT apply global background-color transitions — stacked parent/child
+     elements with different bg colors animate independently, causing "patchy"
+     banding artifacts on dark displays. Apply transitions only per-element
+     via Tailwind's transition-colors utility where needed. */
 
   /* Honour reduced-motion */
   @media (prefers-reduced-motion: reduce) {

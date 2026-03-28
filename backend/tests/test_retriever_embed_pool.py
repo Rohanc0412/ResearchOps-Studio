@@ -26,11 +26,11 @@ def test_embed_texts_batched_uses_pool_for_local_client():
     mock_pool = mock.MagicMock()
     mock_pool.encode.return_value = [[0.1, 0.2], [0.3, 0.4]]
 
-    with mock.patch.dict(os.environ, {"RETRIEVER_EMBED_WORKERS": "2"}):
+    with mock.patch.dict(os.environ, {"RETRIEVER_EMBED_CHUNKS": "2"}):
         with mock.patch("services.orchestrator.nodes.retriever.get_embed_worker_pool", return_value=mock_pool):
             result = ret._embed_texts_batched(client, ["hello", "world"], batch_size=32)
 
-    mock_pool.encode.assert_called_once_with(["hello", "world"])
+    mock_pool.encode.assert_called_once_with(["hello", "world"], n_chunks=mock.ANY)
     assert result == [[0.1, 0.2], [0.3, 0.4]]
 
 
@@ -48,8 +48,12 @@ def test_embed_texts_batched_falls_back_for_non_local_client():
     assert all(v == [0.5, 0.5, 0.5] for v in result)
 
 
-def test_embed_texts_batched_falls_back_when_workers_is_1():
-    """_embed_texts_batched uses sequential batching when RETRIEVER_EMBED_WORKERS=1."""
+def test_embed_texts_batched_falls_back_when_max_workers_is_1():
+    """_embed_texts_batched uses sequential batching when RETRIEVER_EMBED_MODELS=1.
+
+    RETRIEVER_EMBED_CHUNKS controls chunk count; RETRIEVER_EMBED_MODELS controls
+    pool size (model instances). Setting MAX_WORKERS=1 means pool_size=1 → sequential.
+    """
     import services.orchestrator.nodes.retriever as ret
     from embeddings import SentenceTransformerEmbedClient
 
@@ -64,13 +68,13 @@ def test_embed_texts_batched_falls_back_when_workers_is_1():
     call_log = []
     client.embed_texts = lambda texts: (call_log.append(texts), [[0.1] * 3 for _ in texts])[1]
 
-    with mock.patch.dict(os.environ, {"RETRIEVER_EMBED_WORKERS": "1"}):
+    with mock.patch.dict(os.environ, {"RETRIEVER_EMBED_MODELS": "1"}):
         with mock.patch("services.orchestrator.nodes.retriever.get_embed_worker_pool") as mock_get_pool:
             result = ret._embed_texts_batched(client, ["a", "b", "c"], batch_size=2)
 
-    # Pool should never be called when workers=1
+    # Pool should never be created when pool_size (MAX_WORKERS) is 1
     mock_get_pool.assert_not_called()
-    # Should have been called in 2 batches: ["a","b"] and ["c"]
+    # Sequential batching: ["a","b"] then ["c"]
     assert len(call_log) == 2
     assert call_log[0] == ["a", "b"]
     assert call_log[1] == ["c"]

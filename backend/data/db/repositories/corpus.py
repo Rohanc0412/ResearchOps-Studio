@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from db.models.source_authors import SourceAuthorRow
@@ -175,8 +176,17 @@ def create_or_get_source(
         created_at=now,
         updated_at=now,
     )
-    session.add(source)
-    session.flush()
+    try:
+        session.add(source)
+        session.flush()
+    except IntegrityError:
+        # Another worker inserted the same canonical_id concurrently.
+        # Roll back to the savepoint and return the row they inserted.
+        session.rollback()
+        race_winner = get_source_by_canonical_id(session, tenant_id=tenant_id, canonical_id=canonical_id)
+        if race_winner is None:
+            raise  # genuine integrity error unrelated to this insert
+        return race_winner
     replace_source_authors(source, authors)
     set_source_identifier(source, "doi", doi)
     set_source_identifier(source, "arxiv_id", arxiv_id)

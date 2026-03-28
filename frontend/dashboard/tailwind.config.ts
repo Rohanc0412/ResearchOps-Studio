@@ -25,10 +25,11 @@ export default {
           surface:            "#101015",
           "surface-elevated": "#16161e",
           border:             "#1c1c24",
-          "border-subtle":    "rgba(255,255,255,0.06)",
+          "border-subtle":    "#1c1c24",          // was rgba — replaced with solid
           accent:             "#9580c4",
-          "accent-dim":       "rgba(149,128,196,0.15)",
-          "accent-glow":      "rgba(149,128,196,0.35)",
+          "accent-dim":       "#1e1b2e",          // was rgba(149,128,196,0.15) — solid equivalent
+          "accent-glow":      "#2d2545",          // was rgba(149,128,196,0.35) — solid equivalent
+          "accent-muted":     "#6b5a9a",          // solid mid-tone accent for subtle UI
           text:               "#e0dde6",
           muted:              "#8a8694",
         },

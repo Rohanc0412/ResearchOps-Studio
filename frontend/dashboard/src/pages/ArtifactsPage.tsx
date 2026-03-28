@@ -86,16 +86,16 @@ export function ArtifactsPage() {
                   "bg-obsidian-surface-elevated transition-colors",
                   a.id === focusArtifact?.id || a.id === preview?.id
                     ? "border-obsidian-accent"
-                    : "border-obsidian-border-subtle",
+                    : "border-obsidian-border",
                 ].join(" ")}
               >
                 {/* Icon + info */}
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-obsidian-accent-dim">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#1e1b2e]">
                   <FileText className="h-3.5 w-3.5 text-obsidian-accent" />
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <span className="inline-block rounded-md border border-obsidian-accent/25 bg-obsidian-accent-dim px-2 py-0.5 font-mono text-[11px] font-medium text-obsidian-accent">
+                  <span className="inline-block rounded-md border border-[#2d2545] bg-[#1e1b2e] px-2 py-0.5 font-mono text-[11px] font-medium text-obsidian-accent">
                     {a.type}
                   </span>
                   <div className="mt-0.5 font-mono text-xs text-obsidian-muted">
@@ -130,7 +130,7 @@ export function ArtifactsPage() {
 
           {/* Preview panel — 60% */}
           <div className="overflow-hidden rounded-xl border border-obsidian-border bg-obsidian-surface-elevated">
-            <div className="border-b border-obsidian-border-subtle px-4 py-3">
+            <div className="border-b border-obsidian-border px-4 py-3">
               <span className="text-[11px] font-semibold uppercase tracking-widest text-obsidian-muted">
                 Preview
               </span>

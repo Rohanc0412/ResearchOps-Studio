@@ -31,20 +31,20 @@ class SanitizationResult(TypedDict):
 _INJECTION_PATTERNS = [
     # Direct instruction attempts
     re.compile(
-        r"ignore (previous|all|above|prior) (instructions?|prompts?|rules?)",
+        r"ignore\b.{0,40}\b(instructions?|prompts?|rules?)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"disregard (previous|all|above|prior) (instructions?|prompts?|rules?)",
+        r"disregard\b.{0,40}\b(instructions?|prompts?|rules?)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"forget (previous|all|above|prior) (instructions?|prompts?|rules?)",
+        r"forget\b.{0,40}\b(instructions?|prompts?|rules?)",
         re.IGNORECASE,
     ),
     # System prompt leakage attempts
     re.compile(
-        r"(show|print|display|reveal|output) (your|the) (system |initial )?"
+        r"(show|print|display|reveal|output)\b.{0,20}\b(system |initial )?"
         r"(prompt|instructions?)",
         re.IGNORECASE,
     ),
@@ -79,8 +79,8 @@ def _remove_control_chars(text: str) -> str:
 
 def _normalize_whitespace(text: str) -> str:
     """Normalize excessive whitespace."""
-    # Replace multiple spaces with single space (but preserve newlines)
-    text = re.sub(r"[ \t]+", " ", text)
+    # Replace multiple spaces with single space (but preserve newlines and tabs)
+    text = re.sub(r" +", " ", text)
     # Replace more than 2 consecutive newlines with 2
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

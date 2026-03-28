@@ -204,7 +204,7 @@ export function LoginPage() {
           <ul className="space-y-4">
             {FEATURES.map(({ icon: Icon, label }) => (
               <li key={label} className="flex items-center gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-obsidian-accent-dim">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#1e1b2e]">
                   <Icon className="h-4 w-4 text-obsidian-accent" />
                 </div>
                 <span className="text-sm text-obsidian-muted">{label}</span>
@@ -241,7 +241,7 @@ export function LoginPage() {
             {/* Banners */}
             {error && <ErrorBanner message={error} className="mb-6" />}
             {success && (
-              <div className="mb-6 flex items-start gap-3 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
+              <div className="mb-6 flex items-start gap-3 rounded-lg border-[#1a3320] bg-[#142a1a] px-4 py-3">
                 <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-green-400" />
                 <p className="text-sm font-sans text-green-400">{success}</p>
               </div>
@@ -250,7 +250,7 @@ export function LoginPage() {
             {/* ── MFA form ── */}
             {showMfa ? (
               <form onSubmit={onMfaSubmit} className="space-y-5">
-                <div className="rounded-lg border border-obsidian-accent/20 bg-obsidian-accent-dim px-4 py-3">
+                <div className="rounded-lg border border-[#2d2545] bg-[#1e1b2e] px-4 py-3">
                   <p className="text-sm text-obsidian-muted">
                     Enter the 6-digit code from your authenticator app
                     {mfaUser && (
@@ -307,7 +307,7 @@ export function LoginPage() {
                     {isSubmitting ? "Requesting…" : "Send OTP"}
                   </Button>
                 </form>
-                <div className="mt-6 flex flex-col gap-3 border-t border-obsidian-border-subtle pt-6 text-sm">
+                <div className="mt-6 flex flex-col gap-3 border-t border-obsidian-border pt-6 text-sm">
                   <div className="flex items-center justify-between">
                     <span className="text-obsidian-muted">Remembered your password?</span>
                     <button
@@ -393,7 +393,7 @@ export function LoginPage() {
                     {isSubmitting ? "Updating…" : "Reset password"}
                   </Button>
                 </form>
-                <div className="mt-6 flex flex-col gap-3 border-t border-obsidian-border-subtle pt-6 text-sm">
+                <div className="mt-6 flex flex-col gap-3 border-t border-obsidian-border pt-6 text-sm">
                   <div className="flex items-center justify-between">
                     <span className="text-obsidian-muted">Back to sign in?</span>
                     <button type="button" onClick={() => switchMode("login")}
@@ -500,7 +500,7 @@ export function LoginPage() {
                   </div>
                 )}
 
-                <div className="mt-6 flex items-center justify-between border-t border-obsidian-border-subtle pt-6 text-sm">
+                <div className="mt-6 flex items-center justify-between border-t border-obsidian-border pt-6 text-sm">
                   <span className="text-obsidian-muted">
                     {isRegister ? "Already have an account?" : "New to ResearchOps Studio?"}
                   </span>

@@ -19,14 +19,17 @@ def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) ->
             conn.execute(text("PRAGMA busy_timeout=30000"))
         import db.models  # noqa: F401
         Base.metadata.create_all(engine)
-        _seed_reference_data(engine)
+        with engine.begin() as conn:
+            _seed_reference_data(conn)
         return
 
     last_error: Exception | None = None
     for _ in range(retries):
         try:
             if engine.dialect.name == "postgresql":
-                # Serialize schema init across api/worker containers to avoid races.
+                # Serialize schema init *and* seeding across api/worker containers.
+                # Running both inside the advisory-lock transaction means no container
+                # can race to seed roles while another is still migrating.
                 from alembic import command
                 from alembic.config import Config
 
@@ -41,11 +44,12 @@ def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) ->
                     cfg.set_main_option("prepend_sys_path", str(backend_root))
                     cfg.attributes["connection"] = conn
                     command.upgrade(cfg, "head")
-                _seed_reference_data(engine)
+                    _seed_reference_data(conn)
             else:
                 import db.models  # noqa: F401
                 Base.metadata.create_all(engine)
-                _seed_reference_data(engine)
+                with engine.begin() as conn:
+                    _seed_reference_data(conn)
             return
         except IntegrityError as e:
             last_error = e
@@ -57,13 +61,12 @@ def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) ->
     raise last_error
 
 
-def _seed_reference_data(engine: Engine) -> None:
-    with engine.begin() as conn:
-        existing = {
-            row[0]
-            for row in conn.execute(sa.select(RoleRow.name))
-        }
-        for role_name in ("owner", "admin", "researcher", "viewer"):
-            if role_name in existing:
-                continue
-            conn.execute(sa.insert(RoleRow).values(name=role_name, description=f"Built-in {role_name} role"))
+def _seed_reference_data(conn: sa.engine.Connection) -> None:
+    existing = {
+        row[0]
+        for row in conn.execute(sa.select(RoleRow.name))
+    }
+    for role_name in ("owner", "admin", "researcher", "viewer"):
+        if role_name in existing:
+            continue
+        conn.execute(sa.insert(RoleRow).values(name=role_name, description=f"Built-in {role_name} role"))

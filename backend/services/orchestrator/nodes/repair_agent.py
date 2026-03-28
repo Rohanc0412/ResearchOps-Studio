@@ -593,7 +593,8 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             prior_summary = section_summaries.get(ordered_ids[section_index - 1], "")
 
         if section_index + 1 >= len(ordered_ids):
-            raise ValueError(f"Next section missing for continuity patch after {section_id}")
+            # Last section has no next section for continuity patch; skip repair for it.
+            continue
         next_section_id = ordered_ids[section_index + 1]
         next_section = outline_by_id[next_section_id]
         next_text = section_texts.get(next_section_id, "")

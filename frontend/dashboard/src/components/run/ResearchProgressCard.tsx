@@ -165,7 +165,7 @@ export function ResearchProgressCard({
                 backgroundSize: "200% 100%",
               }}
               animate={{ backgroundPosition: ["100% center", "0% center"] }}
-              transition={{ duration: 2.5, ease: "linear", repeat: Infinity }}
+              transition={{ duration: 2.5, ease: "linear", repeat: Infinity, repeatType: "mirror" }}
             />
           ) : (
             <div
@@ -207,7 +207,7 @@ export function ResearchProgressCard({
         )}
       </div>
 
-      {/* ── Expanded events log (unchanged) ──────────────────────── */}
+      {/* ── Expanded events log ──────────────────────────────────── */}
       {expanded && (
         <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/70 p-3 md:p-4">
           <div className="mb-2 flex items-center justify-between">
@@ -334,12 +334,13 @@ function WaveText({
           <motion.span
             key={i}
             style={{ display: "inline-block" }}
-            animate={{ opacity: [1, 0.45, 1] }}
+            animate={{ opacity: [1, 0.75, 0.2, 0.75, 1] }}
             transition={{
               duration,
               ease: "easeInOut",
               repeat: Infinity,
               delay,
+              times: [0, 0.25, 0.5, 0.75, 1],
             }}
           >
             {ch}

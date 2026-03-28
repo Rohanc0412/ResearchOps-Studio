@@ -44,7 +44,7 @@ export function Sidebar() {
       {/* Branding header */}
       <div
         className={cx(
-          "flex h-14 shrink-0 items-center border-b border-obsidian-border-subtle px-3",
+          "flex h-14 shrink-0 items-center border-b border-obsidian-border px-3",
           collapsed ? "justify-center" : "justify-between"
         )}
       >
@@ -59,16 +59,22 @@ export function Sidebar() {
           </div>
         )}
         {collapsed && (
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-obsidian-accent">
-            <ShieldCheck className="h-4 w-4 text-white" />
-          </div>
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            title="Expand sidebar"
+            className="group flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-obsidian-accent hover:bg-obsidian-surface-elevated focus:outline-none"
+          >
+            <ShieldCheck className="h-4 w-4 text-white group-hover:hidden" />
+            <PanelLeftOpen className="hidden h-4 w-4 text-white group-hover:block" />
+          </button>
         )}
         {!collapsed && (
           <button
             type="button"
             onClick={() => setCollapsed(true)}
             title="Collapse sidebar"
-            className="cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-obsidian-accent-dim hover:text-obsidian-text focus:outline-none"
+            className="cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-obsidian-surface-elevated hover:text-obsidian-text focus:outline-none"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
@@ -91,7 +97,7 @@ export function Sidebar() {
           title={collapsed ? "New project" : undefined}
           className={cx(
             "mb-1 flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-obsidian-muted",
-            "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+            "hover:bg-obsidian-surface-elevated hover:text-obsidian-text",
             "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
             collapsed && "justify-center px-0"
           )}
@@ -125,11 +131,11 @@ export function Sidebar() {
                     className={({ isActive: routeActive }) =>
                       cx(
                         "relative flex items-center gap-2.5 rounded-lg py-2 text-sm",
-                        "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+                        "hover:bg-obsidian-surface-elevated hover:text-obsidian-text",
                         "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
                         collapsed ? "justify-center px-0" : "px-3",
                         routeActive
-                          ? "bg-obsidian-accent-dim text-obsidian-text"
+                          ? "bg-obsidian-surface-elevated text-obsidian-text"
                           : "text-obsidian-muted"
                       )
                     }
@@ -155,7 +161,7 @@ export function Sidebar() {
 
                   {/* Recent chats under active project */}
                   {!collapsed && isActive && activeChats.length > 0 && (
-                    <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-obsidian-border-subtle pl-3">
+                    <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-obsidian-border pl-3">
                       {activeChats.slice(0, 3).map((chat) => (
                         <NavLink
                           key={chat.id}
@@ -163,7 +169,7 @@ export function Sidebar() {
                           className={({ isActive: chatActive }) =>
                             cx(
                               "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs",
-                              "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+                              "hover:bg-obsidian-surface-elevated hover:text-obsidian-text",
                               "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
                               chatActive
                                 ? "text-obsidian-text"
@@ -184,7 +190,7 @@ export function Sidebar() {
         </div>
 
         {/* Account section — pinned to bottom */}
-        <div className="mt-auto flex flex-col gap-0.5 border-t border-obsidian-border-subtle pt-3">
+        <div className="mt-auto flex flex-col gap-0.5 border-t border-obsidian-border pt-3">
           {!collapsed && (
             <div className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
               Account
@@ -197,11 +203,11 @@ export function Sidebar() {
             className={({ isActive }) =>
               cx(
                 "flex items-center gap-2.5 rounded-lg py-2 text-sm",
-                "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+                "hover:bg-obsidian-surface-elevated hover:text-obsidian-text",
                 "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
                 collapsed ? "justify-center px-0" : "px-3",
                 isActive
-                  ? "bg-obsidian-accent-dim text-obsidian-text"
+                  ? "bg-obsidian-surface-elevated text-obsidian-text"
                   : "text-obsidian-muted"
               )
             }
@@ -221,7 +227,7 @@ export function Sidebar() {
             title={collapsed ? "Logout" : undefined}
             className={cx(
               "flex cursor-pointer items-center gap-2.5 rounded-lg py-2 text-sm text-obsidian-muted",
-              "hover:bg-obsidian-accent-dim hover:text-obsidian-text",
+              "hover:bg-obsidian-surface-elevated hover:text-obsidian-text",
               "focus:outline-none focus-visible:ring-2 focus-visible:ring-obsidian-accent",
               collapsed ? "justify-center px-0" : "px-3"
             )}
@@ -235,22 +241,11 @@ export function Sidebar() {
       {/* Footer */}
       <div
         className={cx(
-          "shrink-0 border-t border-obsidian-border-subtle px-4 py-3",
+          "shrink-0 border-t border-obsidian-border px-4 py-3",
           collapsed && "flex justify-center"
         )}
       >
-        {collapsed ? (
-          <button
-            type="button"
-            onClick={() => setCollapsed(false)}
-            title="Expand sidebar"
-            className="cursor-pointer rounded-md p-1 text-obsidian-muted hover:bg-obsidian-accent-dim hover:text-obsidian-text focus:outline-none"
-          >
-            <PanelLeftOpen className="h-4 w-4" />
-          </button>
-        ) : (
-          <span className="text-xs text-obsidian-muted">v0.1</span>
-        )}
+        {!collapsed && <span className="text-xs text-obsidian-muted">v0.1</span>}
       </div>
     </aside>
   );

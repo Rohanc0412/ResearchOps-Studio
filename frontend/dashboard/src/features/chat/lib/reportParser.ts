@@ -37,6 +37,14 @@ function isReferencesHeading(line: string): boolean {
   );
 }
 
+export function extractReportTitle(markdown: string): string | null {
+  for (const line of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    const m = line.match(/^#\s+(.+)$/);
+    if (m) return (m[1] ?? "").trim() || null;
+  }
+  return null;
+}
+
 export function parseMarkdownToSections(markdown: string): ReportSection[] {
   const sections: ReportSection[] = [];
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");

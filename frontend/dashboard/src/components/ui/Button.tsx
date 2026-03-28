@@ -13,10 +13,10 @@ const variantClasses: Record<ButtonVariant, string> = {
     "hover:bg-obsidian-surface-elevated hover:text-obsidian-text active:opacity-80",
   ghost:
     "bg-transparent border-transparent text-obsidian-muted " +
-    "hover:bg-obsidian-accent-dim hover:text-obsidian-text active:opacity-80",
+    "hover:bg-obsidian-surface-elevated hover:text-obsidian-text active:brightness-90",
   danger:
-    "bg-red-500/10 border-red-500/30 text-red-400 " +
-    "hover:bg-red-500/20 hover:border-red-500/50 active:opacity-80",
+    "bg-[#2a1515] border-[#5a2020] text-red-400 " +
+    "hover:bg-[#331a1a] hover:border-[#6b2525] active:brightness-90",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {

@@ -260,8 +260,8 @@ def get_last_action(conversation: ChatConversationRow) -> dict | None:
         return None
     payload: dict[str, object] = {
         "action_hash": action.action_type,
-        "started_at": _coerce_utc(action.created_at or action.resolved_at).isoformat(),
-        "completed_at": _coerce_utc(action.resolved_at or action.created_at).isoformat(),
+        "started_at": _coerce_utc(action.created_at).isoformat(),
+        "completed_at": _coerce_utc(action.resolved_at).isoformat(),
     }
     if action.related_run_id:
         payload["run_id"] = str(action.related_run_id)

@@ -33,7 +33,7 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 backdrop-blur-sm" style={{ backgroundColor: "#000000bf" }}
         onClick={onClose}
         aria-hidden="true"
       />
@@ -46,7 +46,7 @@ export function Modal({
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-obsidian-border-subtle px-6 py-4">
+        <div className="flex items-center justify-between border-b border-obsidian-border px-6 py-4">
           <h2 className="font-display text-base font-semibold text-obsidian-text">
             {title}
           </h2>

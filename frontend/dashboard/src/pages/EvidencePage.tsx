@@ -70,8 +70,8 @@ export function EvidencePage() {
           {s.text}
         </pre>
         {s.risk_flags?.length ? (
-          <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-2.5">
-            <span className="text-[11px] font-semibold uppercase tracking-widest text-amber-400/70">
+          <div className="flex items-center gap-2 rounded-lg border-[#3a2a10] bg-[#2a1e0a] px-4 py-2.5">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-amber-400">
               Risk flags
             </span>
             <span className="text-sm text-amber-300">{s.risk_flags.join(", ")}</span>
@@ -95,7 +95,7 @@ export function EvidencePage() {
               Source lookup failed or is unavailable.
             </p>
           ) : source.data ? (
-            <dl className="divide-y divide-obsidian-border-subtle">
+            <dl className="divide-y divide-obsidian-border">
               <div className="flex items-baseline gap-4 px-5 py-3.5">
                 <dt className="w-32 shrink-0 font-mono text-xs text-obsidian-muted">title</dt>
                 <dd className="text-sm text-obsidian-text">{source.data.title ?? "—"}</dd>

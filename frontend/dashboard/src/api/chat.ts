@@ -449,6 +449,7 @@ export function useSendChatMessageMutation(conversationId: string, limit = 200) 
       llm_provider?: "hosted";
       llm_model?: string;
       force_pipeline?: boolean;
+      stage_models?: Record<string, string | null>;
     }) =>
       apiFetchJson("/chat/send", {
         method: "POST",
@@ -667,6 +668,7 @@ export function useSendChatMessageMutationInfinite(conversationId: string, pageS
       llm_provider?: "hosted";
       llm_model?: string;
       force_pipeline?: boolean;
+      stage_models?: Record<string, string | null>;
     }) =>
       apiFetchJson("/chat/send", {
         method: "POST",

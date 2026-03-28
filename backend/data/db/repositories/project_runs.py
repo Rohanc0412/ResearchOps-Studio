@@ -166,7 +166,14 @@ def create_run(
     session.flush()
     replace_run_budget_limits(run, budgets or {})
     replace_run_usage_metrics(run, usage or {})
-    if _table_exists(session, "run_status_transitions"):
+    # Consult the module-level cache first so the DB introspection only fires once per
+    # engine lifetime, not on every create_run call.
+    _engine_id = id(session.connection().engine)
+    _has_transitions = (
+        _table_existence_cache.get(_engine_id, {}).get("run_status_transitions")
+        or _table_exists(session, "run_status_transitions")
+    )
+    if _has_transitions:
         _record_status_transition(
             session=session,
             tenant_id=tenant_id,
@@ -176,7 +183,7 @@ def create_run(
             stage=current_stage,
         )
     _touch_project_from_run(
-        session=session, project_id=project_id, tenant_id=tenant_id, run=run, now=now
+        session=session, project_id=project_id, tenant_id=tenant_id, now=now
     )
     return run
 
@@ -207,6 +214,23 @@ def get_run_for_user(
     return session.execute(stmt).scalar_one_or_none()
 
 
+def get_latest_report_title(
+    *, session: Session, tenant_id: UUID, project_id: UUID
+) -> str | None:
+    stmt = (
+        select(RunRow.report_title)
+        .where(
+            RunRow.tenant_id == tenant_id,
+            RunRow.project_id == project_id,
+            RunRow.status == RunStatusDb.succeeded,
+            RunRow.report_title.isnot(None),
+        )
+        .order_by(RunRow.finished_at.desc())
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
 def get_run_by_client_request_id(
     *, session: Session, tenant_id: UUID, project_id: UUID, client_request_id: str
 ) -> RunRow | None:
@@ -230,7 +254,14 @@ def append_run_event(
     payload_json: dict | None = None,
     allow_finished: bool = False,
 ) -> RunEventRow:
-    run = get_run(session=session, tenant_id=tenant_id, run_id=run_id)
+    # Use WITH FOR UPDATE to serialise concurrent event appends to the same run,
+    # preventing two workers from reading the same MAX(event_number) before either inserts.
+    _lock_stmt = (
+        select(RunRow)
+        .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        .with_for_update()
+    )
+    run = session.execute(_lock_stmt).scalar_one_or_none()
     if run is None:
         raise ValueError("run not found")
     if not allow_finished and run.status in {
@@ -264,7 +295,7 @@ def append_run_event(
     session.add(row)
 
     _touch_project_from_run(
-        session=session, project_id=run.project_id, tenant_id=tenant_id, run=run, now=now
+        session=session, project_id=run.project_id, tenant_id=tenant_id, now=now
     )
     session.flush()
     return row
@@ -288,7 +319,7 @@ def list_run_events(
 
 
 def _touch_project_from_run(
-    *, session: Session, tenant_id: UUID, project_id: UUID, run: RunRow, now: datetime
+    *, session: Session, tenant_id: UUID, project_id: UUID, now: datetime
 ) -> None:
     session.execute(
         update(ProjectRow)
@@ -319,17 +350,30 @@ def _record_status_transition(
     )
 
 
+# Cache: engine_id → {table_name → exists}.  Only True results are cached because
+# a table that exists will never disappear at runtime (no DROP TABLE in prod).
+_table_existence_cache: dict[int, dict[str, bool]] = {}
+
+
 def _table_exists(session: Session, table_name: str) -> bool:
     conn = session.connection()
     if conn is None:
         return False
-    return conn.dialect.has_table(conn, table_name)
+    engine_id = id(conn.engine)
+    engine_cache = _table_existence_cache.setdefault(engine_id, {})
+    if table_name in engine_cache:
+        return engine_cache[table_name]
+    result = conn.dialect.has_table(conn, table_name)
+    if result:
+        engine_cache[table_name] = True
+    return result
 
 
 __all__ = [
     "append_run_event",
     "create_project",
     "create_run",
+    "get_latest_report_title",
     "get_project",
     "get_project_for_user",
     "get_run",

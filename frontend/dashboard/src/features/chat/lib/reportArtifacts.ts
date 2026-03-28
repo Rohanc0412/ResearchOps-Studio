@@ -21,3 +21,13 @@ export function extractLatestRunId(messages: ChatMessage[]): string | null {
   }
   return null;
 }
+
+export function extractAllRunIds(messages: ChatMessage[]): string[] {
+  const ids: string[] = [];
+  for (const message of messages) {
+    if (!message || message.type !== "run_started") continue;
+    const runId = message.content_json?.["run_id"];
+    if (typeof runId === "string" && runId.trim()) ids.push(runId);
+  }
+  return ids;
+}
