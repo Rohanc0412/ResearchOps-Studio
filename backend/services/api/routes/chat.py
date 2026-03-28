@@ -39,8 +39,8 @@ from llm import LLMError, get_llm_client
 from middlewares.auth import IdentityDep
 from pydantic import BaseModel, ConfigDict, Field
 from research import RESEARCH_JOB_TYPE
-from search.tavily import search
 from sqlalchemy import func, select
+from search.tavily import search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
