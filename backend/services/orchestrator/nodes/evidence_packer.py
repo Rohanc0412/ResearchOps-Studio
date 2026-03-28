@@ -192,10 +192,10 @@ def _embed_texts_batched(
     if not texts:
         return []
     if isinstance(client, SentenceTransformerEmbedClient):
-        n_workers = _env_int(
-            "RETRIEVER_EMBED_WORKERS",
-            min(2, max(1, (os.cpu_count() or 2) // 2)),
-            min_value=1,
+        cpu_cap = max(1, (os.cpu_count() or 2) // 2)
+        n_workers = min(
+            _env_int("RETRIEVER_EMBED_WORKERS", min(2, cpu_cap), min_value=1),
+            cpu_cap,
         )
         if n_workers > 1:
             try:
