@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import math
+import multiprocessing
 import os
 import threading
 from collections.abc import Iterable
@@ -376,11 +377,18 @@ def _worker_init(
         init_kwargs["model_kwargs"] = model_kwargs
     if trust_remote_code:
         init_kwargs["trust_remote_code"] = True
+    # Try with both model_kwargs and trust_remote_code
     try:
         _worker_model = SentenceTransformer(model_name, **init_kwargs)
     except TypeError:
+        import warnings
+        # Older sentence-transformers may not support all kwargs; retry with minimal args
         init_kwargs.pop("model_kwargs", None)
         init_kwargs.pop("trust_remote_code", None)
+        warnings.warn(
+            f"SentenceTransformer({model_name!r}) raised TypeError; retrying without model_kwargs/trust_remote_code",
+            stacklevel=2,
+        )
         _worker_model = SentenceTransformer(model_name, **init_kwargs)
         if _dtype is not None:
             _worker_model = _worker_model.to(dtype=_dtype)
@@ -421,7 +429,11 @@ class EmbedWorkerPool:
             max_workers=n_workers,
             initializer=_worker_init,
             initargs=(model_name, device, normalize_embeddings, max_seq_length, dtype, trust_remote_code),
+            mp_context=multiprocessing.get_context("spawn"),
         )
+        # Register explicit shutdown in addition to ProcessPoolExecutor's own atexit handler.
+        # This ensures the pool is released early when Python exits, before other atexit
+        # handlers that may depend on the model being unloaded.
         atexit.register(self.shutdown)
 
     def encode(self, texts: list[str]) -> list[list[float]]:
@@ -474,4 +486,8 @@ def get_embed_worker_pool(
                 trust_remote_code=trust_remote_code,
                 n_workers=n_workers,
             )
+        else:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.debug("get_embed_worker_pool: returning existing pool (new params ignored)")
         return _EMBED_WORKER_POOL
