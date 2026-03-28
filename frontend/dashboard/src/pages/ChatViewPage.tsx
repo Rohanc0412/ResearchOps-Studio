@@ -72,7 +72,9 @@ export function ChatViewPage() {
 
   // TECH: Mutation for sending a message to the server (async).
   // PLAIN: A function that sends what the user typed.
-  const sendChat = useSendChatMessageMutationInfinite(chatId ?? "", 200);
+  const sendChat = useSendChatMessageMutationInfinite(chatId ?? "", 200, {
+    onStatus: () => setWebSearching(true),
+  });
 
   // TECH: activeRun holds live status of background report job started by assistant.
   // PLAIN: Tracks whether the report is currently being generated.
@@ -90,6 +92,8 @@ export function ChatViewPage() {
   // TECH: isTyping indicates we are waiting for server response to sendChat; drives typing indicator.
   // PLAIN: Shows a ???working??? animation so user knows something is happening.
   const [isTyping, setIsTyping] = useState(false);
+
+  const [webSearching, setWebSearching] = useState(false);
 
   // TECH: selectedModel/customModel track dropdown vs custom model selection.
   // PLAIN: Lets the user pick a model from the list or type a custom one.
@@ -673,6 +677,7 @@ export function ChatViewPage() {
       // TECH: Always clear typing indicator even if request fails.
       // PLAIN: Stop showing ???typing??? no matter what happens.
       setIsTyping(false);
+      setWebSearching(false);
     }
   }
 
@@ -995,10 +1000,16 @@ export function ChatViewPage() {
           })}
 
           {/* TECH: Show typing indicator when a message is being sent/processed. */}
-          {/* PLAIN: Animated dots show the system is working. */}
+          {/* PLAIN: Animated dots show the system is working; text when web search fires. */}
           {isTyping && (
             <div className="inline-block rounded-2xl rounded-bl-sm border border-slate-800 bg-slate-900 px-4 py-3.5">
-              <TypingIndicator />
+              {webSearching ? (
+                <span className="animate-breathe text-sm text-slate-400">
+                  Searching the web...
+                </span>
+              ) : (
+                <TypingIndicator />
+              )}
             </div>
           )}
 
