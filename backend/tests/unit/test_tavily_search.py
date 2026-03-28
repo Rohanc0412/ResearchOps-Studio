@@ -25,9 +25,6 @@ def test_search_returns_results(monkeypatch):
     mock_resp.raise_for_status.return_value = None
 
     with mock.patch("httpx.post", return_value=mock_resp) as mock_post:
-        from search import tavily
-        import importlib
-        importlib.reload(tavily)
         from search.tavily import search, SearchResult
         results = search("AI research")
 
@@ -52,8 +49,10 @@ def test_search_respects_max_results(monkeypatch):
     mock_resp.json.return_value = fake_response
     mock_resp.raise_for_status.return_value = None
 
-    with mock.patch("httpx.post", return_value=mock_resp):
+    with mock.patch("httpx.post", return_value=mock_resp) as mock_post:
         from search.tavily import search
         results = search("query", max_results=3)
 
     assert len(results) == 3
+    call_kwargs = mock_post.call_args
+    assert call_kwargs[1]["json"]["max_results"] == 3
