@@ -217,12 +217,51 @@ export function ResearchProgressCard({
             <div className="text-xs text-slate-600">{model.recentEvents.length} events</div>
           </div>
 
-          {model.recentEvents.length === 0 ? (
+          {!model.currentAction && model.recentEvents.length === 0 ? (
             <div className="rounded-xl border border-slate-900 bg-slate-950 px-3 py-4 text-sm text-slate-500">
               Waiting for live updates from the run stream.
             </div>
           ) : (
             <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {/* Active row — animated while run is in progress */}
+              {model.currentAction && (
+                <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <motion.span
+                        className="h-[5px] w-[5px] shrink-0 rounded-full bg-indigo-400"
+                        animate={{ opacity: [1, 0.3, 1] }}
+                        transition={{ duration: 2, ease: "easeInOut", repeat: Infinity }}
+                      />
+                      <div
+                        className={cx(
+                          "text-xs font-medium uppercase tracking-[0.14em]",
+                          model.currentAction.level === "error"
+                            ? "text-rose-300"
+                            : model.currentAction.level === "warn"
+                              ? "text-amber-300"
+                              : "text-slate-500"
+                        )}
+                      >
+                        {model.currentAction.level}
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-500">now</div>
+                  </div>
+                  <motion.div
+                    className="mt-1 text-sm text-slate-100"
+                    animate={{ opacity: [1, 0.3, 1] }}
+                    transition={{ duration: 2, ease: "easeInOut", repeat: Infinity }}
+                  >
+                    {model.currentAction.message}
+                  </motion.div>
+                  {model.currentAction.detail ? (
+                    <div className="mt-1 text-xs text-slate-500">{model.currentAction.detail}</div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* Past events — no animation */}
               {model.recentEvents.map((event) => (
                 <div
                   key={event.id}
