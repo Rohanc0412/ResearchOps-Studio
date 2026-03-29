@@ -60,6 +60,7 @@ export function ResearchProgressCard({
 
         <button
           type="button"
+          data-testid="progress-card-toggle"
           onClick={onToggleExpanded}
           className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-white/[0.09] bg-white/[0.04] px-3.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-white/55 transition hover:border-white/20 hover:text-white/70"
         >

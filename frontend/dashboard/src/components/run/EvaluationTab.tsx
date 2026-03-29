@@ -281,7 +281,7 @@ export function EvaluationTab({ runId }: { runId: string }) {
               Evaluated {new Date(result.evaluated_at).toLocaleString()}
             </span>
           )}
-          <Button variant="ghost" size="sm" onClick={() => void mutate()} disabled={isRunning}>
+          <Button variant="ghost" size="sm" onClick={() => void mutate()} disabled={isRunning} data-testid="rerun-evaluation-btn">
             <RotateCcw className="h-3.5 w-3.5" />
             Re-evaluate
           </Button>
