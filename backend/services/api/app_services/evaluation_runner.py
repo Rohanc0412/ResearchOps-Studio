@@ -391,7 +391,10 @@ class EvaluationRunner:
         if not markdown.strip():
             raise ValueError("no_report_artifact")
 
-        # Load all unique evidence snippets for this run (used as verification context)
+        # Load all unique evidence snippets for this run (used as verification context).
+        # Intentionally skips the SnapshotRow join used in _run_grounding — we only need
+        # snippet id + text here, not source metadata. Tenant isolation is enforced by the
+        # SectionEvidenceRow.tenant_id condition in both the JOIN predicate and .filter().
         snippet_rows = (
             session.query(SnippetRow.id, SnippetRow.text)
             .join(SectionEvidenceRow, (SectionEvidenceRow.snippet_id == SnippetRow.id) & (SectionEvidenceRow.tenant_id == SnippetRow.tenant_id))
@@ -438,7 +441,7 @@ class EvaluationRunner:
         extract_payload = _extract_json_payload(extract_response)
         claims: list[str] = []
         if isinstance(extract_payload, dict):
-            raw = extract_payload.get("claims") or []
+            raw = extract_payload.get("claims")
             claims = [str(c).strip() for c in (raw if isinstance(raw, list) else []) if str(c).strip()]
 
         if not claims:
@@ -484,6 +487,7 @@ class EvaluationRunner:
         total = len(claims)
         faithfulness_pct = round(supported_count / total * 100) if total > 0 else None
         self._faithfulness_pct = faithfulness_pct
+        assert faithfulness_pct is not None  # guaranteed: method returns early if claims is empty
 
         # Persist faithfulness score to run_usage_metrics
         existing = (

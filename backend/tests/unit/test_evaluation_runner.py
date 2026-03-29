@@ -121,3 +121,5 @@ def test_faithfulness_step_yields_faithfulness_done_event():
     assert event["total_claims"] == 2
     assert event["supported_claims"] == 1
     assert event["faithfulness_pct"] == 50
+    session.add.assert_called_once()  # metric row was persisted
+    session.flush.assert_called_once()  # flush was called after upsert
