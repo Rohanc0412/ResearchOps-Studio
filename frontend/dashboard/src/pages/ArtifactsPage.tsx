@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams, useParams, Link } from "react-router-dom";
-import { ChevronLeft, Download, ExternalLink, Eye, FileText, FlaskConical } from "lucide-react";
+import { BarChart2, ChevronLeft, Download, ExternalLink, Eye, FileText, FlaskConical } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -11,6 +11,7 @@ import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
 import { formatTs } from "../utils/format";
 import type { Artifact } from "../types/dto";
+import { EvaluationTab } from "../components/run/EvaluationTab";
 
 export function ArtifactsPage() {
   const { runId } = useParams();
@@ -21,7 +22,7 @@ export function ArtifactsPage() {
 
   const artifacts = useRunArtifactsQuery(id);
   const snippets = useRunSnippetsQuery(id);
-  const [tab, setTab] = useState<"artifacts" | "evidence">("artifacts");
+  const [tab, setTab] = useState<"artifacts" | "evidence" | "evaluation">("artifacts");
   const [preview, setPreview] = useState<{ id: string; markdown: string } | null>(null);
 
   const focusArtifact = useMemo(() => {
@@ -65,7 +66,7 @@ export function ArtifactsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-obsidian-border">
-        {(["artifacts", "evidence"] as const).map((t) => (
+        {(["artifacts", "evidence", "evaluation"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -77,14 +78,22 @@ export function ArtifactsPage() {
                 : "text-obsidian-muted hover:text-obsidian-text",
             ].join(" ")}
           >
-            {t === "artifacts" ? <FileText className="h-3.5 w-3.5" /> : <FlaskConical className="h-3.5 w-3.5" />}
+            {t === "artifacts" ? (
+              <FileText className="h-3.5 w-3.5" />
+            ) : t === "evidence" ? (
+              <FlaskConical className="h-3.5 w-3.5" />
+            ) : (
+              <BarChart2 className="h-3.5 w-3.5" />
+            )}
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
 
       {/* Content */}
-      {tab === "evidence" ? (
+      {tab === "evaluation" ? (
+        <EvaluationTab runId={id} />
+      ) : tab === "evidence" ? (
         snippets.isLoading ? (
           <div className="flex justify-center py-16">
             <Spinner label="Loading evidence…" />
