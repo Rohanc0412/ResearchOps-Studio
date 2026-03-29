@@ -36,6 +36,16 @@ async function waitForText(
   await expect(page.locator(selector).filter({ hasText: pattern })).toBeVisible({ timeout });
 }
 
+async function generateSafeTOTP(secret: string): Promise<string> {
+  // Wait if we're within 3 seconds of the end of a 30-second window
+  const timeStep = 30;
+  const remaining = timeStep - (Math.floor(Date.now() / 1000) % timeStep);
+  if (remaining <= 3) {
+    await new Promise(resolve => setTimeout(resolve, (remaining + 1) * 1000));
+  }
+  return authenticator.generate(secret);
+}
+
 // ── Suite ────────────────────────────────────────────────────────────────────
 
 test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
@@ -131,6 +141,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
     await page.locator('#login-password').fill(state.user.password);
     await page.getByRole('button', { name: /^sign in$/i }).click();
     await page.waitForURL('**/projects', { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/projects/);
   });
 
   test('1.9 forgot password shows success message', async ({ page }) => {
@@ -138,8 +149,9 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
     await page.getByRole('button', { name: /forgot/i }).click();
     await page.locator('#forgot-email').fill(state.user.email);
     await page.getByRole('button', { name: /send|reset/i }).click();
+    // After submit the app transitions to reset mode ("Set new password") or shows a success banner
     await expect(
-      page.getByText(/sent|check your email|otp/i).or(page.locator('[class*="success" i]')).first()
+      page.getByText(/set new password/i).or(page.getByText(/reset token generated|if the account exists/i)).first()
     ).toBeVisible({ timeout: 15_000 });
   });
 
@@ -153,8 +165,8 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
     await page.getByRole('button', { name: /enable mfa|restart setup/i }).click();
     // QR code SVG and plain-text secret visible
     await expect(page.locator('svg[viewBox]')).toBeVisible({ timeout: 10_000 });
-    // Secret is a base32 string in a font-mono element
-    const secretEl = page.locator('[class*="font-mono"]').filter({ hasText: /^[A-Z2-7]{16,}$/i });
+    // Secret is rendered in the data-testid="mfa-secret" element
+    const secretEl = page.locator('[data-testid="mfa-secret"]');
     await expect(secretEl).toBeVisible({ timeout: 10_000 });
     state.mfaSecret = ((await secretEl.textContent()) ?? '').trim().replace(/\s/g, '');
     expect(state.mfaSecret.length).toBeGreaterThan(10);
@@ -162,14 +174,25 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
 
   test('1.11 MFA verify enroll succeeds', async ({ page }) => {
     await page.goto('/security');
+    // Confirm we're on the security page (not redirected to login)
+    const currentUrl = page.url();
+    if (currentUrl.includes('/login')) {
+      // Session expired, log back in
+      await page.locator('#login-username').fill(state.user.username);
+      await page.locator('#login-password').fill(state.user.password);
+      await page.getByRole('button', { name: /^sign in$/i }).click();
+      await page.waitForURL('**/projects', { timeout: 15_000 });
+      await page.goto('/security');
+    }
+    await expect(page).toHaveURL(/\/security/);
     const enableBtn = page.getByRole('button', { name: /enable mfa|restart setup/i });
     if (await enableBtn.isVisible({ timeout: 3_000 })) {
       await enableBtn.click();
-      const secretEl = page.locator('[class*="font-mono"]').filter({ hasText: /^[A-Z2-7]{16,}$/i });
+      const secretEl = page.locator('[data-testid="mfa-secret"]');
       await expect(secretEl).toBeVisible({ timeout: 10_000 });
       state.mfaSecret = ((await secretEl.textContent()) ?? '').trim().replace(/\s/g, '');
     }
-    const code = authenticator.generate(state.mfaSecret);
+    const code = await generateSafeTOTP(state.mfaSecret);
     await page.locator('input[placeholder="123456"]').first().fill(code);
     await page.getByRole('button', { name: /verify|enable|confirm/i }).click();
     await expect(page.getByText(/enabled|active|mfa is on/i)).toBeVisible({ timeout: 10_000 });
@@ -178,7 +201,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
   test('1.12 MFA disable succeeds', async ({ page }) => {
     await page.goto('/security');
     await expect(page.getByRole('button', { name: /disable mfa/i })).toBeVisible({ timeout: 10_000 });
-    const code = authenticator.generate(state.mfaSecret);
+    const code = await generateSafeTOTP(state.mfaSecret);
     await page.locator('input[placeholder="123456"]').last().fill(code);
     await page.getByRole('button', { name: /disable mfa/i }).click();
     await expect(

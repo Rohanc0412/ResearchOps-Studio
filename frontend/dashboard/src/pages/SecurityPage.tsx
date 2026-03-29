@@ -187,7 +187,7 @@ export function SecurityPage() {
                 Secret
               </div>
               <div className="flex items-center gap-2 rounded-lg border border-obsidian-border bg-obsidian-bg px-3 py-2.5">
-                <code className="flex-1 break-all font-mono text-sm text-obsidian-text">
+                <code data-testid="mfa-secret" className="flex-1 break-all font-mono text-sm text-obsidian-text">
                   {enroll.secret}
                 </code>
                 <button
