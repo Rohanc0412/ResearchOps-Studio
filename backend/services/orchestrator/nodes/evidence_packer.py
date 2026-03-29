@@ -347,6 +347,7 @@ def _select_diverse_snippets(
     per_source_cap: int,
 ) -> list[dict]:
     selected: list[dict] = []
+    selected_ids: set[int] = set()
     source_counts: dict[str, int] = {}
 
     for result in results:
@@ -356,13 +357,14 @@ def _select_diverse_snippets(
         if source_counts.get(source_id, 0) >= per_source_cap:
             continue
         selected.append(result)
+        selected_ids.add(id(result))
         source_counts[source_id] = source_counts.get(source_id, 0) + 1
 
     if len(selected) < max_count:
         for result in results:
             if len(selected) >= max_count:
                 break
-            if result in selected:
+            if id(result) in selected_ids:
                 continue
             selected.append(result)
 
@@ -398,7 +400,8 @@ def _ensure_snippets_from_abstracts(
     if exists_embedding:
         return
 
-    new_snippets: list[tuple[SnippetRow, str]] = []
+    # Phase 1: create all snapshots, flush once to get IDs.
+    pending: list[tuple[SnapshotRow, str]] = []
     for source in vetted_sources:
         text = (source.abstract or source.title or "").strip()
         if not text:
@@ -415,8 +418,13 @@ def _ensure_snippets_from_abstracts(
             metadata_json={"origin": "abstract_fallback"},
         )
         session.add(snapshot)
+        pending.append((snapshot, text))
+    if pending:
         session.flush()
 
+    # Phase 2: create all snippets, flush once to get IDs.
+    new_snippets: list[tuple[SnippetRow, str]] = []
+    for snapshot, text in pending:
         snippet = SnippetRow(
             tenant_id=tenant_id,
             snapshot_id=snapshot.id,
@@ -429,8 +437,9 @@ def _ensure_snippets_from_abstracts(
             risk_flags_json={},
         )
         session.add(snippet)
-        session.flush()
         new_snippets.append((snippet, text))
+    if new_snippets:
+        session.flush()
 
     if not new_snippets:
         return

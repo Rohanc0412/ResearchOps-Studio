@@ -7,7 +7,7 @@ import os
 import re
 from collections.abc import Generator as _Generator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from app_services.chat_router import classify_chat_intent, parse_consent_reply
@@ -15,7 +15,8 @@ from core.audit.logger import write_audit_log
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
 from core.runs.lifecycle import emit_run_event
-from core.tenancy import tenant_uuid
+from core.env import now_utc
+from core.tenancy import get_tenant_id
 from db.models.chat_messages import ChatMessageRow
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
@@ -131,14 +132,6 @@ def _log_step(state: str, *, conversation_id: UUID, step: str, extra: dict | Non
         f"Chat step {state}: {step.replace('_', ' ')}",
         extra={"event": "chat.step", **payload},
     )
-
-
-def _tenant_uuid(identity: Identity) -> UUID:
-    return tenant_uuid(identity.tenant_id)
-
-
-def _now_utc() -> datetime:
-    return datetime.now(UTC)
 
 
 def _hash_action(prompt: str) -> str:
@@ -601,7 +594,7 @@ def _stream_quick_answer_body(
 ) -> _Generator[bytes, None, None]:
     """SSE generator: yields status event (if web search), then saves assistant
     message in a new DB session and yields the final answer event."""
-    now = _now_utc()
+    now = now_utc()
     answer: str = "I am having trouble generating a response right now."
 
     try:
@@ -737,7 +730,7 @@ def post_conversation(
     request: Request, body: ConversationCreate, identity: Identity = IdentityDep
 ) -> ConversationOut:
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
+    tenant_id = get_tenant_id(identity)
 
     with session_scope(SessionLocal) as session:
         if body.project_id is not None:
@@ -784,7 +777,7 @@ def get_conversations(
     identity: Identity = IdentityDep,
 ) -> ConversationListOut:
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
+    tenant_id = get_tenant_id(identity)
     limit = max(1, min(200, limit))
     decoded = _decode_cursor(cursor)
 
@@ -847,7 +840,7 @@ def get_conversation_messages(
     identity: Identity = IdentityDep,
 ) -> ChatMessageListOut:
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
+    tenant_id = get_tenant_id(identity)
     limit = max(1, min(500, limit))
     decoded = _decode_cursor(cursor)
 
@@ -894,10 +887,10 @@ def post_send_chat(
     request: Request, body: ChatSendRequest, identity: Identity = IdentityDep
 ):
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
+    tenant_id = get_tenant_id(identity)
     qa_ctx: _QuickAnswerContext | None = None
     result: ChatSendResponse | None = None
-    now = _now_utc()
+    now = now_utc()
     _log_step(
         "start",
         conversation_id=body.conversation_id,

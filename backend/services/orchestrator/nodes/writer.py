@@ -10,13 +10,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 
+from core.env import env_int, now_utc
 from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
 from core.pipeline_events import emit_run_event, instrument_node
+from core.pipeline_events.events import truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
-from llm import LLMError, get_llm_client_for_stage, json_response_format
+from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -33,54 +35,6 @@ DRAFT_SECTION_SCHEMA = {
     "additionalProperties": False,
 }
 
-
-def _print_llm_exchange(label: str, section_id: str, content: str) -> None:
-    if not content:
-        return
-    message = (
-        "LLM request sent for drafting"
-        if label == "request"
-        else "LLM response received for drafting"
-    )
-    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
-    if log_full:
-        logger.info(f"{message} (section={section_id})\n{content}")
-        logger.info(
-            message,
-            extra={
-                "event": "pipeline.llm",
-                "stage": "draft",
-                "label": label,
-                "section_id": section_id,
-                "chars": len(content),
-            },
-        )
-        return
-    logger.info(
-        message,
-        extra={
-            "event": "pipeline.llm",
-            "stage": "draft",
-            "label": label,
-            "section_id": section_id,
-            "chars": len(content),
-            "content": content,
-        },
-    )
-
-
-def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        value = default
-    else:
-        try:
-            value = int(raw)
-        except ValueError:
-            value = default
-    if min_value is not None:
-        return max(min_value, value)
-    return value
 
 
 def _load_section_snippet_ids(
@@ -99,38 +53,13 @@ def _load_section_snippet_ids(
     return snippet_ids
 
 
-def _truncate_text(text: str, max_chars: int) -> str:
-    cleaned = text.strip()
-    if len(cleaned) <= max_chars:
-        return cleaned
-    return cleaned[:max_chars].rstrip() + "..."
-
-
-def _extract_json_payload(text: str) -> dict | list | None:
-    if not text:
-        return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`").strip()
-    start_candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
-    if not start_candidates:
-        return None
-    start = min(start_candidates)
-    end = cleaned.rfind("}") if cleaned[start] == "{" else cleaned.rfind("]")
-    if end == -1 or end <= start:
-        return None
-    snippet = cleaned[start : end + 1]
-    try:
-        return json.loads(snippet)
-    except json.JSONDecodeError:
-        return None
 def _build_snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
     payload: list[dict] = []
     for snippet in snippets:
         payload.append(
             {
                 "snippet_id": str(snippet.snippet_id),
-                "text": _truncate_text(snippet.text, 400),
+                "text": truncate_text(snippet.text, 400),
             }
         )
     return payload
@@ -168,7 +97,7 @@ def _generate_section_with_llm(
         "Rules:\n"
         "- Use ONLY the snippets provided for factual content.\n"
         "- Section length MUST be at least "
-        f"{_env_int('DRAFT_SECTION_MIN_WORDS', 50, min_value=0)} words.\n"
+        f"{env_int('DRAFT_SECTION_MIN_WORDS', 50, min_value=0)} words.\n"
         "- Every sentence that contains any factual claim MUST end with citation token(s).\n"
         "- If a sentence cannot be supported by the provided snippets, rewrite "
         "it as a non-factual transition.\n"
@@ -196,20 +125,20 @@ def _generate_section_with_llm(
         + json.dumps(snippet_payload, indent=2, ensure_ascii=True)
     )
     system = "You draft evidence-grounded sections and respond with strict JSON only."
-    _print_llm_exchange("request", section.section_id, prompt)
+    log_llm_exchange("request", prompt, stage="draft", section_id=section.section_id, logger=logger)
     try:
         response = llm_client.generate(
             prompt,
             system=system,
-            max_tokens=_env_int("DRAFT_SECTION_MAX_TOKENS", 1800, min_value=600),
+            max_tokens=env_int("DRAFT_SECTION_MAX_TOKENS", 1800, min_value=600),
             temperature=0.3,
             response_format=json_response_format("draft_section", DRAFT_SECTION_SCHEMA),
         )
     except LLMError as exc:
         raise ValueError("LLM drafting failed for section.") from exc
 
-    _print_llm_exchange("response", section.section_id, response)
-    payload = _extract_json_payload(response)
+    log_llm_exchange("response", response, stage="draft", section_id=section.section_id, logger=logger)
+    payload = extract_json_payload(response)
     if not isinstance(payload, dict):
         raise ValueError("LLM draft did not return a JSON object.")
 
@@ -249,7 +178,7 @@ def _persist_draft_section(
         )
         .one_or_none()
     )
-    now = datetime.utcnow()
+    now = now_utc()
     if row:
         row.text = text
         row.section_summary = section_summary

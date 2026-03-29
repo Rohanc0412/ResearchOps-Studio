@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -337,7 +338,38 @@ def _should_attempt_json_repair(response_format: str | dict | None) -> bool:
     return False
 
 
-def _extract_json_payload(text: str) -> dict | list | None:
+def log_llm_exchange(
+    label: str,
+    content: str | None,
+    *,
+    stage: str,
+    section_id: str | None = None,
+    logger: logging.Logger | None = None,
+) -> None:
+    """Emit a structured log entry for an LLM request or response."""
+    if not content:
+        return
+    _logger = logger or logging.getLogger(__name__)
+    verb = "sent" if label == "request" else "received"
+    message = f"LLM {label} {verb} for {stage}"
+    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
+    extra: dict = {
+        "event": "pipeline.llm",
+        "stage": stage,
+        "label": label,
+        "chars": len(content),
+    }
+    if section_id is not None:
+        extra["section_id"] = section_id
+    if log_full:
+        suffix = f" (section={section_id})" if section_id else ""
+        _logger.info(f"{message}{suffix}\n{content}")
+        _logger.info(message, extra=extra)
+        return
+    _logger.info(message, extra={**extra, "content": content})
+
+
+def extract_json_payload(text: str) -> dict | list | None:
     if not text:
         return None
     cleaned = text.strip()
@@ -383,7 +415,7 @@ def _repair_json_response(
     max_tokens: int,
     temperature: float,
 ) -> str | None:
-    if _extract_json_payload(content) is not None:
+    if extract_json_payload(content) is not None:
         return None
     max_chars = int(os.getenv("LLM_JSON_REPAIR_MAX_CHARS", "8000"))
     clipped = content if max_chars <= 0 else content[:max_chars]
@@ -402,6 +434,6 @@ def _repair_json_response(
         )
     except Exception:
         return None
-    if _extract_json_payload(repair) is None:
+    if extract_json_payload(repair) is None:
         return None
     return repair.strip()

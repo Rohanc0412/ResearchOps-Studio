@@ -4,6 +4,8 @@ import { z } from "zod";
 import { apiFetchJson } from "./client";
 import { RunSchema } from "../types/dto";
 
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "canceled"]);
+
 const OkSchema = z.object({ ok: z.literal(true) }).passthrough();
 
 export function useRunQuery(runId: string) {
@@ -11,7 +13,8 @@ export function useRunQuery(runId: string) {
     queryKey: ["runs", runId],
     queryFn: async () => apiFetchJson(`/runs/${encodeURIComponent(runId)}`, { schema: RunSchema }),
     enabled: Boolean(runId),
-    refetchInterval: 5_000
+    refetchInterval: (query) =>
+      query.state.data && TERMINAL_STATUSES.has(query.state.data.status) ? false : 5_000
   });
 }
 

@@ -22,42 +22,12 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
+from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA, METRIC_EVAL_GROUNDING_PCT, METRIC_EVAL_STATUS
 from llm import LLMError, get_llm_client_for_stage, json_response_format
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# ── Grounding schema (same as orchestrator evaluator) ─────────────────────────
-
-_GROUNDING_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "section_id": {"type": "string"},
-        "grounding_score": {"type": "integer"},
-        "verdict": {"type": "string"},
-        "issues": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "sentence_index": {"type": "integer"},
-                    "problem": {"type": "string"},
-                    "notes": {"type": "string"},
-                    "citations": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["sentence_index", "problem", "notes", "citations"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["section_id", "grounding_score", "verdict", "issues"],
-    "additionalProperties": False,
-}
-
-_ALLOWED_PROBLEMS = {
-    "unsupported", "contradicted", "missing_citation",
-    "invalid_citation", "not_in_pack", "overstated",
-}
 
 # ── Faithfulness schemas ───────────────────────────────────────────────────────
 
@@ -124,7 +94,7 @@ def _normalize_issue(item: dict, allowed_ids: set[str]) -> dict | None:
     if not isinstance(item, dict):
         return None
     problem = str(item.get("problem", "")).strip().lower()
-    if problem not in _ALLOWED_PROBLEMS:
+    if problem not in ALLOWED_PROBLEMS:
         return None
     try:
         sentence_index = int(item.get("sentence_index") or 0)
@@ -153,7 +123,7 @@ class EvaluationRunner:
         """Yield SSE-ready event dicts. Runs steps 1-3 sequentially."""
         yield {"type": "evaluation.started", "steps": 3}
         # Mark evaluation as running so GET /evaluation returns status="running" during the pipeline
-        self._write_metric("eval_status", "running")
+        self._write_metric(METRIC_EVAL_STATUS, "running")
         self.session.flush()
         yield {"type": "evaluation.step", "step": 1, "label": "Scoring section grounding…"}
         yield from self._run_grounding()
@@ -334,7 +304,7 @@ class EvaluationRunner:
                 system=system,
                 max_tokens=1400,
                 temperature=0.2,
-                response_format=json_response_format("evaluation", _GROUNDING_SCHEMA),
+                response_format=json_response_format("evaluation", GROUNDING_SCHEMA),
             )
         except LLMError as exc:
             raise ValueError("LLM grounding call failed") from exc
@@ -576,12 +546,12 @@ class EvaluationRunner:
 
         # Persist final metrics
         now_str = datetime.utcnow().isoformat()
-        self._write_metric("eval_status", "complete")
+        self._write_metric(METRIC_EVAL_STATUS, "complete")
         self._write_metric("eval_evaluated_at", now_str)
         self._write_metric("eval_sections_passed", sections_passed)
         self._write_metric("eval_sections_total", sections_total)
         if self._grounding_pct is not None:
-            self._write_metric("eval_grounding_pct", self._grounding_pct)
+            self._write_metric(METRIC_EVAL_GROUNDING_PCT, self._grounding_pct)
         self.session.flush()
 
         yield {

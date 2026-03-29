@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from db.models.auth_mfa_factors import AuthMfaFactorRow
@@ -142,14 +142,14 @@ def revoke_refresh_token(row: AuthRefreshTokenRow, *, now: datetime) -> None:
 
 
 def revoke_refresh_tokens_for_user(session: Session, *, user_id: UUID, now: datetime) -> None:
-    rows = session.execute(
-        select(AuthRefreshTokenRow).where(
+    session.execute(
+        update(AuthRefreshTokenRow)
+        .where(
             AuthRefreshTokenRow.user_id == user_id,
             AuthRefreshTokenRow.revoked_at.is_(None),
         )
-    ).scalars()
-    for row in rows:
-        row.revoked_at = now
+        .values(revoked_at=now)
+    )
 
 
 def create_password_reset(

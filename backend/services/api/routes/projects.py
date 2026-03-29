@@ -13,7 +13,7 @@ from app_services.project_runs import (
 )
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
-from core.tenancy import tenant_uuid
+from core.tenancy import get_tenant_id
 from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request
 from middlewares.auth import IdentityDep
@@ -24,10 +24,6 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 logger = logging.getLogger(__name__)
 
-
-
-def _tenant_uuid(identity: Identity) -> UUID:
-    return tenant_uuid(identity.tenant_id)
 
 
 class ProjectPatch(BaseModel):
@@ -69,7 +65,7 @@ def patch_project(
     with session_scope(SessionLocal) as session:
         return patch_user_project(
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             project_id=project_id,
             user_id=identity.user_id,
             name=body.name,
@@ -90,7 +86,7 @@ def post_project(
     with session_scope(SessionLocal) as session:
         return create_user_project(
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             user_id=identity.user_id,
             name=body.name,
             description=body.description,
@@ -103,7 +99,7 @@ def get_projects(request: Request, identity: Identity = IdentityDep) -> list[Pro
     with session_scope(SessionLocal) as session:
         return list_user_projects(
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             user_id=identity.user_id,
         )
 
@@ -116,7 +112,7 @@ def get_project_by_id(
     with session_scope(SessionLocal) as session:
         p = get_user_project(
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             project_id=project_id,
             user_id=identity.user_id,
         )
@@ -152,7 +148,7 @@ def post_run_for_project(
         run_id, status = create_project_run(
             request=request,
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             project_id=project_id,
             identity=identity,
             question=question,

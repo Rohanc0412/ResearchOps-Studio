@@ -47,7 +47,8 @@ from embeddings import (
     get_sentence_transformer_client,
 )
 from ingestion import ingest_source
-from llm import LLMError, get_llm_client_for_stage, json_response_format
+from core.env import env_float, env_int
+from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -98,71 +99,10 @@ QUERY_PLAN_SCHEMA = {
 }
 
 
-def _log_llm_exchange(label: str, content: str) -> None:
-    if not content:
-        return
-    message = (
-        "LLM request sent for retrieval"
-        if label == "request"
-        else "LLM response received for retrieval"
-    )
-    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
-    if log_full:
-        logger.info(f"{message}\n{content}")
-        logger.info(
-            message,
-            extra={
-                "event": "pipeline.llm",
-                "stage": "retrieve",
-                "label": label,
-                "chars": len(content),
-            },
-        )
-        return
-    logger.info(
-        message,
-        extra={
-            "event": "pipeline.llm",
-            "stage": "retrieve",
-            "label": label,
-            "chars": len(content),
-            "content": content,
-        },
-    )
-
-
-def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        value = default
-    else:
-        try:
-            value = int(raw)
-        except ValueError:
-            value = default
-    if min_value is not None:
-        return max(min_value, value)
-    return value
-
-
-def _env_float(name: str, default: float, *, min_value: float | None = None) -> float:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        value = default
-    else:
-        try:
-            value = float(raw)
-        except ValueError:
-            value = default
-    if min_value is not None:
-        return max(min_value, value)
-    return value
-
-
 def _resolve_rerank_topk(candidate_count: int) -> int:
     if candidate_count <= 0:
         return 0
-    topk = _env_int("RETRIEVER_RERANK_TOPK", 120, min_value=1)
+    topk = env_int("RETRIEVER_RERANK_TOPK", 120, min_value=1)
     topk = min(topk, 200)
     return min(topk, candidate_count)
 
@@ -177,7 +117,7 @@ def _build_query_plan(
     if not base:
         return [], False
 
-    max_queries = _env_int("RETRIEVER_QUERY_COUNT", 8, min_value=6)
+    max_queries = env_int("RETRIEVER_QUERY_COUNT", 8, min_value=6)
 
     llm_plans = _build_query_plan_with_llm(
         question=base,
@@ -190,26 +130,6 @@ def _build_query_plan(
         raise ValueError("LLM query generation failed or returned no queries.")
 
     return llm_plans, True
-
-
-def _extract_json_payload(text: str) -> dict | list | None:
-    if not text:
-        return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`").strip()
-    start_candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
-    if not start_candidates:
-        return None
-    start = min(start_candidates)
-    end = cleaned.rfind("}") if cleaned[start] == "{" else cleaned.rfind("]")
-    if end == -1 or end <= start:
-        return None
-    snippet = cleaned[start : end + 1]
-    try:
-        return json.loads(snippet)
-    except json.JSONDecodeError:
-        return None
 
 
 def _normalize_intent(intent: str) -> str | None:
@@ -344,7 +264,7 @@ def _build_query_plan_with_llm(
     )
     system = "You generate search queries as strict JSON only."
     try:
-        _log_llm_exchange("request", prompt)
+        log_llm_exchange("request", prompt, stage="retrieve", logger=logger)
         response = llm_client.generate(
             prompt,
             system=system,
@@ -365,8 +285,8 @@ def _build_query_plan_with_llm(
         )
         return []
 
-    _log_llm_exchange("response", response)
-    payload = _extract_json_payload(response)
+    log_llm_exchange("response", response, stage="retrieve", logger=logger)
+    payload = extract_json_payload(response)
     items = None
     if isinstance(payload, dict):
         items = payload.get("queries") or payload.get("items")
@@ -511,7 +431,7 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
     if provider_name == "ollama":
         model_name = _resolve_embed_model(provider_name)
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
-        timeout_seconds = _env_int("OLLAMA_TIMEOUT_SECONDS", 60, min_value=5)
+        timeout_seconds = env_int("OLLAMA_TIMEOUT_SECONDS", 60, min_value=5)
         return get_ollama_client(
             model_name=model_name,
             base_url=base_url,
@@ -526,7 +446,7 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
         api_key = os.getenv("HF_TOKEN", "").strip()
         if not api_key:
             raise EmbedError("HF_TOKEN is required for hosted embeddings.")
-        timeout_seconds = _env_int("HF_TIMEOUT_SECONDS", 60, min_value=5)
+        timeout_seconds = env_int("HF_TIMEOUT_SECONDS", 60, min_value=5)
         wait_for_model = os.getenv("HF_WAIT_FOR_MODEL", "true").strip().lower() not in {
             "0",
             "false",
@@ -660,10 +580,10 @@ def _embed_texts_batched(
         cpu_cap = max(1, (os.cpu_count() or 2) // 2)
         free_ram = get_free_ram_gb()
         ram_cap = max(1, int(free_ram / MODEL_EMBED_RAM_GB)) if free_ram is not None else cpu_cap
-        hard_cap = _env_int("RETRIEVER_EMBED_MODELS", 3, min_value=1)
+        hard_cap = env_int("RETRIEVER_EMBED_MODELS", 3, min_value=1)
         # pool_size = model instances (RAM-bound); n_chunks = parallelism hint (can exceed pool_size)
         pool_size = min(cpu_cap, ram_cap, hard_cap)
-        n_chunks = _env_int("RETRIEVER_EMBED_CHUNKS", pool_size, min_value=1)
+        n_chunks = env_int("RETRIEVER_EMBED_CHUNKS", pool_size, min_value=1)
         if pool_size > 1:
             try:
                 pool = get_embed_worker_pool(
@@ -864,7 +784,7 @@ def _rank_sources(
             texts_to_embed.append(text)
             pending.append((idx, canonical_id, text_hash, cached_row))
 
-        batch_size = _env_int("RETRIEVER_EMBED_BATCH", 32, min_value=1)
+        batch_size = env_int("RETRIEVER_EMBED_BATCH", 32, min_value=1)
         stats["batch_count"] = math.ceil(len(texts_to_embed) / batch_size) if texts_to_embed else 0
         if texts_to_embed:
             vectors = _embed_texts_batched(embed_client, texts_to_embed, batch_size=batch_size)
@@ -891,10 +811,10 @@ def _rank_sources(
                 embed_norms[idx] = (1.0 + _cosine_similarity(query_embedding, vector)) / 2.0
 
     weights = {
-        "bm25": _env_float("RETRIEVER_WEIGHT_BM25", 0.55, min_value=0.0),
-        "embed": _env_float("RETRIEVER_WEIGHT_EMBED", 0.30, min_value=0.0),
-        "recency": _env_float("RETRIEVER_WEIGHT_RECENCY", 0.10, min_value=0.0),
-        "citation": _env_float("RETRIEVER_WEIGHT_CITATION", 0.05, min_value=0.0),
+        "bm25": env_float("RETRIEVER_WEIGHT_BM25", 0.55, min_value=0.0),
+        "embed": env_float("RETRIEVER_WEIGHT_EMBED", 0.30, min_value=0.0),
+        "recency": env_float("RETRIEVER_WEIGHT_RECENCY", 0.10, min_value=0.0),
+        "citation": env_float("RETRIEVER_WEIGHT_CITATION", 0.05, min_value=0.0),
     }
 
     stats["used_embeddings"] = True if topk > 0 else False
@@ -922,7 +842,7 @@ def _select_diverse(
     selected: list[RankedCandidate] = []
     intent_counts: dict[str, int] = {intent: 0 for intent in ALLOWED_INTENTS}
     connector_counts: dict[str, int] = {}
-    max_connector_fraction = _env_float("RETRIEVER_MAX_CONNECTOR_FRACTION", 0.6, min_value=0.0)
+    max_connector_fraction = env_float("RETRIEVER_MAX_CONNECTOR_FRACTION", 0.6, min_value=0.0)
     connector_cap = max(1, math.ceil(target_count * max_connector_fraction))
 
     for candidate in candidates:
@@ -1142,7 +1062,7 @@ def _ingest_selected_sources(
     embedding_provider = _EmbeddingProviderAdapter(embed_client)
 
     # Phase 1: parallel fetch (pure I/O — no DB, no session)
-    max_workers = _env_int("RETRIEVER_INGEST_WORKERS", 4, min_value=1)
+    max_workers = env_int("RETRIEVER_INGEST_WORKERS", 4, min_value=1)
     fetched_map: dict[int, RetrievedSource | None] = {}
 
     def _fetch_one(args: tuple[int, RankedCandidate]) -> tuple[int, RetrievedSource | None]:
@@ -1274,7 +1194,7 @@ def _plan_step_labels(
             max_tokens=300,
             temperature=0.3,
         )
-        payload = _extract_json_payload(response)
+        payload = extract_json_payload(response)
         if isinstance(payload, list) and len(payload) == 6 and all(isinstance(s, str) for s in payload):
             return [s.strip() for s in payload]
         logger.warning(
@@ -1297,7 +1217,7 @@ def _parallel_mcp_search(
     mcp_max_per_source: int,
 ) -> list:
     """Search all query-plan entries in parallel using ThreadPoolExecutor."""
-    parallel_queries = _env_int("RETRIEVER_MCP_PARALLEL_QUERIES", 6, min_value=1)
+    parallel_queries = env_int("RETRIEVER_MCP_PARALLEL_QUERIES", 6, min_value=1)
 
     def _search_one(plan) -> list:
         try:
@@ -1352,10 +1272,10 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         },
     )
 
-    mcp_rate = _env_float("RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND", 2.0, min_value=0.1)
+    mcp_rate = env_float("RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND", 2.0, min_value=0.1)
     logger.info("MCP rate limit: %.1f req/s (RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND)", mcp_rate)
     mcp_connector = ScientificPapersMCPConnector(max_requests_per_second=mcp_rate)
-    mcp_max_per_source = _env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
+    mcp_max_per_source = env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
     retrieved_by_source: dict[str, list[RetrievedSource]] = {}
 
     raw_sources = _parallel_mcp_search(query_plan, mcp_connector, mcp_max_per_source=mcp_max_per_source)
@@ -1424,8 +1344,8 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         data={"latency_ms": latency_ms},
     )
 
-    min_sources = _env_int("RETRIEVER_MIN_SOURCES", 10, min_value=1)
-    max_sources = _env_int("RETRIEVER_MAX_SOURCES", 20, min_value=min_sources)
+    min_sources = env_int("RETRIEVER_MIN_SOURCES", 10, min_value=1)
+    max_sources = env_int("RETRIEVER_MAX_SOURCES", 20, min_value=min_sources)
     available = len(ranked)
     if available >= min_sources:
         target_count = min(max_sources, available)

@@ -19,7 +19,8 @@ from app_services.project_runs import (
 )
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
-from core.tenancy import tenant_uuid
+from core.evaluation import METRIC_EVAL_GROUNDING_PCT, METRIC_EVAL_STATUS
+from core.tenancy import get_tenant_id
 from db.models.run_sections import RunSectionRow
 from db.models.runs import RunStatusDb
 from db.models.section_reviews import SectionReviewRow
@@ -32,10 +33,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from schemas.truth import ArtifactOut, RunEventOut
 
 router = APIRouter(prefix="/runs", tags=["runs"])
-
-
-def _tenant_uuid(identity: Identity) -> UUID:
-    return tenant_uuid(identity.tenant_id)
 
 
 class OkResponse(BaseModel):
@@ -112,7 +109,7 @@ def get_run_by_id(request: Request, run_id: UUID, identity: Identity = IdentityD
     with session_scope(SessionLocal) as session:
         run = get_user_run_or_404(
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             run_id=run_id,
             user_id=identity.user_id,
         )
@@ -143,7 +140,7 @@ def get_run_events(
     """
     accept = request.headers.get("accept", "")
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
+    tenant_id = get_tenant_id(identity)
 
     # Handle Last-Event-ID header for SSE reconnect
     last_event_id_header = request.headers.get("last-event-id")
@@ -256,7 +253,7 @@ def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep)
         cancel_user_run(
             request=request,
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             run_id=run_id,
             identity=identity,
         )
@@ -293,7 +290,7 @@ def retry_run_endpoint(
         run = retry_user_run(
             request=request,
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             run_id=run_id,
             identity=identity,
             llm_model=body.llm_model,
@@ -309,7 +306,7 @@ def get_artifacts_for_run(
     with session_scope(SessionLocal) as session:
         return list_user_run_artifacts(
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             run_id=run_id,
             user_id=identity.user_id,
         )
@@ -323,7 +320,7 @@ def get_snippets_for_run(
     with session_scope(SessionLocal) as session:
         return list_user_run_snippets(
             session=session,
-            tenant_id=_tenant_uuid(identity),
+            tenant_id=get_tenant_id(identity),
             run_id=run_id,
             user_id=identity.user_id,
         )
@@ -335,7 +332,7 @@ def trigger_evaluation(
 ):
     """Trigger on-demand evaluation of a research report. Streams SSE events."""
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
+    tenant_id = get_tenant_id(identity)
 
     # Verify access
     with session_scope(SessionLocal) as session:
@@ -343,7 +340,7 @@ def trigger_evaluation(
             session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
         )
         usage = get_run_usage_metrics(run)
-        if usage.get("eval_status") == "running":
+        if usage.get(METRIC_EVAL_STATUS) == "running":
             raise HTTPException(status_code=409, detail="evaluation_already_running")
 
     async def _gen():
@@ -382,14 +379,14 @@ def get_evaluation(
 ) -> dict:
     """Return stored evaluation results for a run."""
     SessionLocal = request.app.state.SessionLocal
-    tenant_id = _tenant_uuid(identity)
+    tenant_id = get_tenant_id(identity)
 
     with session_scope(SessionLocal) as session:
         run = get_user_run_or_404(
             session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
         )
         usage = get_run_usage_metrics(run)
-        status = usage.get("eval_status", "none")
+        status = usage.get(METRIC_EVAL_STATUS, "none")
 
         if status not in ("complete", "running"):
             return {"status": "none"}
@@ -427,7 +424,7 @@ def get_evaluation(
         return {
             "status": status,
             "evaluated_at": usage.get("eval_evaluated_at"),
-            "grounding_pct": usage.get("eval_grounding_pct"),
+            "grounding_pct": usage.get(METRIC_EVAL_GROUNDING_PCT),
             "faithfulness_pct": usage.get("eval_faithfulness_pct"),
             "sections_passed": usage.get("eval_sections_passed", sum(1 for r in reviews if r.verdict == "pass")),
             "sections_total": usage.get("eval_sections_total", len(reviews)),

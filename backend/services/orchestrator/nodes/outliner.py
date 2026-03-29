@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 
 from core.orchestrator.state import (
@@ -19,7 +18,7 @@ from core.orchestrator.state import (
 from core.pipeline_events import emit_run_event, instrument_node
 from db.models.outline_notes import OutlineNoteRow
 from db.models.run_sections import RunSectionRow
-from llm import LLMError, get_llm_client_for_stage, json_response_format
+from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -61,40 +60,6 @@ OUTLINE_SCHEMA = {
 }
 
 
-
-def _print_llm_exchange(label: str, content: str) -> None:
-    if content is None:
-        return
-    message = (
-        "LLM request sent for outline"
-        if "request" in label and "response" not in label
-        else "LLM response received for outline"
-    )
-    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
-    if log_full:
-        logger.info(f"{message}\n{content}")
-        logger.info(
-            message,
-            extra={
-                "event": "pipeline.llm",
-                "stage": "outline",
-                "label": label,
-                "chars": len(content),
-            },
-        )
-        return
-    logger.info(
-        message,
-        extra={
-            "event": "pipeline.llm",
-            "stage": "outline",
-            "label": label,
-            "chars": len(content),
-            "content": content,
-        },
-    )
-
-
 @instrument_node("outline")
 def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     """
@@ -129,31 +94,6 @@ def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorSta
 
     state.outline = outline
     return state
-
-
-def _extract_json_payload(text: str) -> dict | list | None:
-    if not text:
-        return None
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = match.group(1) if match else text
-    cleaned = cleaned.strip()
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
-
-    start_candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
-    if not start_candidates:
-        return None
-    start = min(start_candidates)
-    end = cleaned.rfind("}") if cleaned[start] == "{" else cleaned.rfind("]")
-    if end == -1 or end <= start:
-        return None
-    snippet = cleaned[start : end + 1]
-    try:
-        return json.loads(snippet)
-    except json.JSONDecodeError:
-        return None
 
 
 def _generate_outline_with_llm(
@@ -212,7 +152,7 @@ def _generate_outline_with_llm(
     )
     system = "You design grounded report outlines as strict JSON."
     try:
-        _print_llm_exchange("request", prompt)
+        log_llm_exchange("request", prompt, stage="outline", logger=logger)
         response = llm_client.generate(
             prompt,
             system=system,
@@ -231,8 +171,8 @@ def _generate_outline_with_llm(
         except LLMError:
             return None
 
-    _print_llm_exchange("response", response)
-    payload = _extract_json_payload(response)
+    log_llm_exchange("response", response, stage="outline", logger=logger)
+    payload = extract_json_payload(response)
     if payload is None:
         fallback = _fallback_outline_from_text(response, user_query, vetted_sources)
         if fallback:
@@ -608,7 +548,7 @@ def _repair_outline_with_llm(
     )
     system = "You correct report outlines as strict JSON."
     try:
-        _print_llm_exchange("repair_request", prompt)
+        log_llm_exchange("request", prompt, stage="outline", logger=logger)
         response = llm_client.generate(
             prompt,
             system=system,
@@ -627,8 +567,8 @@ def _repair_outline_with_llm(
         except LLMError:
             return None
 
-    _print_llm_exchange("repair_response", response)
-    payload = _extract_json_payload(response)
+    log_llm_exchange("response", response, stage="outline", logger=logger)
+    payload = extract_json_payload(response)
     if payload is None:
         return None
 

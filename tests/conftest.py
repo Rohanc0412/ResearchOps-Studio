@@ -12,7 +12,7 @@ def _add_path(p: Path) -> None:
     sys.path.insert(0, str(p))
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1] / "backend"
 
 # Make monorepo trees importable without editable installs.
 _add_path(REPO_ROOT / "services" / "api")

@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 
+from core.env import env_bool, now_utc
+from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA
 from core.orchestrator.state import (
     EvaluatorDecision,
     EvidenceSnippetRef,
@@ -23,117 +25,15 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
-from llm import LLMError, get_llm_client_for_stage, json_response_format
+from core.pipeline_events.events import truncate_text
+from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    val = os.getenv(name, "").strip().lower()
-    if val in {"1", "true", "yes", "on"}:
-        return True
-    if val in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
-EVALUATION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "section_id": {"type": "string"},
-        "grounding_score": {"type": "integer"},
-        "verdict": {"type": "string"},
-        "issues": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "sentence_index": {"type": "integer"},
-                    "problem": {"type": "string"},
-                    "notes": {"type": "string"},
-                    "citations": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["sentence_index", "problem", "notes", "citations"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["section_id", "grounding_score", "verdict", "issues"],
-    "additionalProperties": False,
-}
-
-
-_ALLOWED_PROBLEMS = {
-    "unsupported",
-    "contradicted",
-    "missing_citation",
-    "invalid_citation",
-    "not_in_pack",
-    "overstated",
-}
-
-
-def _log_llm_exchange(label: str, section_id: str, content: str) -> None:
-    if not content:
-        return
-    message = (
-        "LLM request sent for evaluation"
-        if label == "request"
-        else "LLM response received for evaluation"
-    )
-    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
-    if log_full:
-        logger.info(f"{message} (section={section_id})\n{content}")
-        logger.info(
-            message,
-            extra={
-                "event": "pipeline.llm",
-                "stage": "evaluate",
-                "label": label,
-                "section_id": section_id,
-                "chars": len(content),
-            },
-        )
-        return
-    logger.info(
-        message,
-        extra={
-            "event": "pipeline.llm",
-            "stage": "evaluate",
-            "label": label,
-            "section_id": section_id,
-            "chars": len(content),
-            "content": content,
-        },
-    )
-
-
-def _extract_json_payload(text: str) -> dict | list | None:
-    if not text:
-        return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`").strip()
-    start_candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
-    if not start_candidates:
-        return None
-    start = min(start_candidates)
-    end = cleaned.rfind("}") if cleaned[start] == "{" else cleaned.rfind("]")
-    if end == -1 or end <= start:
-        return None
-    snippet = cleaned[start : end + 1]
-    try:
-        return json.loads(snippet)
-    except json.JSONDecodeError:
-        return None
-
-
-def _truncate_text(text: str, max_chars: int) -> str:
-    cleaned = text.strip()
-    if len(cleaned) <= max_chars:
-        return cleaned
-    return cleaned[:max_chars].rstrip() + "..."
 
 
 def _snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
@@ -142,7 +42,7 @@ def _snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
         payload.append(
             {
                 "snippet_id": str(snippet.snippet_id),
-                "text": _truncate_text(snippet.text, 800),
+                "text": truncate_text(snippet.text, 800),
             }
         )
     return payload
@@ -152,7 +52,7 @@ def _normalize_issue(item: dict, allowed_ids: set[str]) -> dict | None:
     if not isinstance(item, dict):
         return None
     problem = str(item.get("problem", "")).strip().lower()
-    if problem not in _ALLOWED_PROBLEMS:
+    if problem not in ALLOWED_PROBLEMS:
         return None
     sentence_index = item.get("sentence_index")
     try:
@@ -225,19 +125,19 @@ def _evaluate_section_with_llm(
         "- Do not include markdown, backticks, or commentary outside the JSON.\n"
     )
     try:
-        _log_llm_exchange("request", section.section_id, prompt)
+        log_llm_exchange("request", prompt, stage="evaluate", section_id=section.section_id, logger=logger)
         response = llm_client.generate(
             prompt,
             system=system,
             max_tokens=1400,
             temperature=0.2,
-            response_format=json_response_format("evaluation", EVALUATION_SCHEMA),
+            response_format=json_response_format("evaluation", GROUNDING_SCHEMA),
         )
     except LLMError as exc:
         raise ValueError("LLM evaluator failed to respond.") from exc
 
-    _log_llm_exchange("response", section.section_id, response)
-    payload = _extract_json_payload(response)
+    log_llm_exchange("response", response, stage="evaluate", section_id=section.section_id, logger=logger)
+    payload = extract_json_payload(response)
     if not isinstance(payload, dict):
         raise ValueError("Evaluator did not return a JSON object.")
 
@@ -357,7 +257,7 @@ def _persist_section_review(
         )
         .one_or_none()
     )
-    now = datetime.utcnow()
+    now = now_utc()
     if row:
         # Clear old issues and flush before inserting new ones to avoid
         # UniqueViolation on (review_id, issue_order) during re-evaluation.
@@ -394,7 +294,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
 
     # Acquire LLM client unless disabled via env.
     llm_client = None
-    if _env_bool("EVALUATOR_LLM_ENABLED", True):
+    if env_bool("EVALUATOR_LLM_ENABLED", True):
         try:
             llm_client = get_llm_client_for_stage("evaluate", state.llm_provider, state.llm_model, stage_models=state.stage_models)
         except LLMError:

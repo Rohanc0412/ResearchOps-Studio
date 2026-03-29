@@ -13,28 +13,16 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from checkpoints import PostgresCheckpointSaver
+from core.env import env_int
 from core.orchestrator.state import OrchestratorState
 from core.runs.lifecycle import transition_run_status
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.artifacts import create_artifact, list_artifacts
 from graph import RunCancelledError, create_orchestrator_graph
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
-
-
-def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        value = default
-    else:
-        try:
-            value = int(raw)
-        except ValueError:
-            value = default
-    if min_value is not None:
-        return max(min_value, value)
-    return value
 
 
 def _guess_mime_type(name: str) -> str:
@@ -150,7 +138,7 @@ async def run_orchestrator(
         },
     )
 
-    max_iterations = _env_int("ORCHESTRATOR_MAX_ITERATIONS", max_iterations, min_value=1)
+    max_iterations = env_int("ORCHESTRATOR_MAX_ITERATIONS", max_iterations, min_value=1)
 
     # Initialize state
     initial_state = OrchestratorState(
@@ -226,10 +214,15 @@ async def run_orchestrator(
         final_state.completed_at = datetime.now(UTC)
 
         # Update run status
-        run_row = session.query(RunRow).get(run_id)
+        session.execute(
+            update(RunRow)
+            .where(RunRow.id == run_id)
+            .values(current_stage="export", updated_at=datetime.now(UTC))
+        )
+        run_row = session.execute(
+            select(RunRow).where(RunRow.id == run_id)
+        ).scalar_one_or_none()
         if run_row:
-            run_row.current_stage = "export"
-            run_row.updated_at = datetime.now(UTC)
             _persist_artifacts(session, run_row, final_state.artifacts or {})
 
         # Transition to succeeded

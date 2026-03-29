@@ -11,8 +11,9 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 
+from core.env import now_utc
 from core.orchestrator.state import (
     EvidenceSnippetRef,
     OrchestratorState,
@@ -24,7 +25,7 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
-from llm import LLMError, get_llm_client_for_stage, json_response_format
+from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -61,60 +62,6 @@ _ALLOWED_ISSUE_TYPES = {
     "not_in_pack",
 }
 
-
-def _log_llm_exchange(label: str, section_id: str, content: str) -> None:
-    if not content:
-        return
-    message = (
-        "LLM request sent for repair"
-        if label == "request"
-        else "LLM response received for repair"
-    )
-    log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
-    if log_full:
-        logger.info(f"{message} (section={section_id})\n{content}")
-        logger.info(
-            message,
-            extra={
-                "event": "pipeline.llm",
-                "stage": "repair",
-                "label": label,
-                "section_id": section_id,
-                "chars": len(content),
-            },
-        )
-        return
-    logger.info(
-        message,
-        extra={
-            "event": "pipeline.llm",
-            "stage": "repair",
-            "label": label,
-            "section_id": section_id,
-            "chars": len(content),
-            "content": content,
-        },
-    )
-
-
-def _extract_json_payload(text: str) -> dict | list | None:
-    if not text:
-        return None
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`").strip()
-    start_candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
-    if not start_candidates:
-        return None
-    start = min(start_candidates)
-    end = cleaned.rfind("}") if cleaned[start] == "{" else cleaned.rfind("]")
-    if end == -1 or end <= start:
-        return None
-    snippet = cleaned[start : end + 1]
-    try:
-        return json.loads(snippet)
-    except json.JSONDecodeError:
-        return None
 
 
 def _split_into_sentences(text: str) -> list[str]:
@@ -489,7 +436,7 @@ def _repair_with_llm(
         "- Do NOT include commentary outside JSON.\n"
     )
     system = "You repair evidence-grounded drafts and return strict JSON only."
-    _log_llm_exchange("request", section.section_id, prompt)
+    log_llm_exchange("request", prompt, stage="repair", section_id=section.section_id, logger=logger)
     response = llm_client.generate(
         prompt,
         system=system,
@@ -497,8 +444,8 @@ def _repair_with_llm(
         temperature=0.2,
         response_format=json_response_format("repair", REPAIR_SCHEMA),
     )
-    _log_llm_exchange("response", section.section_id, response)
-    payload = _extract_json_payload(response)
+    log_llm_exchange("response", response, stage="repair", section_id=section.section_id, logger=logger)
+    payload = extract_json_payload(response)
     if not isinstance(payload, dict):
         raise ValueError("Repair response did not return a JSON object.")
     return payload
@@ -522,7 +469,7 @@ def _persist_draft_section(
         )
         .one_or_none()
     )
-    now = datetime.utcnow()
+    now = now_utc()
     if row:
         row.text = text
         row.section_summary = summary

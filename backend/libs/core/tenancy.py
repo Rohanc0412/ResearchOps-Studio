@@ -5,6 +5,11 @@ from uuid import UUID, uuid5
 _TENANT_NAMESPACE = UUID("6d7f9a0e-84c4-4c8e-9a5b-4d7b2d3c6a10")
 
 
+def get_tenant_id(identity: object) -> UUID:
+    """Return the DB-stable UUID for the tenant in an Identity object."""
+    return tenant_uuid(identity.tenant_id)  # type: ignore[union-attr]
+
+
 def tenant_uuid(tenant_id: str) -> UUID:
     """
     Converts an auth-layer tenant_id (string) into a stable UUID for DB storage.

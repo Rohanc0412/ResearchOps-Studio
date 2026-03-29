@@ -29,7 +29,7 @@ def _get_state_value(state: Any, key: str) -> Any:
     return getattr(state, key, None)
 
 
-def _truncate_text(text: str, max_chars: int = 2000) -> str:
+def truncate_text(text: str, max_chars: int = 2000) -> str:
     cleaned = (text or "").strip()
     if len(cleaned) <= max_chars:
         return cleaned
@@ -147,7 +147,7 @@ def _outline_preview(outline: Any, limit: int = 8) -> list[dict[str, Any]]:
 
 def _stage_input_details(stage: str, state: Any) -> dict[str, Any]:
     details: dict[str, Any] = {}
-    details["user_query"] = _truncate_text(str(_get_state_value(state, "user_query") or ""))
+    details["user_query"] = truncate_text(str(_get_state_value(state, "user_query") or ""))
     if stage == "retrieve":
         details["existing_queries"] = list(_get_state_value(state, "generated_queries") or [])
     if stage == "evidence_pack":
@@ -186,7 +186,7 @@ def _stage_output_details(stage: str, state: Any) -> dict[str, Any]:
     elif stage == "draft":
         draft_text = _get_state_value(state, "draft_text") or ""
         details["draft_length"] = len(draft_text)
-        details["draft_preview"] = _truncate_text(str(draft_text), max_chars=800)
+        details["draft_preview"] = truncate_text(str(draft_text), max_chars=800)
     elif stage == "evaluate":
         decision = _get_state_value(state, "evaluator_decision")
         if decision is not None:

@@ -10,6 +10,8 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from core.env import env_optional_int
+
 _EMBED_CLIENTS: dict[tuple, SentenceTransformerEmbedClient] = {}
 _EMBED_MODEL_CONFIGS: dict[str, set[tuple]] = {}
 _OLLAMA_CLIENTS: dict[tuple, OllamaEmbedClient] = {}
@@ -86,7 +88,7 @@ class OllamaEmbedClient:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        max_chars = _env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
+        max_chars = env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
         if max_chars is not None:
             texts = [text[:max_chars] if len(text) > max_chars else text for text in texts]
         try:
@@ -113,7 +115,7 @@ class OllamaEmbedClient:
             raise RuntimeError(f"Ollama embeddings request failed: {exc}") from exc
 
     def _embed_single(self, text: str) -> list[float]:
-        max_chars = _env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
+        max_chars = env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
         if max_chars is not None and len(text) > max_chars:
             text = text[:max_chars]
         data = self._post_json("/api/embeddings", {"model": self.model_name, "prompt": text})
@@ -184,33 +186,6 @@ def _is_http_status(exc: Exception, status_code: int) -> bool:
     except Exception:
         return False
     return False
-
-
-def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        value = default
-    else:
-        try:
-            value = int(raw)
-        except ValueError:
-            value = default
-    if min_value is not None:
-        return max(min_value, value)
-    return value
-
-
-def _env_optional_int(name: str, *, min_value: int | None = None) -> int | None:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return None
-    try:
-        value = int(raw)
-    except ValueError:
-        return None
-    if min_value is not None and value < min_value:
-        return min_value
-    return value
 
 
 def _coerce_hf_embeddings(data: Any, *, expected: int) -> list[list[float]]:
