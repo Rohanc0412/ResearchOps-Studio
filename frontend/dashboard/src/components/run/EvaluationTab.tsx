@@ -70,7 +70,7 @@ function IssueItem({ issue }: { issue: EvaluationIssue }) {
 }
 
 function SectionRow({ section }: { section: EvaluationSection }) {
-  const [open, setOpen] = useState(section.verdict === "fail");
+  const [open, setOpen] = useState(false);
   const isFail = section.verdict === "fail";
 
   return (
@@ -297,7 +297,7 @@ export function EvaluationTab({ runId }: { runId: string }) {
               Section Details
             </p>
             <div className="flex flex-col gap-1">
-              {result.sections!.map((section) => (
+              {(result.sections ?? []).map((section) => (
                 <SectionRow key={section.section_id} section={section} />
               ))}
             </div>
