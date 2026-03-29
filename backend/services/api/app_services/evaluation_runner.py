@@ -152,12 +152,45 @@ class EvaluationRunner:
     def run(self) -> Generator[dict, None, None]:
         """Yield SSE-ready event dicts. Runs steps 1-3 sequentially."""
         yield {"type": "evaluation.started", "steps": 3}
+        # Mark evaluation as running so GET /evaluation returns status="running" during the pipeline
+        self._write_metric("eval_status", "running")
+        self.session.flush()
         yield {"type": "evaluation.step", "step": 1, "label": "Scoring section grounding…"}
         yield from self._run_grounding()
         yield {"type": "evaluation.step", "step": 2, "label": "Computing answer faithfulness…"}
         yield from self._run_faithfulness()
         yield {"type": "evaluation.step", "step": 3, "label": "Tallying section results…"}
         yield from self._run_finalize()
+
+    def _write_metric(self, name: str, value: int | str | None) -> None:
+        """Upsert a single metric into run_usage_metrics."""
+        existing = (
+            self.session.query(RunUsageMetricRow)
+            .filter(
+                RunUsageMetricRow.tenant_id == self.tenant_id,
+                RunUsageMetricRow.run_id == self.run_id,
+                RunUsageMetricRow.metric_name == name,
+            )
+            .one_or_none()
+        )
+        if existing:
+            if isinstance(value, int) and not isinstance(value, bool):
+                existing.metric_number = value
+                existing.metric_text = None
+            else:
+                existing.metric_text = str(value) if value is not None else None
+                existing.metric_number = None
+        else:
+            row = RunUsageMetricRow(
+                tenant_id=self.tenant_id,
+                run_id=self.run_id,
+                metric_name=name,
+            )
+            if isinstance(value, int) and not isinstance(value, bool):
+                row.metric_number = value
+            else:
+                row.metric_text = str(value) if value is not None else None
+            self.session.add(row)
 
     # ── Step 1: Grounding ─────────────────────────────────────────────────────
 
@@ -541,48 +574,15 @@ class EvaluationRunner:
                 problem = issue.get("problem", "unknown")
                 issues_by_type[problem] = issues_by_type.get(problem, 0) + 1
 
-        # Persist final metrics to run_usage_metrics
+        # Persist final metrics
         now_str = datetime.utcnow().isoformat()
-        metrics_to_upsert = {
-            "eval_status": "complete",
-            "eval_evaluated_at": now_str,
-            "eval_sections_passed": sections_passed,
-            "eval_sections_total": sections_total,
-        }
+        self._write_metric("eval_status", "complete")
+        self._write_metric("eval_evaluated_at", now_str)
+        self._write_metric("eval_sections_passed", sections_passed)
+        self._write_metric("eval_sections_total", sections_total)
         if self._grounding_pct is not None:
-            metrics_to_upsert["eval_grounding_pct"] = self._grounding_pct
-        if self._faithfulness_pct is not None:
-            metrics_to_upsert["eval_faithfulness_pct"] = self._faithfulness_pct
-
-        for name, value in metrics_to_upsert.items():
-            existing = (
-                session.query(RunUsageMetricRow)
-                .filter(
-                    RunUsageMetricRow.tenant_id == tenant_id,
-                    RunUsageMetricRow.run_id == run_id,
-                    RunUsageMetricRow.metric_name == name,
-                )
-                .one_or_none()
-            )
-            if existing:
-                if isinstance(value, int):
-                    existing.metric_number = value
-                    existing.metric_text = None
-                else:
-                    existing.metric_text = str(value)
-                    existing.metric_number = None
-            else:
-                row = RunUsageMetricRow(
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    metric_name=name,
-                )
-                if isinstance(value, int):
-                    row.metric_number = value
-                else:
-                    row.metric_text = str(value)
-                session.add(row)
-        session.flush()
+            self._write_metric("eval_grounding_pct", self._grounding_pct)
+        self.session.flush()
 
         yield {
             "type": "evaluation.complete",

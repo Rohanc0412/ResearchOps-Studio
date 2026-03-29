@@ -146,6 +146,7 @@ def test_finalize_step_yields_complete_event_with_issue_counts():
 
     session = MagicMock()
     session.query.return_value.filter.return_value.all.return_value = [review1, review2]
+    session.query.return_value.filter.return_value.one_or_none.return_value = None
 
     runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
     # Inject grounding result from step 1 (normally set during _run_grounding)
@@ -160,3 +161,4 @@ def test_finalize_step_yields_complete_event_with_issue_counts():
     assert event["sections_total"] == 2
     assert event["issues_by_type"]["unsupported"] == 1
     assert event["issues_by_type"]["missing_citation"] == 1
+    session.flush.assert_called_once()

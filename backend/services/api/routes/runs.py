@@ -354,7 +354,6 @@ def trigger_evaluation(
                     runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
                     for event in runner.run():
                         loop.call_soon_threadsafe(queue.put_nowait, event)
-                        session.commit()
             except ValueError as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "code": str(exc)})
             except Exception as exc:
