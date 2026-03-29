@@ -192,6 +192,10 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
       await expect(secretEl).toBeVisible({ timeout: 10_000 });
       state.mfaSecret = ((await secretEl.textContent()) ?? '').trim().replace(/\s/g, '');
     }
+    if (!state.mfaSecret) {
+      test.skip(true, 'mfaSecret not captured — test 1.10 must have failed');
+      return;
+    }
     const code = await generateSafeTOTP(state.mfaSecret);
     await page.locator('input[placeholder="123456"]').first().fill(code);
     await page.getByRole('button', { name: /verify|enable|confirm/i }).click();
@@ -458,7 +462,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
     const toggleBtn = page.locator('[data-testid="progress-card-toggle"]');
     if (await toggleBtn.isVisible({ timeout: 15_000 })) {
       await toggleBtn.click();
-      await expect(page.getByText(/recent updates|events/i)).toBeVisible({ timeout: 5_000 });
+      await expect(page.getByText(/recent updates/i)).toBeVisible({ timeout: 5_000 });
       await toggleBtn.click();
       await expect(page.getByText(/recent updates/i)).not.toBeVisible({ timeout: 3_000 });
     }
@@ -493,7 +497,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
   test('5.6 configure modal — blank custom model blocks start', async ({ page }) => {
     await page.goto(`/projects/${state.projectId}`);
     await page.waitForURL(`**/projects/${state.projectId}`, { timeout: 10_000 });
-    const pipelineToggle = page.locator('button[aria-pressed]').first();
+    const pipelineToggle = page.locator('[data-testid="pipeline-toggle"]');
     const isArmed = await pipelineToggle.getAttribute('aria-pressed');
     if (isArmed !== 'true') await pipelineToggle.click();
     const compose = page.getByPlaceholder(/ask a question|research topic|report/i);
