@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { apiFetchJson, apiBaseUrl } from "./client";
-import { accessToken } from "./auth";
+import { accessToken, handleUnauthorized } from "./auth";
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -65,10 +65,12 @@ export function useRunEvaluateMutation(runId: string) {
   const [progress, setProgress] = useState<EvaluationProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const isRunningRef = useRef(false);
 
   const mutate = useCallback(async () => {
-    if (isRunning) return;
+    if (isRunningRef.current) return;
     setIsRunning(true);
+    isRunningRef.current = true;
     setProgress({ step: 1, stepLabel: "Starting…", sections: [] });
     setError(null);
 
@@ -88,6 +90,7 @@ export function useRunEvaluateMutation(runId: string) {
       });
 
       if (!response.ok || !response.body) {
+        if (response.status === 401) handleUnauthorized();
         setError(`Request failed (${response.status})`);
         return;
       }
@@ -164,9 +167,10 @@ export function useRunEvaluateMutation(runId: string) {
       setError(err instanceof Error ? err.message : "unknown_error");
     } finally {
       setIsRunning(false);
+      isRunningRef.current = false;
       setProgress(null);
     }
-  }, [runId, isRunning, qc]);
+  }, [runId, qc]);
 
   return { mutate, isRunning, progress, error };
 }
