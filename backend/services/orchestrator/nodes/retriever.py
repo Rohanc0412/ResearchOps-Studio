@@ -45,6 +45,14 @@ from embeddings import (
     get_hf_client,
     get_ollama_client,
     get_sentence_transformer_client,
+    resolve_embed_device,
+    resolve_embed_dtype,
+    resolve_embed_max_seq_len,
+    resolve_embed_model,
+    resolve_embed_normalize,
+    resolve_embed_provider,
+    resolve_embed_trust_remote_code,
+    resolve_embed_workers,
 )
 from ingestion import ingest_source
 from core.env import env_float, env_int
@@ -352,84 +360,12 @@ class EmbeddingClient(Protocol):
     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
 
 
-def _resolve_embed_provider(llm_provider: str | None) -> str:
-    raw = os.getenv("RETRIEVER_EMBED_PROVIDER")
-    if raw and raw.strip():
-        return raw.strip().lower()
-    if llm_provider and llm_provider.strip():
-        return llm_provider.strip().lower()
-    return os.getenv("LLM_PROVIDER", "hosted").strip().lower()
-
-
-def _resolve_embed_model(provider_name: str) -> str:
-    if provider_name == "ollama":
-        for name in ("OLLAMA_EMBED_MODEL", "RETRIEVER_EMBED_MODEL", "EMBEDDING_MODEL"):
-            raw = os.getenv(name)
-            if raw and raw.strip():
-                return raw.strip()
-        return "nomic-embed-text"
-
-    for name in ("RETRIEVER_EMBED_MODEL",):
-        raw = os.getenv(name)
-        if raw and raw.strip():
-            return raw.strip()
-    if provider_name in {"local", "sentence-transformers", "bge"}:
-        return "BAAI/bge-m3"
-    return "text-embedding-3-small"
-
-
-def _resolve_embed_device() -> str:
-    raw = os.getenv("RETRIEVER_EMBED_DEVICE") or os.getenv("EMBEDDING_DEVICE")
-    if raw and raw.strip():
-        return raw.strip()
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
-
-
-def _resolve_embed_dtype(device: str) -> str | None:
-    raw = os.getenv("RETRIEVER_EMBED_DTYPE")
-    if raw and raw.strip():
-        return raw.strip().lower()
-    if device.startswith("cuda"):
-        return "float16"
-    return None
-
-
-def _resolve_embed_normalize() -> bool:
-    raw = os.getenv("RETRIEVER_EMBED_NORMALIZE")
-    if not raw:
-        return True
-    return raw.strip().lower() not in {"0", "false", "no"}
-
-
-def _resolve_embed_max_seq_len() -> int | None:
-    raw = os.getenv("RETRIEVER_EMBED_MAX_SEQ_LEN")
-    if not raw or not raw.strip():
-        return None
-    try:
-        value = int(raw)
-    except ValueError:
-        return None
-    return value if value > 0 else None
-
-
-def _resolve_embed_trust_remote_code(model_name: str) -> bool:
-    raw = os.getenv("RETRIEVER_EMBED_TRUST_REMOTE_CODE")
-    if raw and raw.strip():
-        return raw.strip().lower() in {"1", "true", "yes"}
-    return "bge-m3" in model_name.lower()
-
-
 def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
-    provider_name = _resolve_embed_provider(llm_provider)
+    provider_name = resolve_embed_provider(llm_provider)
     if provider_name in {"", "none", "disabled"}:
         raise EmbedError("Embeddings are required for reranking but provider is disabled.")
     if provider_name == "ollama":
-        model_name = _resolve_embed_model(provider_name)
+        model_name = resolve_embed_model(provider_name)
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
         timeout_seconds = env_int("OLLAMA_TIMEOUT_SECONDS", 60, min_value=5)
         return get_ollama_client(
@@ -438,7 +374,7 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
             timeout_seconds=timeout_seconds,
         )
     if provider_name in {"hf", "huggingface", "hosted", "inference"}:
-        model_name = os.getenv("HF_EMBED_MODEL", "BAAI/bge-m3").strip()
+        model_name = resolve_embed_model(provider_name)
         base_url = os.getenv(
             "HF_INFERENCE_BASE_URL",
             "https://router.huggingface.co/hf-inference/models",
@@ -460,19 +396,16 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
             wait_for_model=wait_for_model,
         )
     if provider_name in {"local", "sentence-transformers", "bge"}:
-        model_name = _resolve_embed_model(provider_name)
-        device = _resolve_embed_device()
-        normalize = _resolve_embed_normalize()
-        max_seq_length = _resolve_embed_max_seq_len()
-        dtype = _resolve_embed_dtype(device)
-        trust_remote_code = _resolve_embed_trust_remote_code(model_name)
+        model_name = resolve_embed_model(provider_name)
+        device = resolve_embed_device()
+        dtype = resolve_embed_dtype(device)
         return get_sentence_transformer_client(
             model_name=model_name,
             device=device,
-            normalize_embeddings=normalize,
-            max_seq_length=max_seq_length,
+            normalize_embeddings=resolve_embed_normalize(),
+            max_seq_length=resolve_embed_max_seq_len(),
             dtype=dtype,
-            trust_remote_code=trust_remote_code,
+            trust_remote_code=resolve_embed_trust_remote_code(model_name),
         )
     raise EmbedError(f"Unknown embedding provider: {provider_name}")
 
@@ -580,10 +513,10 @@ def _embed_texts_batched(
         cpu_cap = max(1, (os.cpu_count() or 2) // 2)
         free_ram = get_free_ram_gb()
         ram_cap = max(1, int(free_ram / MODEL_EMBED_RAM_GB)) if free_ram is not None else cpu_cap
-        hard_cap = env_int("RETRIEVER_EMBED_MODELS", 3, min_value=1)
+        hard_cap = resolve_embed_workers()
         # pool_size = model instances (RAM-bound); n_chunks = parallelism hint (can exceed pool_size)
         pool_size = min(cpu_cap, ram_cap, hard_cap)
-        n_chunks = env_int("RETRIEVER_EMBED_CHUNKS", pool_size, min_value=1)
+        n_chunks = env_int("EMBED_CHUNKS", pool_size, min_value=1)
         if pool_size > 1:
             try:
                 pool = get_embed_worker_pool(
@@ -594,6 +527,7 @@ def _embed_texts_batched(
                     dtype=client.dtype,
                     trust_remote_code=client.trust_remote_code,
                     n_workers=pool_size,
+                    preloaded_model=getattr(client, "_model", None),
                 )
                 return pool.encode(texts, n_chunks=n_chunks)
             except Exception as exc:  # noqa: BLE001

@@ -27,6 +27,14 @@ from embeddings import (
     get_hf_client,
     get_ollama_client,
     get_sentence_transformer_client,
+    resolve_embed_device,
+    resolve_embed_dtype,
+    resolve_embed_max_seq_len,
+    resolve_embed_model,
+    resolve_embed_normalize,
+    resolve_embed_provider,
+    resolve_embed_trust_remote_code,
+    resolve_embed_workers,
 )
 from retrieval.search import search_snippets
 import logging
@@ -72,76 +80,10 @@ def _env_float(name: str, default: float, *, min_value: float | None = None) -> 
     return value
 
 
-def _resolve_embed_model() -> str:
-    for name in (
-        "EVIDENCE_EMBED_MODEL",
-        "OLLAMA_EMBED_MODEL",
-        "EMBEDDING_MODEL",
-        "RETRIEVER_EMBED_MODEL",
-    ):
-        raw = os.getenv(name)
-        if raw and raw.strip():
-            return raw.strip()
-    return "BAAI/bge-m3"
-
-
-def _resolve_embed_provider() -> str:
-    raw = os.getenv("EVIDENCE_EMBED_PROVIDER") or os.getenv("RETRIEVER_EMBED_PROVIDER")
-    if raw and raw.strip():
-        return raw.strip().lower()
-    return "local"
-
-
-def _resolve_embed_device() -> str:
-    raw = os.getenv("EVIDENCE_EMBED_DEVICE") or os.getenv("EMBEDDING_DEVICE")
-    if raw and raw.strip():
-        return raw.strip()
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
-
-
-def _resolve_embed_dtype(device: str) -> str | None:
-    raw = os.getenv("EVIDENCE_EMBED_DTYPE")
-    if raw and raw.strip():
-        return raw.strip().lower()
-    if device.startswith("cuda"):
-        return "float16"
-    return None
-
-
-def _resolve_embed_normalize() -> bool:
-    raw = os.getenv("EVIDENCE_EMBED_NORMALIZE")
-    if not raw:
-        return True
-    return raw.strip().lower() not in {"0", "false", "no"}
-
-
-def _resolve_embed_trust_remote_code(model_name: str) -> bool:
-    raw = os.getenv("EVIDENCE_EMBED_TRUST_REMOTE_CODE")
-    if raw and raw.strip():
-        return raw.strip().lower() in {"1", "true", "yes"}
-    return "bge-m3" in model_name.lower()
-
-
-def _resolve_embed_max_seq_len() -> int | None:
-    raw = os.getenv("EVIDENCE_EMBED_MAX_SEQ_LEN") or os.getenv("RETRIEVER_EMBED_MAX_SEQ_LEN")
-    if not raw or not raw.strip():
-        return None
-    try:
-        value = int(raw)
-    except ValueError:
-        return None
-    return value if value > 0 else None
-
-
 def _get_embed_client() -> EmbeddingClient:
-    provider = _resolve_embed_provider()
+    provider = resolve_embed_provider()
     if provider == "ollama":
-        model_name = _resolve_embed_model()
+        model_name = resolve_embed_model(provider)
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
         timeout_seconds = _env_int("OLLAMA_TIMEOUT_SECONDS", 60, min_value=5)
         return get_ollama_client(
@@ -150,7 +92,7 @@ def _get_embed_client() -> EmbeddingClient:
             timeout_seconds=timeout_seconds,
         )
     if provider in {"hf", "huggingface", "hosted", "inference"}:
-        model_name = os.getenv("HF_EMBED_MODEL", "BAAI/bge-m3").strip()
+        model_name = resolve_embed_model(provider)
         base_url = os.getenv(
             "HF_INFERENCE_BASE_URL",
             "https://router.huggingface.co/hf-inference/models",
@@ -172,19 +114,16 @@ def _get_embed_client() -> EmbeddingClient:
             wait_for_model=wait_for_model,
         )
 
-    model_name = _resolve_embed_model()
-    device = _resolve_embed_device()
-    dtype = _resolve_embed_dtype(device)
-    normalize = _resolve_embed_normalize()
-    trust_remote_code = _resolve_embed_trust_remote_code(model_name)
-    max_seq_length = _resolve_embed_max_seq_len()
+    model_name = resolve_embed_model(provider)
+    device = resolve_embed_device()
+    dtype = resolve_embed_dtype(device)
     return get_sentence_transformer_client(
         model_name=model_name,
         device=device,
-        normalize_embeddings=normalize,
-        max_seq_length=max_seq_length,
+        normalize_embeddings=resolve_embed_normalize(),
+        max_seq_length=resolve_embed_max_seq_len(),
         dtype=dtype,
-        trust_remote_code=trust_remote_code,
+        trust_remote_code=resolve_embed_trust_remote_code(model_name),
     )
 
 
@@ -197,10 +136,10 @@ def _embed_texts_batched(
         cpu_cap = max(1, (os.cpu_count() or 2) // 2)
         free_ram = get_free_ram_gb()
         ram_cap = max(1, int(free_ram / MODEL_EMBED_RAM_GB)) if free_ram is not None else cpu_cap
-        hard_cap = _env_int("RETRIEVER_EMBED_MODELS", 3, min_value=1)
+        hard_cap = resolve_embed_workers()
         # pool_size = model instances (RAM-bound); n_chunks = parallelism hint (can exceed pool_size)
         pool_size = min(cpu_cap, ram_cap, hard_cap)
-        n_chunks = _env_int("RETRIEVER_EMBED_CHUNKS", pool_size, min_value=1)
+        n_chunks = _env_int("EMBED_CHUNKS", pool_size, min_value=1)
         if pool_size > 1:
             try:
                 pool = get_embed_worker_pool(
@@ -211,6 +150,7 @@ def _embed_texts_batched(
                     dtype=client.dtype,
                     trust_remote_code=client.trust_remote_code,
                     n_workers=pool_size,
+                    preloaded_model=getattr(client, "_model", None),
                 )
                 return pool.encode(texts, n_chunks=n_chunks)
             except Exception as exc:  # noqa: BLE001

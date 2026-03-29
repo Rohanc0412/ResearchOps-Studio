@@ -11,7 +11,7 @@ RUN apt-get update && \
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY . /app
+COPY backend/. /app
 
 ENV PYTHONPATH=/app/services/api:/app/services/orchestrator:/app/services/workers:/app/libs:/app/libs/research_rules:/app/data
 ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp

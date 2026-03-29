@@ -111,6 +111,9 @@ def run_once(*, SessionLocal) -> bool:
         with session_scope(SessionLocal) as session:
             _mark_job_failed(session, job_id, err)
             _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
+    finally:
+        from embeddings import release_gpu_memory
+        release_gpu_memory()
 
     return True
 

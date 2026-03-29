@@ -102,10 +102,11 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     run_row.status = RunStatusDb.succeeded
     if state.outline and state.outline.report_title:
         run_row.report_title = state.outline.report_title
+    usage = dict(get_run_usage_metrics(run_row))
+    usage["evidence_snippets"] = len(state.evidence_snippets or [])
     if warnings:
-        usage = dict(get_run_usage_metrics(run_row))
         usage["warnings"] = warnings
-        replace_run_usage_metrics(run_row, usage)
+    replace_run_usage_metrics(run_row, usage)
 
     emit_run_event(
         session=session,

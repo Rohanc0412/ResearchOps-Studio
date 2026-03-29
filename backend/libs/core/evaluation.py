@@ -1,10 +1,10 @@
 """Shared evaluation constants used by both the orchestrator pipeline and the API evaluation runner."""
 
+from __future__ import annotations
+
 # Metric key constants
 METRIC_EVAL_STATUS = "eval_status"
 METRIC_EVAL_GROUNDING_PCT = "eval_grounding_pct"
-
-from __future__ import annotations
 
 ALLOWED_PROBLEMS: frozenset[str] = frozenset({
     "unsupported",

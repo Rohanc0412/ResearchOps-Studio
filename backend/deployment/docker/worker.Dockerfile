@@ -30,7 +30,7 @@ if (major, minor) < (2, 6):
     sys.exit(f"Expected torch>=2.6, got {torch.__version__}")
 PY
 
-COPY . /app
+COPY backend/. /app
 
 ENV PYTHONPATH=/app/services/workers:/app/services/orchestrator:/app/services/api:/app/libs:/app/data
 ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp

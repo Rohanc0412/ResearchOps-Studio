@@ -12,6 +12,112 @@ from typing import Any
 
 from core.env import env_optional_int
 
+
+# ---------------------------------------------------------------------------
+# Shared embedding configuration resolvers
+# Reads EMBED_* env vars; falls back to legacy RETRIEVER_EMBED_* for compat.
+# ---------------------------------------------------------------------------
+
+def resolve_embed_provider(llm_provider: str | None = None) -> str:
+    """Return the embedding provider name.
+
+    Resolution order:
+    1. EMBED_PROVIDER env var (or legacy RETRIEVER_EMBED_PROVIDER)
+    2. ``llm_provider`` hint passed by the caller (e.g. the retriever passes the
+       active LLM provider so embeddings stay on the same backend by default)
+    3. LLM_PROVIDER env var
+    4. Hard default: ``"local"``
+    """
+    raw = os.getenv("EMBED_PROVIDER") or os.getenv("RETRIEVER_EMBED_PROVIDER")
+    if raw and raw.strip():
+        return raw.strip().lower()
+    if llm_provider and llm_provider.strip():
+        return llm_provider.strip().lower()
+    lp = os.getenv("LLM_PROVIDER", "").strip().lower()
+    return lp if lp else "local"
+
+
+def resolve_embed_model(provider: str) -> str:
+    raw = (
+        os.getenv("EMBED_MODEL")
+        or os.getenv("HF_EMBED_MODEL")
+        or os.getenv("RETRIEVER_EMBED_MODEL")
+    )
+    if raw and raw.strip():
+        return raw.strip()
+    if provider == "ollama":
+        return "nomic-embed-text"
+    if provider in {"local", "sentence-transformers", "bge"}:
+        return "BAAI/bge-m3"
+    return "text-embedding-3-small"
+
+
+def resolve_embed_device() -> str:
+    raw = (
+        os.getenv("EMBED_DEVICE")
+        or os.getenv("RETRIEVER_EMBED_DEVICE")
+        or os.getenv("EMBEDDING_DEVICE")
+    )
+    if raw and raw.strip():
+        return raw.strip()
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def resolve_embed_dtype(device: str) -> str | None:
+    raw = os.getenv("EMBED_DTYPE") or os.getenv("RETRIEVER_EMBED_DTYPE")
+    if raw and raw.strip():
+        return raw.strip().lower()
+    if device.startswith("cuda"):
+        return "float16"
+    return None
+
+
+def resolve_embed_normalize() -> bool:
+    raw = os.getenv("EMBED_NORMALIZE") or os.getenv("RETRIEVER_EMBED_NORMALIZE")
+    if not raw:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no"}
+
+
+def resolve_embed_trust_remote_code(model_name: str) -> bool:
+    raw = (
+        os.getenv("EMBED_TRUST_REMOTE_CODE")
+        or os.getenv("RETRIEVER_EMBED_TRUST_REMOTE_CODE")
+    )
+    if raw and raw.strip():
+        return raw.strip().lower() in {"1", "true", "yes"}
+    return "bge-m3" in model_name.lower()
+
+
+def resolve_embed_max_seq_len() -> int | None:
+    raw = (
+        os.getenv("EMBED_MAX_SEQ_LEN")
+        or os.getenv("RETRIEVER_EMBED_MAX_SEQ_LEN")
+    )
+    if not raw or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def resolve_embed_workers() -> int:
+    """Return the configured hard cap on embedding pool workers (default 3)."""
+    raw = os.getenv("EMBED_WORKERS") or os.getenv("RETRIEVER_EMBED_MODELS")
+    if raw and raw.strip():
+        try:
+            value = int(raw)
+            return max(1, value)
+        except ValueError:
+            pass
+    return 3
+
 _EMBED_CLIENTS: dict[tuple, SentenceTransformerEmbedClient] = {}
 _EMBED_MODEL_CONFIGS: dict[str, set[tuple]] = {}
 _OLLAMA_CLIENTS: dict[tuple, OllamaEmbedClient] = {}
@@ -65,6 +171,13 @@ class SentenceTransformerEmbedClient:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        # Restore to configured device if the model was offloaded to CPU between runs.
+        try:
+            current = str(next(self._model.parameters()).device)
+            if not current.startswith(self.device):
+                self._model.to(self.device)
+        except Exception:
+            pass
         embeddings = self._model.encode(
             texts,
             normalize_embeddings=self.normalize_embeddings,
@@ -420,6 +533,27 @@ def _worker_init(
         _worker_model.max_seq_length = max_seq_length
 
 
+def _worker_init_shared(
+    model: Any,
+    device: str,
+    normalize_embeddings: bool,
+    max_seq_length: int | None,
+) -> None:
+    """Fast-path worker init: receive shared-memory CPU model and move it to device.
+
+    The model weights were loaded once in the main process (bfloat16, CPU) and
+    pinned to OS shared memory via ``share_memory()``.  PyTorch's multiprocessing
+    pickle protocol sends only a file-descriptor handle — no disk read, no data
+    copy.  Each worker then calls ``.to(device)`` which allocates new CUDA tensors
+    from those shared CPU pages, leaving the shared memory untouched for siblings.
+    """
+    global _worker_model, _worker_normalize_embeddings
+    _worker_normalize_embeddings = normalize_embeddings
+    _worker_model = model.to(device)
+    if max_seq_length:
+        _worker_model.max_seq_length = max_seq_length
+
+
 def _worker_encode(texts: list[str]) -> list[list[float]]:
     """Encode texts in a worker process using the pre-loaded model."""
     return _worker_model.encode(
@@ -447,17 +581,27 @@ class EmbedWorkerPool:
         dtype: str | None,
         trust_remote_code: bool,
         n_workers: int,
+        preloaded_model: Any = None,
     ) -> None:
         self._n_workers = n_workers
-        self._executor = ProcessPoolExecutor(
-            max_workers=n_workers,
-            initializer=_worker_init,
-            initargs=(model_name, device, normalize_embeddings, max_seq_length, dtype, trust_remote_code),
-            mp_context=multiprocessing.get_context("spawn"),
-        )
-        # Register explicit shutdown in addition to ProcessPoolExecutor's own atexit handler.
-        # This ensures the pool is released early when Python exits, before other atexit
-        # handlers that may depend on the model being unloaded.
+        if preloaded_model is not None:
+            # Fast path: pin weights to OS shared memory once; workers receive a
+            # file-descriptor handle (not a copy) and move them to the GPU device.
+            preloaded_model.share_memory()
+            self._executor = ProcessPoolExecutor(
+                max_workers=n_workers,
+                initializer=_worker_init_shared,
+                initargs=(preloaded_model, device, normalize_embeddings, max_seq_length),
+                mp_context=multiprocessing.get_context("spawn"),
+            )
+        else:
+            # Slow path: each worker loads the full model from disk independently.
+            self._executor = ProcessPoolExecutor(
+                max_workers=n_workers,
+                initializer=_worker_init,
+                initargs=(model_name, device, normalize_embeddings, max_seq_length, dtype, trust_remote_code),
+                mp_context=multiprocessing.get_context("spawn"),
+            )
         atexit.register(self.shutdown)
 
     def encode(self, texts: list[str], *, n_chunks: int | None = None) -> list[list[float]]:
@@ -493,6 +637,57 @@ _EMBED_WORKER_POOL: EmbedWorkerPool | None = None
 _EMBED_WORKER_POOL_LOCK = threading.Lock()
 
 
+def release_gpu_memory() -> None:
+    """Free GPU memory after a run while keeping model weights in CPU shared memory.
+
+    - Worker pool is shut down: the spawned processes (and their CUDA copies) are
+      killed immediately, freeing VRAM.
+    - Main-process model is moved to CPU and left in ``_EMBED_CLIENTS``.  Its
+      weights are already in bfloat16, so they occupy ~2.2 GB of CPU RAM.
+    - On the next run ``get_embed_worker_pool`` calls ``share_memory()`` on that
+      CPU model and passes it to the new workers via a shared-memory handle.
+      Workers call ``.to(device)`` which is a fast PCIe transfer (~1–2 s) rather
+      than a disk read (~5–10 s).
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    global _EMBED_WORKER_POOL
+
+    # Shut down worker pool — kills spawned processes and frees their CUDA copies.
+    with _EMBED_WORKER_POOL_LOCK:
+        if _EMBED_WORKER_POOL is not None:
+            try:
+                _EMBED_WORKER_POOL.shutdown()
+            except Exception:
+                pass
+            _EMBED_WORKER_POOL = None
+            _log.info("GPU offload: embedding worker pool shut down.")
+
+    # Move main-process models from GPU to CPU.  Weights stay resident in RAM so
+    # the next pool spawn can share them without a disk read.
+    offloaded = 0
+    for client in _EMBED_CLIENTS.values():
+        model = getattr(client, "_model", None)
+        if model is None:
+            continue
+        try:
+            model.to("cpu")
+            offloaded += 1
+        except Exception:
+            pass
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+    if offloaded:
+        _log.info("GPU offload: %d model(s) moved to CPU; CUDA cache cleared.", offloaded)
+
+
 def get_embed_worker_pool(
     *,
     model_name: str,
@@ -502,8 +697,14 @@ def get_embed_worker_pool(
     dtype: str | None,
     trust_remote_code: bool,
     n_workers: int,
+    preloaded_model: Any = None,
 ) -> EmbedWorkerPool:
-    """Return the singleton EmbedWorkerPool, creating it on first call."""
+    """Return the singleton EmbedWorkerPool, creating it on first call.
+
+    Pass ``preloaded_model`` (a CPU-resident SentenceTransformer) to use the
+    shared-memory fast path — workers receive the weights via an OS handle
+    instead of each loading from disk.
+    """
     global _EMBED_WORKER_POOL
     with _EMBED_WORKER_POOL_LOCK:
         if _EMBED_WORKER_POOL is None:
@@ -515,6 +716,7 @@ def get_embed_worker_pool(
                 dtype=dtype,
                 trust_remote_code=trust_remote_code,
                 n_workers=n_workers,
+                preloaded_model=preloaded_model,
             )
         else:
             import logging
