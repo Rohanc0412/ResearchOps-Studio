@@ -14,10 +14,10 @@ from datetime import datetime
 from typing import Generator
 from uuid import UUID
 
-from db.models.artifacts import ArtifactRow
+from db.models.artifacts import ArtifactRow  # used in _run_faithfulness (Task 2)
 from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow
-from db.models.run_usage_metrics import RunUsageMetricRow
+from db.models.run_usage_metrics import RunUsageMetricRow  # used in _run_faithfulness and _run_finalize (Tasks 2-3)
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
@@ -98,7 +98,10 @@ def _extract_json_payload(text: str) -> dict | list | None:
         return None
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`").strip()
+        lines = cleaned.splitlines()
+        # drop opening fence line (e.g. ```json or ```) and closing fence line
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        cleaned = "\n".join(lines).strip()
     start_candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
     if not start_candidates:
         return None
@@ -198,7 +201,7 @@ class EvaluationRunner:
 
             # Load evidence snippets for this section
             snippet_rows = (
-                session.query(SnippetRow.id, SnippetRow.text, SnippetRow.char_start, SnippetRow.char_end, SnapshotRow.source_id)
+                session.query(SnippetRow.id, SnippetRow.text)
                 .join(SnapshotRow, SnapshotRow.id == SnippetRow.snapshot_id)
                 .join(
                     SectionEvidenceRow,
@@ -341,6 +344,10 @@ class EvaluationRunner:
         )
         now = datetime.utcnow()
         if row:
+            # Clear existing child rows and flush to DB before the issues_json setter
+            # appends new SectionReviewIssueRow children. Without this flush the
+            # cascade="all, delete-orphan" on the relationship conflicts with the
+            # new children and raises a UniqueViolation on (review_id, issue_order).
             row.issues = []
             session.flush()
             row.verdict = verdict
@@ -368,4 +375,4 @@ class EvaluationRunner:
     # ── Step 3: Finalize (placeholder — implemented in Task 3) ───────────────
 
     def _run_finalize(self) -> Generator[dict, None, None]:
-        yield {"type": "evaluation.complete", "grounding_pct": None, "faithfulness_pct": None, "sections_passed": 0, "sections_total": 0, "issues_by_type": {}}
+        yield {"type": "evaluation.complete", "grounding_pct": self._grounding_pct, "faithfulness_pct": self._faithfulness_pct, "sections_passed": 0, "sections_total": 0, "issues_by_type": {}}
