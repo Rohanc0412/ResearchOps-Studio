@@ -1090,6 +1090,7 @@ export function ChatViewPage() {
             </div>
             <button
               type="button"
+              data-testid="pipeline-toggle"
               aria-pressed={runPipelineArmed}
               onClick={() => setRunPipelineArmed((prev) => !prev)}
               className={`rounded-full border px-3.5 py-2 text-xs transition-colors ${

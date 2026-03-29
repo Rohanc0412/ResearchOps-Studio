@@ -416,8 +416,8 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
   test('5.1 launch run with default model — progress card appears', async ({ page }) => {
     await page.goto(`/projects/${state.projectId}`);
     await page.waitForURL(`**/projects/${state.projectId}`, { timeout: 10_000 });
-    // Enable "Run pipeline" toggle (aria-pressed button)
-    const pipelineToggle = page.locator('button[aria-pressed]').first();
+    // Enable "Run pipeline" toggle
+    const pipelineToggle = page.locator('[data-testid="pipeline-toggle"]');
     await expect(pipelineToggle).toBeVisible({ timeout: 10_000 });
     const isArmed = await pipelineToggle.getAttribute('aria-pressed');
     if (isArmed !== 'true') await pipelineToggle.click();
@@ -579,7 +579,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
     await expect(page.locator('[class*="mono"]').filter({ hasText: /report/i }).first()).toBeVisible({ timeout: 10_000 });
     // Timestamp — formatTs renders a date string like "Jan 1" or "Mar 29" next to the artifact
     await expect(
-      page.locator('[class*="mono"][class*="text-xs"]').filter({ hasText: /\d{1,2}/ }).first()
+      page.locator('[data-testid="artifact-timestamp"]').first()
     ).toBeVisible({ timeout: 5_000 });
   });
 
@@ -742,7 +742,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
     // Button should enter loading/disabled state
     await expect(
       page.locator('[class*="spinner" i], [class*="loading" i]').first().or(
-        page.getByRole('button', { name: /run evaluation/i }).and(page.locator('[disabled]'))
+        page.getByRole('button', { name: /run evaluation/i }).and(page.locator(':disabled'))
       ).first()
     ).toBeVisible({ timeout: 15_000 });
   });

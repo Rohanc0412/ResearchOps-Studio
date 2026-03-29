@@ -170,7 +170,7 @@ export function ArtifactsPage() {
                   <span className="inline-block rounded-md border border-[#2d2545] bg-[#1e1b2e] px-2 py-0.5 font-mono text-[11px] font-medium text-obsidian-accent">
                     {a.type}
                   </span>
-                  <div className="mt-0.5 font-mono text-xs text-obsidian-muted">
+                  <div data-testid="artifact-timestamp" className="mt-0.5 font-mono text-xs text-obsidian-muted">
                     {formatTs(a.created_at)}
                   </div>
                 </div>
