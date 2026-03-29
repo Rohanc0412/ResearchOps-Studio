@@ -517,7 +517,78 @@ class EvaluationRunner:
             "total_claims": total,
         }
 
-    # ── Step 3: Finalize (placeholder — implemented in Task 3) ───────────────
+    # ── Step 3: Finalize ──────────────────────────────────────────────────────
 
     def _run_finalize(self) -> Generator[dict, None, None]:
-        yield {"type": "evaluation.complete", "grounding_pct": self._grounding_pct, "faithfulness_pct": self._faithfulness_pct, "sections_passed": 0, "sections_total": 0, "issues_by_type": {}}
+        session = self.session
+        tenant_id = self.tenant_id
+        run_id = self.run_id
+
+        # Load all section reviews for this run
+        reviews = (
+            session.query(SectionReviewRow)
+            .filter(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
+            .all()
+        )
+
+        sections_passed = sum(1 for r in reviews if r.verdict == "pass")
+        sections_total = len(reviews)
+
+        # Tally issue types across all failed sections
+        issues_by_type: dict[str, int] = {}
+        for review in reviews:
+            for issue in (review.issues_json or []):
+                problem = issue.get("problem", "unknown")
+                issues_by_type[problem] = issues_by_type.get(problem, 0) + 1
+
+        # Persist final metrics to run_usage_metrics
+        now_str = datetime.utcnow().isoformat()
+        metrics_to_upsert = {
+            "eval_status": "complete",
+            "eval_evaluated_at": now_str,
+            "eval_sections_passed": sections_passed,
+            "eval_sections_total": sections_total,
+        }
+        if self._grounding_pct is not None:
+            metrics_to_upsert["eval_grounding_pct"] = self._grounding_pct
+        if self._faithfulness_pct is not None:
+            metrics_to_upsert["eval_faithfulness_pct"] = self._faithfulness_pct
+
+        for name, value in metrics_to_upsert.items():
+            existing = (
+                session.query(RunUsageMetricRow)
+                .filter(
+                    RunUsageMetricRow.tenant_id == tenant_id,
+                    RunUsageMetricRow.run_id == run_id,
+                    RunUsageMetricRow.metric_name == name,
+                )
+                .one_or_none()
+            )
+            if existing:
+                if isinstance(value, int):
+                    existing.metric_number = value
+                    existing.metric_text = None
+                else:
+                    existing.metric_text = str(value)
+                    existing.metric_number = None
+            else:
+                row = RunUsageMetricRow(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    metric_name=name,
+                )
+                if isinstance(value, int):
+                    row.metric_number = value
+                else:
+                    row.metric_text = str(value)
+                session.add(row)
+        session.flush()
+
+        yield {
+            "type": "evaluation.complete",
+            "grounding_pct": self._grounding_pct,
+            "faithfulness_pct": self._faithfulness_pct,
+            "sections_passed": sections_passed,
+            "sections_total": sections_total,
+            "issues_by_type": issues_by_type,
+        }

@@ -123,3 +123,40 @@ def test_faithfulness_step_yields_faithfulness_done_event():
     assert event["faithfulness_pct"] == 50
     session.add.assert_called_once()  # metric row was persisted
     session.flush.assert_called_once()  # flush was called after upsert
+
+
+def test_finalize_step_yields_complete_event_with_issue_counts():
+    """Finalize step counts section verdicts and yields evaluation.complete."""
+    from app_services.evaluation_runner import EvaluationRunner
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    # Two section_review rows: one pass, one fail with issues
+    review1 = MagicMock()
+    review1.verdict = "pass"
+    review1.issues_json = []
+
+    review2 = MagicMock()
+    review2.verdict = "fail"
+    review2.issues_json = [
+        {"sentence_index": 0, "problem": "unsupported", "notes": "no evidence", "citations": []},
+        {"sentence_index": 1, "problem": "missing_citation", "notes": "needs cite", "citations": []},
+    ]
+
+    session = MagicMock()
+    session.query.return_value.filter.return_value.all.return_value = [review1, review2]
+
+    runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
+    # Inject grounding result from step 1 (normally set during _run_grounding)
+    runner._grounding_pct = 75
+
+    events = list(runner._run_finalize())
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["type"] == "evaluation.complete"
+    assert event["sections_passed"] == 1
+    assert event["sections_total"] == 2
+    assert event["issues_by_type"]["unsupported"] == 1
+    assert event["issues_by_type"]["missing_citation"] == 1

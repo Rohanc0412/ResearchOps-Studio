@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import datetime
 from uuid import UUID
 
+from app_services.evaluation_runner import EvaluationRunner
 from app_services.project_runs import (
     cancel_user_run,
     get_user_run_or_404,
@@ -18,8 +20,10 @@ from app_services.project_runs import (
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
 from core.tenancy import tenant_uuid
+from db.models.run_sections import RunSectionRow
 from db.models.runs import RunStatusDb
-from db.repositories.project_runs import list_run_events
+from db.models.section_reviews import SectionReviewRow
+from db.repositories.project_runs import get_run_usage_metrics, list_run_events
 from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -325,3 +329,106 @@ def get_snippets_for_run(
         )
 
 
+@router.post("/{run_id}/evaluate")
+def trigger_evaluation(
+    request: Request, run_id: UUID, identity: Identity = IdentityDep
+):
+    """Trigger on-demand evaluation of a research report. Streams SSE events."""
+    SessionLocal = request.app.state.SessionLocal
+    tenant_id = _tenant_uuid(identity)
+
+    # Verify access
+    with session_scope(SessionLocal) as session:
+        get_user_run_or_404(
+            session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
+        )
+
+    async def _gen():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        sentinel = object()
+
+        def _run_sync():
+            try:
+                with session_scope(SessionLocal) as session:
+                    runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
+                    for event in runner.run():
+                        loop.call_soon_threadsafe(queue.put_nowait, event)
+                        session.commit()
+            except ValueError as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "code": str(exc)})
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "code": "internal_error", "message": str(exc)})
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+        thread = threading.Thread(target=_run_sync, daemon=True)
+        thread.start()
+
+        while True:
+            event = await queue.get()
+            if event is sentinel:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@router.get("/{run_id}/evaluation")
+def get_evaluation(
+    request: Request, run_id: UUID, identity: Identity = IdentityDep
+) -> dict:
+    """Return stored evaluation results for a run."""
+    SessionLocal = request.app.state.SessionLocal
+    tenant_id = _tenant_uuid(identity)
+
+    with session_scope(SessionLocal) as session:
+        run = get_user_run_or_404(
+            session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
+        )
+        usage = get_run_usage_metrics(run)
+        status = usage.get("eval_status", "none")
+
+        if status not in ("complete", "running"):
+            return {"status": "none"}
+
+        # Load section titles
+        section_rows = (
+            session.query(RunSectionRow)
+            .filter(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
+            .order_by(RunSectionRow.section_order)
+            .all()
+        )
+        titles = {r.section_id: r.title for r in section_rows}
+
+        reviews = (
+            session.query(SectionReviewRow)
+            .filter(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
+            .all()
+        )
+
+        issues_by_type: dict[str, int] = {}
+        sections_out = []
+        for review in reviews:
+            issues = review.issues_json or []
+            for issue in issues:
+                p = issue.get("problem", "unknown")
+                issues_by_type[p] = issues_by_type.get(p, 0) + 1
+            sections_out.append({
+                "section_id": review.section_id,
+                "title": titles.get(review.section_id, review.section_id),
+                "grounding_score": None,
+                "verdict": review.verdict,
+                "issues": issues,
+            })
+
+        return {
+            "status": status,
+            "evaluated_at": usage.get("eval_evaluated_at"),
+            "grounding_pct": usage.get("eval_grounding_pct"),
+            "faithfulness_pct": usage.get("eval_faithfulness_pct"),
+            "sections_passed": usage.get("eval_sections_passed", sum(1 for r in reviews if r.verdict == "pass")),
+            "sections_total": usage.get("eval_sections_total", len(reviews)),
+            "issues_by_type": issues_by_type,
+            "sections": sections_out,
+        }
