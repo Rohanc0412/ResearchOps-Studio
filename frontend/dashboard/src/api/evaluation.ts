@@ -154,7 +154,7 @@ export function useRunEvaluateMutation(runId: string) {
           }
 
           if (type === "evaluation.complete") {
-            await qc.invalidateQueries({ queryKey: ["runs", runId, "evaluation"] });
+            await qc.refetchQueries({ queryKey: ["runs", runId, "evaluation"] });
           }
 
           if (type === "error") {

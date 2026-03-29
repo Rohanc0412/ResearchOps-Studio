@@ -339,9 +339,12 @@ def trigger_evaluation(
 
     # Verify access
     with session_scope(SessionLocal) as session:
-        get_user_run_or_404(
+        run = get_user_run_or_404(
             session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
         )
+        usage = get_run_usage_metrics(run)
+        if usage.get("eval_status") == "running":
+            raise HTTPException(status_code=409, detail="evaluation_already_running")
 
     async def _gen():
         loop = asyncio.get_running_loop()
