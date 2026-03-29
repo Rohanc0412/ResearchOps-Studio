@@ -571,6 +571,10 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
     await page.waitForURL(`**/runs/${state.runId}/artifacts`, { timeout: 10_000 });
     // Type badge (e.g. "report_md") in mono font
     await expect(page.locator('[class*="mono"]').filter({ hasText: /report/i }).first()).toBeVisible({ timeout: 10_000 });
+    // Timestamp — formatTs renders a date string like "Jan 1" or "Mar 29" next to the artifact
+    await expect(
+      page.locator('[class*="mono"][class*="text-xs"]').filter({ hasText: /\d{1,2}/ }).first()
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   test('6.4 preview artifact opens markdown panel', async ({ page }) => {
