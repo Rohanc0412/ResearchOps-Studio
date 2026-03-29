@@ -73,3 +73,51 @@ def test_grounding_step_yields_section_and_done_events():
     assert done_event["overall_grounding_pct"] == 90
     assert done_event["pass_count"] == 1
     assert done_event["fail_count"] == 0
+
+
+def test_faithfulness_step_yields_faithfulness_done_event():
+    """Faithfulness step extracts claims and verifies them, yielding faithfulness_done."""
+    from app_services.evaluation_runner import EvaluationRunner
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    claims_response = json.dumps({"claims": ["Model achieves 95% accuracy.", "Training used 400B tokens."]})
+    faithfulness_response = json.dumps({
+        "verdicts": [
+            {"claim_index": 0, "supported": True},
+            {"claim_index": 1, "supported": False},
+        ]
+    })
+
+    mock_llm = MagicMock()
+    mock_llm.generate.side_effect = [claims_response, faithfulness_response]
+
+    # Artifact row with report_md markdown
+    artifact_row = MagicMock()
+    artifact_row.artifact_type = "report_md"
+    artifact_row.metadata_json = {"markdown": "Model achieves 95% accuracy. Training used 400B tokens."}
+
+    # Snippet for verification context
+    snippet_row = MagicMock()
+    snippet_row.id = uuid4()
+    snippet_row.text = "Evaluation shows 95% accuracy on held-out test data."
+
+    session = MagicMock()
+    # artifact query — .filter().first()
+    session.query.return_value.filter.return_value.first.return_value = artifact_row
+    # snippets query for faithfulness — .join().filter().distinct().all()
+    session.query.return_value.join.return_value.filter.return_value.distinct.return_value.all.return_value = [snippet_row]
+    # usage metrics upsert — .filter().one_or_none()
+    session.query.return_value.filter.return_value.one_or_none.return_value = None
+
+    with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
+        runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
+        events = list(runner._run_faithfulness())
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["type"] == "evaluation.faithfulness_done"
+    assert event["total_claims"] == 2
+    assert event["supported_claims"] == 1
+    assert event["faithfulness_pct"] == 50

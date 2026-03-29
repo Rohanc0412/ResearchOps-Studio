@@ -367,10 +367,151 @@ class EvaluationRunner:
             )
             session.add(row)
 
-    # ── Step 2: Faithfulness (placeholder — implemented in Task 2) ────────────
+    # ── Step 2: Faithfulness ──────────────────────────────────────────────────
 
     def _run_faithfulness(self) -> Generator[dict, None, None]:
-        yield {"type": "evaluation.faithfulness_done", "faithfulness_pct": None, "supported_claims": 0, "total_claims": 0}
+        session = self.session
+        tenant_id = self.tenant_id
+        run_id = self.run_id
+
+        # Load report_md artifact
+        artifact = (
+            session.query(ArtifactRow)
+            .filter(
+                ArtifactRow.tenant_id == tenant_id,
+                ArtifactRow.run_id == run_id,
+                ArtifactRow.artifact_type == "report_md",
+            )
+            .first()
+        )
+        if artifact is None:
+            raise ValueError("no_report_artifact")
+
+        markdown = (artifact.metadata_json or {}).get("markdown", "")
+        if not markdown.strip():
+            raise ValueError("no_report_artifact")
+
+        # Load all unique evidence snippets for this run (used as verification context)
+        snippet_rows = (
+            session.query(SnippetRow.id, SnippetRow.text)
+            .join(SectionEvidenceRow, (SectionEvidenceRow.snippet_id == SnippetRow.id) & (SectionEvidenceRow.tenant_id == SnippetRow.tenant_id))
+            .filter(SectionEvidenceRow.tenant_id == tenant_id, SectionEvidenceRow.run_id == run_id)
+            .distinct()
+            .all()
+        )
+        if not snippet_rows:
+            raise ValueError("no_evidence")
+
+        snippets_payload = [
+            {"snippet_id": str(r.id), "text": _truncate(r.text or "", 600)}
+            for r in snippet_rows
+        ]
+
+        llm_client = get_llm_client_for_stage("evaluate")
+        if llm_client is None:
+            yield {
+                "type": "evaluation.faithfulness_done",
+                "faithfulness_pct": None,
+                "supported_claims": 0,
+                "total_claims": 0,
+            }
+            return
+
+        # Call 1: extract factual claims from the full report
+        extract_prompt = (
+            "Extract all distinct factual claims from the research report below. "
+            "A factual claim is a sentence that asserts a verifiable fact (not a transition, opinion, or meta-commentary). "
+            "Return ONLY valid JSON: {\"claims\": [\"claim 1\", \"claim 2\", ...]}\n\n"
+            f"Report:\n{_truncate(markdown, 6000)}"
+        )
+        try:
+            extract_response = llm_client.generate(
+                extract_prompt,
+                system="You are a precise fact extraction assistant.",
+                max_tokens=1200,
+                temperature=0.1,
+                response_format=json_response_format("claims", _CLAIMS_SCHEMA),
+            )
+        except LLMError as exc:
+            raise ValueError("LLM claim extraction failed") from exc
+
+        extract_payload = _extract_json_payload(extract_response)
+        claims: list[str] = []
+        if isinstance(extract_payload, dict):
+            raw = extract_payload.get("claims") or []
+            claims = [str(c).strip() for c in (raw if isinstance(raw, list) else []) if str(c).strip()]
+
+        if not claims:
+            yield {
+                "type": "evaluation.faithfulness_done",
+                "faithfulness_pct": None,
+                "supported_claims": 0,
+                "total_claims": 0,
+            }
+            return
+
+        # Call 2: batch-verify all claims against evidence snippets in one LLM call
+        claims_text = "\n".join(f"{i}. {c}" for i, c in enumerate(claims))
+        verify_prompt = (
+            "For each numbered claim below, determine if ANY of the provided evidence snippets "
+            "directly supports it. A claim is supported if at least one snippet provides clear "
+            "evidence for the assertion.\n\n"
+            "Return ONLY valid JSON:\n"
+            "{\"verdicts\": [{\"claim_index\": 0, \"supported\": true}, ...]}\n\n"
+            f"Claims:\n{claims_text}\n\n"
+            f"Evidence snippets:\n{json.dumps(snippets_payload, indent=2, ensure_ascii=True)}"
+        )
+        try:
+            verify_response = llm_client.generate(
+                verify_prompt,
+                system="You are a research fact-checker. Be strict: only mark supported if evidence is direct and specific.",
+                max_tokens=800,
+                temperature=0.1,
+                response_format=json_response_format("faithfulness", _FAITHFULNESS_SCHEMA),
+            )
+        except LLMError as exc:
+            raise ValueError("LLM faithfulness verification failed") from exc
+
+        verify_payload = _extract_json_payload(verify_response)
+        supported_count = 0
+        if isinstance(verify_payload, dict):
+            verdicts = verify_payload.get("verdicts") or []
+            supported_count = sum(
+                1 for v in (verdicts if isinstance(verdicts, list) else [])
+                if isinstance(v, dict) and v.get("supported") is True
+            )
+
+        total = len(claims)
+        faithfulness_pct = round(supported_count / total * 100) if total > 0 else None
+        self._faithfulness_pct = faithfulness_pct
+
+        # Persist faithfulness score to run_usage_metrics
+        existing = (
+            session.query(RunUsageMetricRow)
+            .filter(
+                RunUsageMetricRow.tenant_id == tenant_id,
+                RunUsageMetricRow.run_id == run_id,
+                RunUsageMetricRow.metric_name == "eval_faithfulness_pct",
+            )
+            .one_or_none()
+        )
+        if existing:
+            existing.metric_number = faithfulness_pct
+        else:
+            session.add(RunUsageMetricRow(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                metric_name="eval_faithfulness_pct",
+                metric_number=faithfulness_pct,
+            ))
+        session.flush()
+
+        yield {
+            "type": "evaluation.faithfulness_done",
+            "faithfulness_pct": faithfulness_pct,
+            "supported_claims": supported_count,
+            "total_claims": total,
+        }
 
     # ── Step 3: Finalize (placeholder — implemented in Task 3) ───────────────
 
