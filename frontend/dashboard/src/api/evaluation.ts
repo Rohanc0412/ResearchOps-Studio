@@ -45,8 +45,8 @@ export const EvaluationResultSchema = z.object({
   evaluated_at: z.string().nullable().optional(),
   grounding_pct: z.number().nullable().optional(),
   faithfulness_pct: z.number().nullable().optional(),
-  sections_passed: z.number().optional(),
-  sections_total: z.number().optional(),
+  sections_passed: z.number().nullable().optional(),
+  sections_total: z.number().nullable().optional(),
   issues_by_type: z.record(z.number()).optional(),
   sections: z.array(EvaluationSectionSchema).optional(),
   history: z.array(EvaluationPassSchema).optional(),
@@ -58,6 +58,8 @@ export const EvaluationProgressSchema = z.object({
   stepLabel: z.string(),
   partialGrounding: z.number().nullable().optional(),
   partialFaithfulness: z.number().nullable().optional(),
+  partialSectionsPassed: z.number().nullable().optional(),
+  partialSectionsTotal: z.number().nullable().optional(),
   sections: z.array(EvaluationSectionSchema),
 });
 export type EvaluationProgress = z.infer<typeof EvaluationProgressSchema>;
@@ -87,7 +89,7 @@ export function useRunEvaluateMutation(runId: string) {
     if (isRunningRef.current) return;
     setIsRunning(true);
     isRunningRef.current = true;
-    setProgress({ step: 1, stepLabel: "Starting…", sections: [] });
+    setProgress({ step: 1, stepLabel: "Starting...", sections: [] });
     setError(null);
 
     abortRef.current = new AbortController();
@@ -107,6 +109,11 @@ export function useRunEvaluateMutation(runId: string) {
 
       if (!response.ok || !response.body) {
         if (response.status === 401) handleUnauthorized();
+        if (response.status === 409) {
+          await qc.invalidateQueries({ queryKey: ["runs", runId, "evaluation"] });
+          setError("Evaluation is already running.");
+          return;
+        }
         setError(`Request failed (${response.status})`);
         return;
       }
@@ -140,6 +147,8 @@ export function useRunEvaluateMutation(runId: string) {
               sections: prev?.sections ?? [],
               partialGrounding: prev?.partialGrounding,
               partialFaithfulness: prev?.partialFaithfulness,
+              partialSectionsPassed: prev?.partialSectionsPassed,
+              partialSectionsTotal: prev?.partialSectionsTotal,
             }));
           }
 
@@ -147,7 +156,7 @@ export function useRunEvaluateMutation(runId: string) {
             const sec = EvaluationSectionSchema.safeParse(event);
             if (sec.success) {
               setProgress((prev) => ({
-                ...(prev ?? { step: 1, stepLabel: "Scoring sections…" }),
+                ...(prev ?? { step: 1, stepLabel: "Scoring sections..." }),
                 sections: [...(prev?.sections ?? []), sec.data],
               }));
             }
@@ -158,6 +167,8 @@ export function useRunEvaluateMutation(runId: string) {
               ...(prev ?? { step: 1, stepLabel: "Grounding complete" }),
               sections: prev?.sections ?? [],
               partialGrounding: event["overall_grounding_pct"] as number,
+              partialSectionsPassed: event["pass_count"] as number,
+              partialSectionsTotal: ((event["pass_count"] as number) ?? 0) + ((event["fail_count"] as number) ?? 0),
             }));
           }
 

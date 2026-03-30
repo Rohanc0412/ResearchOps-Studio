@@ -290,6 +290,7 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
             tenant_id=tenant_id,
             evaluation_pass_id=pass_two.id,
             grounding_pct=89,
+            faithfulness_pct=93,
             sections_passed=2,
             sections_total=2,
             issues_by_type={},
@@ -303,6 +304,8 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "complete"
+    assert payload["grounding_pct"] == 89
+    assert payload["faithfulness_pct"] == 93
     assert payload["sections_passed"] == 2
     assert payload["sections_total"] == 2
     assert len(payload["history"]) == 2
@@ -310,3 +313,70 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
     assert payload["history"][1]["pass_index"] == 1
     assert payload["history"][1]["sections_passed"] == 1
     assert payload["history"][1]["sections"][0]["verdict"] == "fail"
+
+
+def test_get_evaluation_includes_running_pass_history(api_client) -> None:
+    from db.models.runs import RunStatusDb
+    from db.session import session_scope
+
+    client, app = api_client
+    tenant_id = UUID("00000000-0000-0000-0000-000000000001")
+    SessionLocal = app.state.SessionLocal
+
+    with session_scope(SessionLocal) as session:
+        project = create_project(
+            session=session,
+            tenant_id=tenant_id,
+            name="Running Eval History",
+            description=None,
+            created_by="dev-user",
+        )
+        run = create_run(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.id,
+            status=RunStatusDb.succeeded,
+            question="Show the active evaluation pass",
+        )
+        session.add(
+            RunSectionRow(
+                tenant_id=tenant_id,
+                run_id=run.id,
+                section_id="intro",
+                title="Introduction",
+                goal="Intro",
+                section_order=1,
+            )
+        )
+
+        running_pass = create_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            scope="manual",
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=running_pass.id,
+            section_id="intro",
+            section_title="Introduction",
+            section_order=1,
+            verdict="fail",
+            grounding_score=72,
+            issues=[{"sentence_index": 0, "problem": "unsupported", "notes": "Still checking", "citations": []}],
+        )
+        patch_run_usage_metrics(run, {"eval_status": "running"})
+        session.commit()
+        run_id = str(run.id)
+
+    response = client.get(f"/runs/{run_id}/evaluation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "running"
+    assert len(payload["history"]) == 1
+    assert payload["history"][0]["status"] == "running"
+    assert payload["history"][0]["scope"] == "manual"
+    assert payload["history"][0]["sections"][0]["grounding_score"] == 72
+    assert payload["sections"][0]["grounding_score"] == 72

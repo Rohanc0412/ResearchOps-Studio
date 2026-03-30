@@ -4,6 +4,8 @@ import { z } from "zod";
 import { apiFetchJson } from "./client";
 import { SnippetSchema, SourceSchema } from "../types/dto";
 
+type RiskFlagRecord = Record<string, string | boolean>;
+
 const SnippetDetailResponseSchema = z
   .object({
     snippet: z.record(z.unknown()),
@@ -23,8 +25,8 @@ export function useSnippetQuery(snippetId: string) {
       const riskFlagsArray = Array.isArray(riskFlags)
         ? riskFlags
         : riskFlags && typeof riskFlags === "object"
-          ? Object.entries(riskFlags as Record<string, string>)
-              .filter(([, v]) => v !== "False" && v !== false)
+          ? Object.entries(riskFlags as RiskFlagRecord)
+              .filter(([, v]) => v !== "False" && v !== "false" && v !== false)
               .map(([k]) => k)
           : undefined;
       const flat = {

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from core.env import env_bool, now_utc
 from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA
@@ -39,6 +40,8 @@ from llm import (
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+_CITATION_MARKER_RE = re.compile(r"\[\^\d+\]|\[CITE:[^\]]+\]")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 def _snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
@@ -51,6 +54,144 @@ def _snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
             }
         )
     return payload
+
+
+def _extract_cited_claims(section_text: str) -> list[str]:
+    claims: list[str] = []
+    seen: set[str] = set()
+    for sentence in _SENTENCE_SPLIT_RE.split(section_text.strip()):
+        if not _CITATION_MARKER_RE.search(sentence):
+            continue
+        cleaned = _CITATION_MARKER_RE.sub("", sentence)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -\n\t")
+        if not cleaned:
+            continue
+        normalized = cleaned.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        claims.append(cleaned)
+    return claims
+
+
+def _extract_section_claims(llm_client, *, section_title: str, section_text: str) -> list[str]:
+    prompt = (
+        "Extract all distinct factual claims from the report section below. "
+        "A factual claim is a sentence that asserts a verifiable fact. "
+        "Ignore markdown headings and inline citation markers like [^1] or [CITE:...]. "
+        "Return ONLY valid JSON: {\"claims\": [\"claim 1\", \"claim 2\", ...]}\n\n"
+        f"Section title: {section_title}\n\n"
+        f"Section text:\n{truncate_text(section_text, 4000)}"
+    )
+    response = llm_client.generate(
+        prompt,
+        system="You are a precise fact extraction assistant.",
+        max_tokens=900,
+        temperature=0.1,
+    )
+    payload = extract_json_payload(response)
+    raw_claims = payload.get("claims") if isinstance(payload, dict) else []
+    claims: list[str] = []
+    seen: set[str] = set()
+    for raw_claim in raw_claims if isinstance(raw_claims, list) else []:
+        claim = str(raw_claim).strip()
+        if not claim:
+            continue
+        normalized = claim.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        claims.append(claim)
+    return claims
+
+
+def _verify_section_claims(*, llm_client, claims: list[str], snippets: list[EvidenceSnippetRef]) -> int:
+    claims_text = "\n".join(f"{index}. {claim}" for index, claim in enumerate(claims))
+    prompt = (
+        "For each numbered claim below, determine if ANY of the provided evidence snippets "
+        "directly supports it. A claim is supported only if at least one snippet provides clear, specific evidence.\n\n"
+        "Return ONLY valid JSON:\n"
+        "{\"verdicts\": [{\"claim_index\": 0, \"supported\": true}, ...]}\n\n"
+        f"Claims:\n{claims_text}\n\n"
+        f"Evidence snippets:\n{json.dumps(_snippet_payload(snippets), indent=2, ensure_ascii=True)}"
+    )
+    response = llm_client.generate(
+        prompt,
+        system="You are a research fact-checker. Be strict: only mark supported if evidence is direct and specific.",
+        max_tokens=800,
+        temperature=0.1,
+    )
+    payload = extract_json_payload(response)
+    verdicts = payload.get("verdicts") if isinstance(payload, dict) else []
+    return sum(
+        1
+        for verdict in (verdicts if isinstance(verdicts, list) else [])
+        if isinstance(verdict, dict) and verdict.get("supported") is True
+    )
+
+
+def _compute_faithfulness_pct(
+    session: Session,
+    *,
+    state: OrchestratorState,
+    draft_sections: dict[str, str],
+    llm_client,
+) -> int | None:
+    supported_count = 0
+    total_claims = 0
+
+    for section in state.outline.sections if state.outline else []:
+        section_text = draft_sections.get(section.section_id, "").strip()
+        if not section_text:
+            continue
+
+        claims = _extract_cited_claims(section_text)
+        if not claims:
+            try:
+                claims = _extract_section_claims(
+                    llm_client,
+                    section_title=section.title,
+                    section_text=section_text,
+                )
+            except Exception:
+                logger.warning(
+                    "LLM claim extraction failed for section %s during pipeline faithfulness scoring.",
+                    section.section_id,
+                    extra={"stage": "evaluate", "section_id": section.section_id},
+                    exc_info=True,
+                )
+                continue
+        if not claims:
+            continue
+
+        snippets = _load_section_snippets(
+            session,
+            tenant_id=state.tenant_id,
+            run_id=state.run_id,
+            section_id=section.section_id,
+            state_snippets=state.section_evidence_snippets,
+        )
+        if not snippets:
+            continue
+
+        try:
+            supported_count += _verify_section_claims(
+                llm_client=llm_client,
+                claims=claims,
+                snippets=snippets,
+            )
+            total_claims += len(claims)
+        except Exception:
+            logger.warning(
+                "LLM faithfulness verification failed for section %s during pipeline scoring.",
+                section.section_id,
+                extra={"stage": "evaluate", "section_id": section.section_id},
+                exc_info=True,
+            )
+
+    if total_claims == 0:
+        return None
+    return round(supported_count / total_claims * 100)
 
 
 def _normalize_issue(item: dict, allowed_ids: set[str]) -> dict | None:
@@ -415,6 +556,14 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             issues_by_type[problem] = issues_by_type.get(problem, 0) + 1
 
     overall_grounding_pct = round(sum(grounding_scores) / len(grounding_scores)) if grounding_scores else 100
+    faithfulness_pct = None
+    if llm_client is not None:
+        faithfulness_pct = _compute_faithfulness_pct(
+            session,
+            state=state,
+            draft_sections=draft_sections,
+            llm_client=llm_client,
+        )
 
     emit_run_event(
         session=session,
@@ -426,6 +575,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             "pass_count": pass_count,
             "fail_count": fail_count,
             "overall_grounding_pct": overall_grounding_pct,
+            "faithfulness_pct": faithfulness_pct,
         },
     )
     finalize_evaluation_pass(
@@ -433,6 +583,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         tenant_id=state.tenant_id,
         evaluation_pass_id=evaluation_pass.id,
         grounding_pct=overall_grounding_pct,
+        faithfulness_pct=faithfulness_pct,
         sections_passed=pass_count,
         sections_total=pass_count + fail_count,
         issues_by_type=issues_by_type,

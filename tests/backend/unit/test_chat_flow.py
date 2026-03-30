@@ -13,6 +13,7 @@ from db.models.chat_messages import ChatMessageRow
 from db.models.runs import RunRow
 from db.session import session_scope
 from fastapi.testclient import TestClient
+from routes import chat_titles
 from sqlalchemy import select
 
 
@@ -116,6 +117,41 @@ def test_chat_message_persistence(api_client) -> None:
     assert len(items) == 2
     assert items[0]["role"] == "user"
     assert items[1]["role"] == "assistant"
+
+
+def test_conversation_title_refreshes_after_four_user_turns(api_client, monkeypatch) -> None:
+    client, app = api_client
+    project_id = _create_project(client, "Retitle Project")
+    conversation_id = _create_conversation(client, project_id)
+
+    def fake_generate_title_with_llm(history, report_title, llm_provider, llm_model):
+        return "Retitled After Four Turns"
+
+    monkeypatch.setattr(chat_titles, "_generate_title_with_llm", fake_generate_title_with_llm)
+
+    prompts = [
+        "Explain machine learning simply.",
+        "Give me a practical example.",
+        "What are the main risks?",
+        "Summarize the tradeoffs in one paragraph.",
+    ]
+
+    for idx, prompt in enumerate(prompts, start=1):
+        resp = _send_message(
+            client,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            message=prompt,
+            client_message_id=f"title-{idx}",
+        )
+        assert resp.status_code == 200
+
+    SessionLocal = app.state.SessionLocal
+    with session_scope(SessionLocal) as session:
+        convo = session.execute(
+            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+        ).scalar_one()
+        assert convo.title == "Retitled After Four Turns"
 
 
 def test_pipeline_offer_sets_pending(api_client) -> None:

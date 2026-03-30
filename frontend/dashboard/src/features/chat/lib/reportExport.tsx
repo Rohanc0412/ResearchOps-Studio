@@ -136,6 +136,8 @@ const S = StyleSheet.create({
   },
 });
 
+type CitedTextStyle = typeof S.paragraph | typeof S.bulletText;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function CitedText({
   text,
@@ -144,7 +146,7 @@ function CitedText({
 }: {
   text: string;
   citations?: number[];
-  style: object;
+  style: CitedTextStyle;
 }) {
   const cite =
     citations && citations.length > 0

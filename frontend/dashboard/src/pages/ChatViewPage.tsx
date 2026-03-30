@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Download, Send, Share2, Sparkles, Trash2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ArrowLeft, Download } from "lucide-react";
 import {
   flattenInfiniteMessages,
   useChatConversationsQuery,
@@ -12,23 +10,16 @@ import {
 import { apiFetchJson } from "../api/client";
 import { useProjectQuery } from "../api/projects";
 import { useCancelRunMutation, useRetryRunMutation } from "../api/runs";
-import { ResearchProgressCard } from "../components/run/ResearchProgressCard";
 import { ErrorBanner } from "../components/ui/ErrorBanner";
 import { Spinner } from "../components/ui/Spinner";
+import { ChatComposer } from "../features/chat/components/ChatComposer";
+import { ChatMessageList } from "../features/chat/components/ChatMessageList";
 import { MODEL_OPTIONS, CUSTOM_MODEL_VALUE, DEFAULT_HOSTED_MODEL, EMPTY_REPORT } from "../features/chat/constants";
 import { ConfigureRunModal, type StageModels } from "../features/chat/components/ConfigureRunModal";
 import { ExportModal } from "../features/chat/components/ExportModal";
-import { ReportSectionView } from "../features/chat/components/ReportSectionView";
+import { ReportPane } from "../features/chat/components/ReportPane";
 import { ShareModal } from "../features/chat/components/ShareModal";
-import { RunArtifactLinks } from "../features/chat/components/RunArtifactLinks";
-import { TypingIndicator } from "../features/chat/components/TypingIndicator";
 import { generateClientMessageId } from "../features/chat/lib/ids";
-import {
-  chatMarkdownComponents,
-  displayMessageText,
-  formatActionLabel,
-  normalizeChatMarkdown
-} from "../features/chat/lib/messageFormatting";
 import { buildFinalResponse, extractAllRunIds, extractLatestRunId } from "../features/chat/lib/reportArtifacts";
 import { extractReportTitle, parseMarkdownToSections } from "../features/chat/lib/reportParser";
 import { loadStoredReport, persistReport } from "../features/chat/lib/reportStorage";
@@ -103,9 +94,9 @@ export function ChatViewPage() {
 
   const runStatusCheckRef = useRef<number>(0);
 
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const reportContentRef = useRef<HTMLDivElement | null>(null);
+  const reportContentRef = useRef<HTMLDivElement>(null);
 
   const initialMessage = useMemo(() => {
     if (!location.state || typeof location.state !== "object") return null;
@@ -420,7 +411,7 @@ export function ChatViewPage() {
             ? {
                 ...prev,
                 status: "failed",
-                primaryText: "Something went wrong",
+                primaryText: "Resuming report generation...",
                 secondaryText: fallbackError,
                 error: fallbackError
               }
@@ -518,8 +509,8 @@ export function ChatViewPage() {
         runId: latestRunId,
         status: "running",
         question: typeof run.question === "string" ? run.question : undefined,
-        primaryText: "Resuming report generation…",
-        secondaryText: "Checking progress…",
+        primaryText: "Resuming report generationâ€¦",
+        secondaryText: "Checking progress...",
         startedAt: run.created_at ?? new Date().toISOString()
       });
       lastEventIdRef.current = 0;
@@ -596,6 +587,7 @@ export function ChatViewPage() {
       setDraft("");
       setRunPipelineArmed(false);
     } catch {
+      // Preserve the current draft so the user can retry.
     }
   }
 
@@ -655,6 +647,7 @@ export function ChatViewPage() {
         };
       });
     } catch {
+      // Leave the current run state unchanged if retry fails.
     }
   }
 
@@ -720,10 +713,6 @@ export function ChatViewPage() {
     );
   }
 
-  const quickActions = ["Add conclusion", "Add recommendations", "Summarize findings", "Add references"];
-  const reportActionButtonClasses =
-    "inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600";
-
   return (
     <div className="flex h-full min-h-0 bg-slate-950 text-slate-200">
       {/* Left Panel - Chat */}
@@ -745,282 +734,62 @@ export function ChatViewPage() {
           </div>
         </div>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {messages.map((message) => {
-            const isUser = message.role === "user";
-            const isOffer = message.type === "pipeline_offer";
-            const isRunStarted = message.type === "run_started";
-            const isError = message.type === "error";
+                <ChatMessageList
+          messages={messages}
+          isTyping={isTyping}
+          webSearching={webSearching}
+          isActionPending={isTyping}
+          activeRunId={activeRun?.runId}
+          completedRunArtifacts={completedRunArtifacts}
+          messagesEndRef={messagesEndRef}
+          onAction={(actionId) => {
+            void sendMessage(`__ACTION__:${actionId}`);
+          }}
+        />
 
-            const runId = isRunStarted ? (message.content_json?.["run_id"] as string | undefined) : undefined;
-
-            const offer = message.content_json?.["offer"];
-
-            const actions = Array.isArray((offer as { actions?: unknown[] } | undefined)?.actions)
-              ? ((offer as { actions: Array<{ id?: string; label?: string }> }).actions ?? [])
-              : [];
-
-            return (
-              <div key={message.id} className={`mb-4 flex flex-col ${isUser ? "items-end" : "items-start"}`}>
-                <div
-                  // assistant markdown uses normal whitespace so blank lines don't compound with markdown block spacing.
-                  className={`max-w-[90%] ${
-                    isUser || isError || message.type === "action" ? "whitespace-pre-wrap" : "whitespace-normal"
-                  } rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
-                    isUser
-                      ? "rounded-br-sm border border-emerald-500/30 bg-emerald-500/15 text-slate-200"
-                      : isError
-                        ? "rounded-bl-sm border border-rose-500/40 bg-rose-500/10 text-rose-100"
-                        : "rounded-bl-sm border border-slate-800 bg-slate-900 text-slate-200"
-                  }`}
-                >
-                  {message.type === "action" ? (
-                    <span>{displayMessageText(message)}</span>
-                  ) : (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents}>
-                      {normalizeChatMarkdown(message.content_text)}
-                    </ReactMarkdown>
-                  )}
-
-                  {isRunStarted && runId ? (
-                    (() => {
-                      const runArtifacts = completedRunArtifacts[runId];
-                      if (runArtifacts && runArtifacts.length > 0) {
-                        return <RunArtifactLinks runId={runId} artifacts={runArtifacts} />;
-                      }
-                      if (activeRun?.runId === runId) {
-                        return (
-                          <div className="mt-2 text-xs text-slate-400">
-                            Tracking progress in the research report panel.
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()
-                  ) : null}
-                </div>
-
-                {isOffer && actions.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {actions.map((action) => (
-                      <button
-                        key={action.id ?? action.label}
-                        onClick={() => {
-                          if (!action.id) return;
-
-                          void sendMessage(`__ACTION__:${action.id}`);
-                        }}
-                        disabled={isTyping}
-                        className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200 transition-colors hover:border-emerald-500/60 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {action.label ?? formatActionLabel(action.id ?? null)}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-
-                <div className="mt-1.5 font-mono text-xs text-slate-500">
-                  {new Date(message.created_at).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                    hour12: false
-                  })}
-                </div>
-              </div>
-            );
-          })}
-
-          {isTyping && (
-            <div className="inline-block rounded-2xl rounded-bl-sm border border-slate-800 bg-slate-900 px-4 py-3.5">
-              {webSearching ? (
-                <span className="animate-breathe text-sm text-slate-400">
-                  Searching the web...
-                </span>
-              ) : (
-                <TypingIndicator />
-              )}
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Quick Actions */}
-        <div className="flex flex-wrap gap-2 px-6 pb-3">
-          {quickActions.map((action) => (
-            <button
-              key={action}
-              onClick={() => { setDraft(action); setRunPipelineArmed(false); }}
-              className="rounded-full border border-slate-700 bg-slate-900 px-3.5 py-2 text-xs text-slate-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-400"
-            >
-              {action}
-            </button>
-          ))}
-        </div>
-
-        {/* Input */}
-        <div className="border-t border-slate-800 px-6 py-4">
-          <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
-            <span>LLM model</span>
-            <div className="flex flex-1 flex-wrap items-center gap-2">
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="min-w-[220px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
-              >
-                {MODEL_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              {selectedModel === CUSTOM_MODEL_VALUE ? (
-                <input
-                  value={customModel}
-                  onChange={(e) => setCustomModel(e.target.value)}
-                  placeholder="Enter model id"
-                  className="min-w-[220px] flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
-                />
-              ) : null}
-            </div>
-            <button
-              type="button"
-              data-testid="pipeline-toggle"
-              aria-pressed={runPipelineArmed}
-              onClick={() => setRunPipelineArmed((prev) => !prev)}
-              className={`rounded-full border px-3.5 py-2 text-xs transition-colors ${
-                runPipelineArmed
-                  ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-200"
-                  : "border-slate-700 bg-slate-900 text-slate-400 hover:border-emerald-500/30 hover:text-emerald-300"
-              }`}
-            >
-              Run research report
-            </button>
-          </div>
-
-          <div className="flex items-end gap-3">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void onSend();
-                }
-              }}
-              placeholder={runPipelineArmed ? "Describe your research topic — report will run on send…" : "Ask a question or request a report..."}
-              rows={1}
-              className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3.5 text-sm text-slate-200 outline-none transition-colors focus:border-emerald-500/50"
-            />
-            <button
-              onClick={() => void onSend()}
-              disabled={!draft.trim() || isTyping}
-              className={`flex h-12 w-12 items-center justify-center rounded-xl transition-colors ${
-                draft.trim() && !isTyping
-                  ? "bg-emerald-500 text-slate-900 hover:bg-emerald-400"
-                  : "cursor-not-allowed bg-emerald-500/30 text-slate-500"
-              }`}
-            >
-              <Send className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
+        <ChatComposer
+          draft={draft}
+          isTyping={isTyping}
+          runPipelineArmed={runPipelineArmed}
+          selectedModel={selectedModel}
+          customModel={customModel}
+          modelOptions={MODEL_OPTIONS}
+          customModelValue={CUSTOM_MODEL_VALUE}
+          onDraftChange={setDraft}
+          onSend={() => {
+            void onSend();
+          }}
+          onQuickAction={(action) => {
+            setDraft(action);
+            setRunPipelineArmed(false);
+          }}
+          onTogglePipeline={() => setRunPipelineArmed((prev) => !prev)}
+          onSelectedModelChange={setSelectedModel}
+          onCustomModelChange={setCustomModel}
+        />
       </div>
 
-      {/* Right Panel - Report */}
-      <div className="flex w-[55%] min-h-0 flex-col bg-slate-950">
-        {/* Report Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-8 py-5">
-          <h2 className="font-mono text-lg font-semibold tracking-tight text-slate-100 md:text-xl">{report.title}</h2>
-          <div className="flex items-center gap-3">
-            <div
-              className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3.5 text-[0.7rem] font-medium uppercase tracking-[0.16em] ${reportStatusClasses}`}
-            >
-              <div
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                  activeRun?.status === "failed"
-                    ? "bg-rose-400"
-                    : activeRun?.status === "canceled"
-                      ? "bg-slate-400"
-                      : "animate-pulse bg-emerald-500"
-                }`}
-              />
-              {reportStatusLabel}
-            </div>
-          </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex flex-wrap gap-3 border-b border-slate-800 px-8 py-4">
-          <button
-            onClick={() => setShowExportModal(true)}
-            disabled={report.sections.length === 0}
-            className={reportActionButtonClasses}
-          >
-            <Download className="h-4 w-4" />
-            Export
-          </button>
-          <button
-            onClick={handleClear}
-            disabled={report.sections.length === 0}
-            className={reportActionButtonClasses}
-          >
-            <Trash2 className="h-4 w-4" />
-            Clear
-          </button>
-          <button
-            onClick={() => setShowShareModal(true)}
-            disabled={report.sections.length === 0}
-            className={reportActionButtonClasses}
-          >
-            <Share2 className="h-4 w-4" />
-            Share
-          </button>
-          <div className="ml-auto">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-500">
-              <Sparkles className="h-5 w-5" />
-            </div>
-          </div>
-        </div>
-
-        {/* Report Content */}
-        <div ref={reportContentRef} className="flex-1 overflow-y-auto p-8">
-          {progressCard ? (
-            <ResearchProgressCard
-              model={progressCard}
-              expanded={progressDetailsOpen}
-              onToggleExpanded={() => setProgressDetailsOpen((prev) => !prev)}
-              onCancel={activeRun?.status === "running" ? () => void onAnswerNow() : undefined}
-              onRetry={
-                activeRun && (activeRun.status === "failed" || activeRun.status === "blocked")
-                  ? () => void onRetry()
-                  : undefined
-              }
-              runId={activeRun?.runId}
-            />
-          ) : null}
-
-          {report.sections.length === 0 ? (
-            <div className="py-20 text-center text-slate-500">
-              <div className="mb-4 text-5xl opacity-50">📊</div>
-              <p className="text-sm">Your report will appear here</p>
-              <p className="mt-2 text-xs text-slate-600">Start a conversation to generate content</p>
-            </div>
-          ) : (
-            report.sections.map((section) => (
-              <ReportSectionView
-                key={section.id}
-                section={section}
-                onEdit={handleSectionEdit}
-                isHighlighted={highlightedSection === section.id}
-              />
-            ))
-          )}
-        </div>
-      </div>
-
+      <ReportPane
+        report={report}
+        activeRun={activeRun}
+        progressCard={progressCard}
+        progressDetailsOpen={progressDetailsOpen}
+        reportStatusLabel={reportStatusLabel}
+        reportStatusClasses={reportStatusClasses}
+        highlightedSection={highlightedSection}
+        contentRef={reportContentRef}
+        onToggleExpanded={() => setProgressDetailsOpen((prev) => !prev)}
+        onCancel={activeRun?.status === 'running' ? () => void onAnswerNow() : undefined}
+        onRetry={
+          activeRun && (activeRun.status === 'failed' || activeRun.status === 'blocked')
+            ? () => void onRetry()
+            : undefined
+        }
+        onExport={() => setShowExportModal(true)}
+        onClear={handleClear}
+        onShare={() => setShowShareModal(true)}
+        onSectionEdit={handleSectionEdit}
+      />
       {/* Modals */}
       <ExportModal isOpen={showExportModal} onClose={() => setShowExportModal(false)} onExport={handleExport} />
       <ShareModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} />
@@ -1040,6 +809,7 @@ export function ChatViewPage() {
     </div>
   );
 }
+
 
 
 

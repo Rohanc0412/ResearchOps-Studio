@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from core.orchestrator.state import EvidenceSnippetRef, EvaluatorDecision, OrchestratorState, OutlineModel, OutlineSection
+from db.repositories.evaluation_history import list_evaluation_pass_history
 from db.init_db import init_db
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_reviews import SectionReviewRow
@@ -133,6 +134,84 @@ def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):
     result = evaluator_node.__wrapped__(state, db_session)
 
     assert result.evaluator_decision == EvaluatorDecision.CONTINUE_REPAIR
+
+
+def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatch):
+    from nodes.evaluator import evaluator_node
+    import nodes.evaluator as evaluator_module
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+    snippet_id = "11111111-1111-1111-1111-111111111111"
+
+    class StubLLM:
+        def generate(self, prompt, **_kwargs):
+            if "Rate the semantic grounding of the drafted section" in prompt:
+                return json.dumps(
+                    {
+                        "section_id": "intro",
+                        "grounding_score": 90,
+                        "verdict": "pass",
+                        "issues": [],
+                    }
+                )
+            if "For each numbered claim" in prompt:
+                return json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]})
+            return json.dumps({"claims": ["Intro sentence."]})
+
+    monkeypatch.setattr(evaluator_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
+    monkeypatch.setattr(evaluator_module, "emit_run_event", lambda **_kwargs: None)
+
+    outline = OutlineModel(
+        sections=[
+            OutlineSection(
+                section_id="intro",
+                title="Introduction",
+                goal="Intro goal sentence one. Intro goal sentence two.",
+                key_points=["A", "B", "C", "D", "E", "F"],
+                suggested_evidence_themes=["introtheme"],
+                section_order=1,
+            )
+        ]
+    )
+    db_session.add(
+        DraftSectionRow(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            section_id="intro",
+            text=f"Intro sentence [CITE:{snippet_id}].",
+        )
+    )
+    db_session.flush()
+
+    state = OrchestratorState(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_query="test",
+        outline=outline,
+        section_evidence_snippets={
+            "intro": [
+                EvidenceSnippetRef(
+                    snippet_id=snippet_id,
+                    source_id=uuid4(),
+                    text="Intro evidence snippet.",
+                    char_start=0,
+                    char_end=24,
+                )
+            ]
+        },
+    )
+
+    evaluator_node.__wrapped__(state, db_session)
+
+    history = list_evaluation_pass_history(
+        session=db_session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+    assert len(history) == 1
+    assert history[0]["grounding_pct"] == 90
+    assert history[0]["faithfulness_pct"] == 100
 
 
 def test_repair_agent_repairs_last_section_without_next_section(db_session, monkeypatch):

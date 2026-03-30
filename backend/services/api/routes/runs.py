@@ -392,6 +392,7 @@ def get_evaluation(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
+            include_running=status == "running",
         )
 
         if status not in ("complete", "running") and not history:
@@ -415,33 +416,78 @@ def get_evaluation(
         )
 
         issues_by_type: dict[str, int] = {}
+        latest_history = history[0] if history else None
         sections_out = []
-        latest_history_sections = history[0]["sections"] if history else []
+        latest_history_sections = latest_history["sections"] if latest_history else []
         latest_scores = {
             section["section_id"]: section.get("grounding_score")
             for section in latest_history_sections
             if isinstance(section, dict)
         }
-        for review in reviews:
-            issues = review.issues_json or []
-            for issue in issues:
-                p = issue.get("problem", "unknown")
-                issues_by_type[p] = issues_by_type.get(p, 0) + 1
-            sections_out.append({
-                "section_id": review.section_id,
-                "title": titles.get(review.section_id, review.section_id),
-                "grounding_score": latest_scores.get(review.section_id),
-                "verdict": review.verdict,
-                "issues": issues,
-            })
+        if latest_history_sections:
+            sections_out = [
+                {
+                    "section_id": section["section_id"],
+                    "title": titles.get(section["section_id"], section.get("title") or section["section_id"]),
+                    "grounding_score": section.get("grounding_score"),
+                    "verdict": section.get("verdict"),
+                    "issues": section.get("issues") or [],
+                }
+                for section in latest_history_sections
+                if isinstance(section, dict) and isinstance(section.get("section_id"), str)
+            ]
+            issues_by_type = dict(latest_history.get("issues_by_type") or {})
+        elif not (status == "running" and latest_history):
+            for review in reviews:
+                issues = review.issues_json or []
+                for issue in issues:
+                    p = issue.get("problem", "unknown")
+                    issues_by_type[p] = issues_by_type.get(p, 0) + 1
+                sections_out.append({
+                    "section_id": review.section_id,
+                    "title": titles.get(review.section_id, review.section_id),
+                    "grounding_score": latest_scores.get(review.section_id),
+                    "verdict": review.verdict,
+                    "issues": issues,
+                })
+
+        if status == "running":
+            grounding_pct = latest_history.get("grounding_pct") if latest_history else None
+            faithfulness_pct = latest_history.get("faithfulness_pct") if latest_history else None
+            sections_passed = latest_history.get("sections_passed") if latest_history else None
+            sections_total = latest_history.get("sections_total") if latest_history else None
+            evaluated_at = latest_history.get("evaluated_at") if latest_history else None
+        else:
+            grounding_pct = usage.get(METRIC_EVAL_GROUNDING_PCT)
+            if grounding_pct is None and latest_history:
+                grounding_pct = latest_history.get("grounding_pct")
+
+            faithfulness_pct = usage.get("eval_faithfulness_pct")
+            if faithfulness_pct is None and latest_history:
+                faithfulness_pct = latest_history.get("faithfulness_pct")
+
+            sections_passed = usage.get("eval_sections_passed")
+            if sections_passed is None and latest_history:
+                sections_passed = latest_history.get("sections_passed")
+            sections_total = usage.get("eval_sections_total")
+            if sections_total is None and latest_history:
+                sections_total = latest_history.get("sections_total")
+            evaluated_at = usage.get("eval_evaluated_at")
+            if evaluated_at is None and latest_history:
+                evaluated_at = latest_history.get("evaluated_at")
+
+        if sections_passed is None and not (status == "running" and latest_history):
+            sections_passed = sum(1 for r in reviews if r.verdict == "pass")
+        if sections_total is None and not (status == "running" and latest_history):
+            sections_total = len(reviews)
 
         return {
             "status": status,
-            "evaluated_at": usage.get("eval_evaluated_at"),
-            "grounding_pct": usage.get(METRIC_EVAL_GROUNDING_PCT),
-            "faithfulness_pct": usage.get("eval_faithfulness_pct"),
-            "sections_passed": usage.get("eval_sections_passed", sum(1 for r in reviews if r.verdict == "pass")),
-            "sections_total": usage.get("eval_sections_total", len(reviews)),
+            "evaluated_at": evaluated_at,
+            "grounding_pct": grounding_pct,
+            "faithfulness_pct": faithfulness_pct,
+            "sections_passed": sections_passed,
+            "sections_total": sections_total,
             "issues_by_type": issues_by_type,
             "sections": sections_out,
             "history": history,

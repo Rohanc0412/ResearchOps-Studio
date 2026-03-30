@@ -52,7 +52,7 @@ export function ProjectDetailPage() {
     if (!id) return;
     setCreateError(null);
     const title = initialMessage
-      ? initialMessage.slice(0, 30) + (initialMessage.length > 30 ? "…" : "")
+      ? initialMessage.slice(0, 30) + (initialMessage.length > 30 ? "..." : "")
       : undefined;
     try {
       const chat = await createConv.mutateAsync({ project_id: id, title });
@@ -77,7 +77,7 @@ export function ProjectDetailPage() {
   }
 
   if (project.isLoading) {
-    return <div className="flex justify-center py-16"><Spinner label="Loading project…" /></div>;
+    return <div className="flex justify-center py-16"><Spinner label="Loading project..." /></div>;
   }
   if (project.isError) {
     if (project.error instanceof ApiError && project.error.status === 404) {
@@ -118,7 +118,7 @@ export function ProjectDetailPage() {
         backgroundColor = BG (page color). A real <div> separator (height 1px,
         solid color) sits between them. Zero rgba, zero nested backgrounds.
       */}
-      <div className="rounded-xl overflow-hidden" style={{ boxShadow: `0 0 0 1px ${BORDER}` }}>
+      <div className="overflow-hidden rounded-xl" style={{ boxShadow: `0 0 0 1px ${BORDER}` }}>
         {/* Textarea — its own element, background = page bg */}
         <textarea
           className="w-full resize-none px-5 pt-5 pb-3 text-sm font-sans focus:outline-none"
@@ -126,8 +126,8 @@ export function ProjectDetailPage() {
           rows={4}
           placeholder={
             runPipeline
-              ? "Describe your research topic — a full report will run automatically…"
-              : "Ask a research question…"
+              ? "Describe your research topic - a full report will run automatically..."
+              : "Ask a research question..."
           }
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

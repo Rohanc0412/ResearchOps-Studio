@@ -4,6 +4,8 @@ import json
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+from llm import LLMError
+
 
 def _make_session_with_drafts_and_snippets(tenant_id, run_id, section_id):
     """Returns a mock SQLAlchemy session pre-loaded with one draft section and one snippet."""
@@ -33,8 +35,10 @@ def _make_session_with_drafts_and_snippets(tenant_id, run_id, section_id):
     review_query.filter.return_value.one_or_none.return_value = None
     section_query = MagicMock()
     section_query.filter.return_value.order_by.return_value.all.return_value = [sec_row]
+    metric_query = MagicMock()
+    metric_query.filter.return_value.one_or_none.return_value = None
 
-    session.query.side_effect = [draft_query, snippet_query, review_query, section_query]
+    session.query.side_effect = [draft_query, section_query, snippet_query, review_query, metric_query, metric_query, metric_query]
     return session
 
 
@@ -330,6 +334,137 @@ def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
     assert mock_llm.generate.call_count == 1
 
 
+def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
+    """Manual evaluation should skip extraction failures instead of aborting the whole rerun."""
+    from app_services.evaluation_runner import EvaluationRunner
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    uncited_section = MagicMock()
+    uncited_section.section_id = "uncited"
+    uncited_section.title = "Background"
+    uncited_section.section_order = 1
+    uncited_draft = MagicMock()
+    uncited_draft.section_id = "uncited"
+    uncited_draft.text = "Transformer variants reduce attention cost through sparse routing."
+
+    cited_section = MagicMock()
+    cited_section.section_id = "cited"
+    cited_section.title = "Results"
+    cited_section.section_order = 2
+    cited_draft = MagicMock()
+    cited_draft.section_id = "cited"
+    cited_draft.text = "A benchmark shows 15% lower latency [^1]."
+
+    snippet_row = MagicMock()
+    snippet_row.id = uuid4()
+    snippet_row.text = "The benchmark measured 15% lower latency."
+
+    artifact_query = MagicMock()
+    artifact_query.filter.return_value.first.return_value = None
+    draft_query = MagicMock()
+    draft_query.filter.return_value.all.return_value = [uncited_draft, cited_draft]
+    section_query = MagicMock()
+    section_query.filter.return_value.order_by.return_value.all.return_value = [uncited_section, cited_section]
+    snippet_query = MagicMock()
+    snippet_query.join.return_value.filter.return_value.all.return_value = [snippet_row]
+    metric_query = MagicMock()
+    metric_query.filter.return_value.one_or_none.return_value = None
+
+    session = MagicMock()
+    session.query.side_effect = [artifact_query, draft_query, section_query, snippet_query, metric_query]
+
+    mock_llm = MagicMock()
+    mock_llm.generate.side_effect = [
+        LLMError("Hosted LLM request failed: 402 Payment Required"),
+        json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]}),
+    ]
+
+    with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
+        runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
+        events = list(runner._run_faithfulness())
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["type"] == "evaluation.faithfulness_done"
+    assert event["total_claims"] == 1
+    assert event["supported_claims"] == 1
+    assert event["faithfulness_pct"] == 100
+
+
+def test_faithfulness_skips_section_when_verification_llm_fails():
+    """Manual evaluation should keep scoring later sections when one verification call fails."""
+    from app_services.evaluation_runner import EvaluationRunner
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    first_section = MagicMock()
+    first_section.section_id = "first"
+    first_section.title = "Section One"
+    first_section.section_order = 1
+    first_draft = MagicMock()
+    first_draft.section_id = "first"
+    first_draft.text = "Model A supports 100 languages [^1]."
+
+    second_section = MagicMock()
+    second_section.section_id = "second"
+    second_section.title = "Section Two"
+    second_section.section_order = 2
+    second_draft = MagicMock()
+    second_draft.section_id = "second"
+    second_draft.text = "Model B fits within 8 GB VRAM [^2]."
+
+    first_snippet = MagicMock()
+    first_snippet.id = uuid4()
+    first_snippet.text = "Benchmarks show Model A supports 100 languages."
+
+    second_snippet = MagicMock()
+    second_snippet.id = uuid4()
+    second_snippet.text = "Measurements show Model B fits within an 8 GB VRAM budget."
+
+    artifact_query = MagicMock()
+    artifact_query.filter.return_value.first.return_value = None
+    draft_query = MagicMock()
+    draft_query.filter.return_value.all.return_value = [first_draft, second_draft]
+    section_query = MagicMock()
+    section_query.filter.return_value.order_by.return_value.all.return_value = [first_section, second_section]
+    first_snippet_query = MagicMock()
+    first_snippet_query.join.return_value.filter.return_value.all.return_value = [first_snippet]
+    second_snippet_query = MagicMock()
+    second_snippet_query.join.return_value.filter.return_value.all.return_value = [second_snippet]
+    metric_query = MagicMock()
+    metric_query.filter.return_value.one_or_none.return_value = None
+
+    session = MagicMock()
+    session.query.side_effect = [
+        artifact_query,
+        draft_query,
+        section_query,
+        first_snippet_query,
+        second_snippet_query,
+        metric_query,
+    ]
+
+    mock_llm = MagicMock()
+    mock_llm.generate.side_effect = [
+        LLMError("Hosted LLM request failed: 402 Payment Required"),
+        json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]}),
+    ]
+
+    with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
+        runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
+        events = list(runner._run_faithfulness())
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["type"] == "evaluation.faithfulness_done"
+    assert event["total_claims"] == 1
+    assert event["supported_claims"] == 1
+    assert event["faithfulness_pct"] == 100
+
+
 def test_finalize_step_yields_complete_event_with_issue_counts():
     """Finalize step counts section verdicts and yields evaluation.complete."""
     from app_services.evaluation_runner import EvaluationRunner
@@ -365,3 +500,74 @@ def test_finalize_step_yields_complete_event_with_issue_counts():
     assert event["issues_by_type"]["unsupported"] == 1
     assert event["issues_by_type"]["missing_citation"] == 1
     session.flush.assert_called_once()
+
+
+def test_runner_persists_running_status_before_completion(tmp_path):
+    from app_services.evaluation_runner import EvaluationRunner
+    import db.models  # noqa: F401
+    from db.models.base import Base
+    from db.models.evaluation_passes import EvaluationPassRow
+    from db.models.run_usage_metrics import RunUsageMetricRow
+    from db.models.runs import RunStatusDb
+    from db.repositories.project_runs import create_project, create_run
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'evaluation_runner_visibility.db'}", future=True)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine, future=True)
+
+    tenant_id = uuid4()
+
+    with SessionLocal() as session:
+        project = create_project(
+            session=session,
+            tenant_id=tenant_id,
+            name="Evaluation Progress Visibility",
+            description=None,
+            created_by="user-1",
+        )
+        run = create_run(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.id,
+            status=RunStatusDb.succeeded,
+            question="Why is evaluation progress stale?",
+        )
+        session.commit()
+        run_id = run.id
+
+    with SessionLocal() as writer_session:
+        runner = EvaluationRunner(session=writer_session, tenant_id=tenant_id, run_id=run_id)
+        event_stream = runner.run()
+
+        started = next(event_stream)
+        assert started["type"] == "evaluation.started"
+
+        step_event = next(event_stream)
+        assert step_event["type"] == "evaluation.step"
+        assert step_event["step"] == 1
+
+        with SessionLocal() as reader_session:
+            evaluation_pass = (
+                reader_session.query(EvaluationPassRow)
+                .filter(
+                    EvaluationPassRow.tenant_id == tenant_id,
+                    EvaluationPassRow.run_id == run_id,
+                )
+                .one_or_none()
+            )
+            status_metric = (
+                reader_session.query(RunUsageMetricRow)
+                .filter(
+                    RunUsageMetricRow.tenant_id == tenant_id,
+                    RunUsageMetricRow.run_id == run_id,
+                    RunUsageMetricRow.metric_name == "eval_status",
+                )
+                .one_or_none()
+            )
+
+            assert evaluation_pass is not None
+            assert evaluation_pass.status == "running"
+            assert status_metric is not None
+            assert status_metric.metric_text == "running"

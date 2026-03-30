@@ -91,7 +91,7 @@ def _truncate(text: str, max_chars: int) -> str:
     return cleaned if len(cleaned) <= max_chars else cleaned[:max_chars].rstrip() + "..."
 
 
-_CITATION_MARKER_RE = re.compile(r"\[\^\d+\]")
+_CITATION_MARKER_RE = re.compile(r"\[\^\d+\]|\[CITE:[^\]]+\]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _SECTION_HEADING_RE = re.compile(r"^##\s+(?:\d+\.\s+)?(.+?)\s*$")
 
@@ -134,7 +134,13 @@ class EvaluationRunner:
         )
         self._history_pass_id = history_pass.id
         self._write_metric(METRIC_EVAL_STATUS, "running")
+        self._write_metric(METRIC_EVAL_GROUNDING_PCT, None)
+        self._write_metric("eval_faithfulness_pct", None)
+        self._write_metric("eval_sections_passed", None)
+        self._write_metric("eval_sections_total", None)
+        self._write_metric("eval_evaluated_at", None)
         self.session.flush()
+        self.session.commit()
         yield {"type": "evaluation.step", "step": 1, "label": "Scoring section grounding…"}
         yield from self._run_grounding()
         yield {"type": "evaluation.step", "step": 2, "label": "Computing answer faithfulness…"}
@@ -275,6 +281,11 @@ class EvaluationRunner:
 
         overall = round(sum(scores) / len(scores)) if scores else 100
         self._grounding_pct = overall
+        self._write_metric(METRIC_EVAL_GROUNDING_PCT, overall)
+        self._write_metric("eval_sections_passed", pass_count)
+        self._write_metric("eval_sections_total", pass_count + fail_count)
+        session.flush()
+        session.commit()
         yield {
             "type": "evaluation.grounding_done",
             "overall_grounding_pct": overall,
@@ -429,7 +440,7 @@ class EvaluationRunner:
         claims: list[str] = []
         seen: set[str] = set()
         for sentence in _SENTENCE_SPLIT_RE.split(section_text.strip()):
-            if "[^" not in sentence:
+            if not _CITATION_MARKER_RE.search(sentence):
                 continue
             cleaned = _CITATION_MARKER_RE.sub("", sentence)
             cleaned = re.sub(r"\s+", " ", cleaned).strip(" -\n\t")
@@ -574,11 +585,20 @@ class EvaluationRunner:
 
             claims = self._extract_cited_claims(section_text)
             if not claims:
-                claims = self._extract_section_claims(
-                    llm_client=llm_client,
-                    section_title=section_title,
-                    section_text=section_text,
-                )
+                try:
+                    claims = self._extract_section_claims(
+                        llm_client=llm_client,
+                        section_title=section_title,
+                        section_text=section_text,
+                    )
+                except Exception:
+                    logger.warning(
+                        "LLM claim extraction failed for section %s during manual faithfulness scoring.",
+                        section_id,
+                        extra={"stage": "evaluate", "section_id": section_id},
+                        exc_info=True,
+                    )
+                    continue
             if not claims:
                 continue
 
@@ -605,11 +625,20 @@ class EvaluationRunner:
                 seen_snippet_ids.add(snippet_id)
                 snippets_payload.append({"snippet_id": snippet_id, "text": _truncate(row.text or "", 600)})
 
-            supported_count += self._verify_section_claims(
-                llm_client=llm_client,
-                claims=claims,
-                snippets_payload=snippets_payload,
-            )
+            try:
+                supported_count += self._verify_section_claims(
+                    llm_client=llm_client,
+                    claims=claims,
+                    snippets_payload=snippets_payload,
+                )
+            except Exception:
+                logger.warning(
+                    "LLM faithfulness verification failed for section %s during manual scoring.",
+                    section_id,
+                    extra={"stage": "evaluate", "section_id": section_id},
+                    exc_info=True,
+                )
+                continue
             total += len(claims)
 
         if total == 0:
@@ -645,6 +674,7 @@ class EvaluationRunner:
                 )
             )
         session.flush()
+        session.commit()
 
         yield {
             "type": "evaluation.faithfulness_done",
@@ -692,6 +722,7 @@ class EvaluationRunner:
                 issues_by_type=issues_by_type,
             )
         self.session.flush()
+        self.session.commit()
 
         yield {
             "type": "evaluation.complete",

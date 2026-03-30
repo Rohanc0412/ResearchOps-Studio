@@ -1,6 +1,6 @@
 // frontend/dashboard/src/components/run/EvaluationTab.tsx
 import { useState } from "react";
-import { RotateCcw, PlayCircle, CheckCircle2, XCircle } from "lucide-react";
+import { RotateCcw, PlayCircle, CheckCircle2 } from "lucide-react";
 
 import {
   useEvaluationQuery,
@@ -243,6 +243,25 @@ export function EvaluationTab({ runId }: { runId: string }) {
 
   const result = evalQuery.data;
   const storedStatus = result?.status ?? "none";
+  const latestHistory = result?.history?.[0];
+  const serverProgress =
+    storedStatus === "running"
+      ? {
+          step: result?.faithfulness_pct != null ? 3 : result?.grounding_pct != null ? 2 : 1,
+          stepLabel:
+            result?.faithfulness_pct != null
+              ? "Finalizing evaluation results..."
+              : result?.grounding_pct != null
+                ? "Computing answer faithfulness..."
+                : "Scoring section grounding...",
+          partialGrounding: result?.grounding_pct,
+          partialFaithfulness: result?.faithfulness_pct,
+          partialSectionsPassed: result?.sections_passed,
+          partialSectionsTotal: result?.sections_total,
+          sections: result?.sections ?? latestHistory?.sections ?? [],
+        }
+      : null;
+  const activeProgress = progress ?? serverProgress;
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!isRunning && storedStatus === "none") {
@@ -265,48 +284,70 @@ export function EvaluationTab({ runId }: { runId: string }) {
   }
 
   // ── Running state ──────────────────────────────────────────────────────────
-  if (isRunning && progress) {
+  if ((isRunning || storedStatus === "running") && activeProgress) {
     return (
       <div className="flex flex-col gap-4">
+        {mutationError && <ErrorBanner message={mutationError} />}
         <div className="rounded-xl border border-obsidian-border bg-obsidian-surface-elevated p-4">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[13px] font-semibold text-obsidian-text">Evaluating report…</span>
-            <span className="font-mono text-[11px] text-obsidian-muted">Step {progress.step} of 3</span>
+            <span className="text-[13px] font-semibold text-obsidian-text">Evaluating report...</span>
+            <span className="font-mono text-[11px] text-obsidian-muted">Step {activeProgress.step} of 3</span>
           </div>
           <div className="mb-2 h-1 overflow-hidden rounded-full bg-obsidian-border">
             <div
               className="h-full rounded-full bg-obsidian-accent transition-all duration-500"
-              style={{ width: `${Math.round((progress.step / 3) * 100)}%` }}
+              style={{ width: `${Math.round((activeProgress.step / 3) * 100)}%` }}
             />
           </div>
           <p className="font-mono text-[11px] text-obsidian-accent">
-            <span className="animate-pulse">✦</span> {progress.stepLabel}
+            <span className="animate-pulse">*</span> {activeProgress.stepLabel}
           </p>
         </div>
 
         <div className="grid grid-cols-3 gap-2.5">
           <MetricCard
-            value={progress.partialGrounding != null ? `${progress.partialGrounding}%` : "—"}
+            value={activeProgress.partialGrounding != null ? `${activeProgress.partialGrounding}%` : "-"}
             label="Grounding Score"
-            sublabel="facts backed by evidence"
-            colorClass={progress.partialGrounding != null ? "text-green-400" : "text-obsidian-muted"}
+            sublabel="latest available"
+            colorClass={activeProgress.partialGrounding != null ? "text-green-400" : "text-obsidian-muted"}
             borderClass="border-t-2 border-t-green-500/30"
           />
           <MetricCard
-            value={progress.partialFaithfulness != null ? `${progress.partialFaithfulness}%` : "—"}
+            value={activeProgress.partialFaithfulness != null ? `${activeProgress.partialFaithfulness}%` : "-"}
             label="Answer Faithfulness"
-            sublabel="claims traceable to sources"
-            colorClass={progress.partialFaithfulness != null ? "text-amber-400" : "text-obsidian-muted"}
+            sublabel="available after step 2"
+            colorClass={activeProgress.partialFaithfulness != null ? "text-amber-400" : "text-obsidian-muted"}
             borderClass="border-t-2 border-t-amber-500/30"
           />
           <MetricCard
-            value="—"
+            value={
+              activeProgress.partialSectionsPassed != null && activeProgress.partialSectionsTotal != null
+                ? `${activeProgress.partialSectionsPassed}/${activeProgress.partialSectionsTotal}`
+                : "-"
+            }
             label="Sections Passed"
-            sublabel="≥ 70% threshold"
-            colorClass="text-obsidian-muted"
+            sublabel=">= 70% grounding threshold"
+            colorClass={
+              activeProgress.partialSectionsPassed != null && activeProgress.partialSectionsTotal != null
+                ? "text-obsidian-text"
+                : "text-obsidian-muted"
+            }
             borderClass="border-t-2 border-t-obsidian-accent/20"
           />
         </div>
+
+        {(activeProgress.sections?.length ?? 0) > 0 && (
+          <div className="flex flex-col gap-4">
+            <p className="font-mono text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
+              Latest Section Results
+            </p>
+            <div className="flex flex-col gap-1">
+              {activeProgress.sections.map((section) => (
+                <SectionRow key={section.section_id} section={section} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 from collections.abc import Generator as _Generator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -35,14 +34,30 @@ from db.repositories.chat import (
     record_last_action,
     set_pending_action,
 )
-from db.repositories.project_runs import get_latest_report_title, get_project_for_user
+from db.repositories.project_runs import get_project_for_user
 from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse as _StreamingResponse
 from llm import LLMError, get_llm_client
 from middlewares.auth import IdentityDep
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from routes.chat_intents import (
+    _build_prompt,
+    _greeting_response,
+    _is_greeting,
+    _recent_chat_history,
+    _resolve_force_pipeline_prompt,
+)
+from routes.chat_schemas import (
+    ChatMessageListOut,
+    ChatMessageOut,
+    ChatSendRequest,
+    ChatSendResponse,
+    ConversationCreate,
+    ConversationListOut,
+    ConversationOut,
+)
+from routes.chat_titles import _maybe_update_title
+from sqlalchemy import select
 from search.tavily import search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -178,106 +193,6 @@ def _action_id_from_message(message: str) -> str | None:
     return action or None
 
 
-def _title_from_message(message: str) -> str:
-    text = " ".join(message.split())
-    return (text[:30] + ("..." if len(text) > 30 else "")).strip()
-
-
-def _count_chat_messages(session, tenant_id: UUID, conversation_id: UUID) -> int:
-    stmt = (
-        select(func.count())
-        .select_from(ChatMessageRow)
-        .where(
-            ChatMessageRow.tenant_id == tenant_id,
-            ChatMessageRow.conversation_id == conversation_id,
-            ChatMessageRow.type == "chat",
-            ChatMessageRow.role.in_(["user", "assistant"]),
-        )
-    )
-    return session.execute(stmt).scalar_one() or 0
-
-
-def _generate_title_with_llm(
-    history: list[ChatMessageRow],
-    report_title: str | None,
-    llm_provider: str | None,
-    llm_model: str | None,
-) -> str | None:
-    try:
-        client = get_llm_client(llm_provider, llm_model)
-    except LLMError:
-        return None
-    if client is None:
-        return None
-
-    lines = []
-    if report_title:
-        lines.append(f"Research topic: {report_title}")
-    lines.append("Conversation:")
-    for msg in history[-10:]:
-        prefix = "User" if msg.role == "user" else "Assistant"
-        text = (msg.content_text or "").strip()
-        if text:
-            lines.append(f"{prefix}: {text[:200]}")
-
-    prompt = (
-        "\n".join(lines)
-        + "\n\nWrite a short title (5–8 words) for this conversation. "
-        "Return only the title, no punctuation at the end."
-    )
-    try:
-        title = client.generate(
-            prompt,
-            system="You generate concise conversation titles.",
-            max_tokens=20,
-            temperature=0.4,
-        )
-        title = title.strip().strip('"').strip("'")
-        return title if title else None
-    except LLMError:
-        return None
-
-
-def _maybe_update_title(
-    *,
-    session,
-    tenant_id: UUID,
-    convo,
-    first_message: str,
-    user_type: str,
-    llm_provider: str | None,
-    llm_model: str | None,
-) -> None:
-    if user_type != "chat":
-        return
-
-    count = _count_chat_messages(session, tenant_id, convo.id)
-
-    if count < 5:
-        if convo.title is None:
-            report_title = (
-                get_latest_report_title(
-                    session=session, tenant_id=tenant_id, project_id=convo.project_id
-                )
-                if convo.project_id
-                else None
-            )
-            convo.title = report_title or _title_from_message(first_message)
-    elif count in (5, 6) and (convo.title is None or (convo.title or "").endswith("...")):
-        report_title = (
-            get_latest_report_title(
-                session=session, tenant_id=tenant_id, project_id=convo.project_id
-            )
-            if convo.project_id
-            else None
-        )
-        history = _recent_chat_history(
-            session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=10
-        )
-        convo.title = (
-            _generate_title_with_llm(history, report_title, llm_provider, llm_model)
-            or convo.title
-        )
 
 
 def _pending_action_payload(
@@ -308,170 +223,6 @@ def _extract_pending(conversation) -> dict | None:
     pending = get_pending_action(conversation)
     return pending if isinstance(pending, dict) else None
 
-
-def _normalize_text(message: str) -> str:
-    text = (message or "").strip().lower()
-    text = re.sub(r"[^a-z0-9\s]", "", text)
-    return " ".join(text.split())
-
-
-def _is_generic_pipeline_trigger(message: str) -> bool:
-    text = _normalize_text(message)
-    if not text:
-        return False
-
-    generic_triggers = {
-        "yes",
-        "yeah",
-        "yep",
-        "sure",
-        "ok",
-        "okay",
-        "do it",
-        "go ahead",
-        "proceed",
-        "run it",
-        "run it now",
-        "run now",
-        "run report",
-        "run the report",
-        "run the report now",
-        "run research report",
-        "run the research report",
-        "run the research report now",
-        "start report",
-        "start the report",
-        "start research",
-        "start the research",
-        "start the research report",
-        "start the research report now",
-        "create the research report now",
-        "create the detailed research report now",
-        "generate the research report now",
-    }
-    return text in generic_triggers
-
-
-def _is_substantive_prompt_candidate(message: str) -> bool:
-    text = _normalize_text(message)
-    if not text or _is_greeting(text) or _is_generic_pipeline_trigger(text):
-        return False
-
-    dismissive_replies = {
-        "thanks",
-        "thank you",
-        "sounds good",
-        "looks good",
-        "got it",
-        "cool",
-        "nice",
-    }
-    if text in dismissive_replies:
-        return False
-
-    return len(text.split()) >= 6
-
-
-def _latest_prior_research_prompt(
-    *,
-    session,
-    tenant_id: UUID,
-    conversation_id: UUID,
-    exclude_message_id: UUID,
-) -> str | None:
-    stmt = (
-        select(ChatMessageRow)
-        .where(
-            ChatMessageRow.tenant_id == tenant_id,
-            ChatMessageRow.conversation_id == conversation_id,
-            ChatMessageRow.role == "user",
-            ChatMessageRow.type == "chat",
-            ChatMessageRow.id != exclude_message_id,
-        )
-        .order_by(ChatMessageRow.created_at.desc(), ChatMessageRow.id.desc())
-        .limit(12)
-    )
-    rows = list(session.execute(stmt).scalars().all())
-    for row in rows:
-        candidate = (row.content_text or "").strip()
-        if not _is_substantive_prompt_candidate(candidate):
-            continue
-        return candidate
-    return None
-
-
-def _resolve_force_pipeline_prompt(
-    *,
-    session,
-    tenant_id: UUID,
-    conversation_id: UUID,
-    user_message: ChatMessageRow,
-) -> str:
-    prompt = (user_message.content_text or "").strip()
-    if not _is_generic_pipeline_trigger(prompt):
-        return prompt
-
-    prior_prompt = _latest_prior_research_prompt(
-        session=session,
-        tenant_id=tenant_id,
-        conversation_id=conversation_id,
-        exclude_message_id=user_message.id,
-    )
-    return prior_prompt or prompt
-
-
-def _is_greeting(message: str) -> bool:
-    text = _normalize_text(message)
-    if not text:
-        return False
-    greetings = {
-        "hi",
-        "hello",
-        "hey",
-        "hi there",
-        "hello there",
-        "hey there",
-        "yo",
-        "sup",
-        "good morning",
-        "good afternoon",
-        "good evening",
-    }
-    return text in greetings
-
-
-def _greeting_response() -> str:
-    return "Hi! How can I help you today?"
-
-
-def _recent_chat_history(
-    *, session, tenant_id: UUID, conversation_id: UUID, limit: int = 6
-) -> list[ChatMessageRow]:
-    stmt = (
-        select(ChatMessageRow)
-        .where(
-            ChatMessageRow.tenant_id == tenant_id,
-            ChatMessageRow.conversation_id == conversation_id,
-            ChatMessageRow.type == "chat",
-            ChatMessageRow.role.in_(["user", "assistant"]),
-        )
-        .order_by(ChatMessageRow.created_at.desc())
-        .limit(limit)
-    )
-    rows = list(session.execute(stmt).scalars().all())
-    return list(reversed(rows))
-
-
-def _build_prompt(history: list[ChatMessageRow], message: str) -> str:
-    if not history:
-        return message
-    lines = ["Conversation so far:"]
-    for row in history:
-        prefix = "User" if row.role == "user" else "Assistant"
-        lines.append(f"{prefix}: {row.content_text}")
-    lines.append(f"User: {message}")
-    lines.append("Assistant:")
-    return "\n".join(lines)
 
 
 def _generate_quick_answer(
@@ -659,69 +410,6 @@ def _stream_quick_answer_body(
 
     yield _format_sse_event("answer", response_payload).encode()
 
-
-class ConversationCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    project_id: UUID | None = None
-    title: str | None = Field(default=None, max_length=200)
-
-
-class ConversationOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    conversation_id: UUID
-    title: str | None = None
-    created_at: datetime
-    last_message_at: datetime | None = None
-
-
-class ConversationListOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[ConversationOut]
-    next_cursor: str | None = None
-
-
-class ChatMessageOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: UUID
-    role: str
-    type: str
-    content_text: str
-    content_json: dict | None = None
-    created_at: datetime
-
-
-class ChatMessageListOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[ChatMessageOut]
-    next_cursor: str | None = None
-
-
-class ChatSendRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    conversation_id: UUID
-    project_id: UUID | None = None
-    message: str = Field(min_length=1)
-    client_message_id: str = Field(min_length=1, max_length=200)
-    llm_provider: str | None = Field(default=None, pattern="^(hosted)$")
-    llm_model: str | None = Field(default=None, min_length=1)
-    force_pipeline: bool = False
-    stage_models: dict[str, str | None] | None = None
-
-
-class ChatSendResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    conversation_id: UUID
-    user_message: ChatMessageOut
-    assistant_message: ChatMessageOut | None = None
-    pending_action: dict | None = None
-    idempotent_replay: bool = False
 
 
 @router.post("/conversations", response_model=ConversationOut)
