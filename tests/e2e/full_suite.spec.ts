@@ -56,21 +56,26 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
   test('1.1 register with valid credentials', async ({ page }) => {
     await page.goto('/login');
     // Switch to register mode — the toggle button is at the bottom of the login form
-    await page.getByRole('button', { name: /don't have an account|create account|sign up|register/i }).click();
+    await page.getByRole('button', { name: /don't have an account|create one|create account|sign up|register/i }).click();
     // Fill registration form
     await page.locator('#login-username').fill(state.user.username);
     await page.locator('#login-email').fill(state.user.email);
     await page.locator('#login-password').fill(state.user.password);
     await page.locator('#login-confirm').fill(state.user.password);
     await page.getByRole('button', { name: /^create account$/i }).click();
-    // Should redirect to /projects
+    // Current flow returns to login with a success banner; sign in explicitly.
+    await expect(page.getByText(/account created successfully/i)).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/\/login/);
+    await page.locator('#login-username').fill(state.user.username);
+    await page.locator('#login-password').fill(state.user.password);
+    await page.getByRole('button', { name: /^sign in$/i }).click();
     await page.waitForURL('**/projects', { timeout: 15_000 });
     await expect(page).toHaveURL(/\/projects/);
   });
 
   test('1.2 register duplicate email is rejected', async ({ page }) => {
     await page.goto('/login');
-    await page.getByRole('button', { name: /don't have an account|create account|sign up|register/i }).click();
+    await page.getByRole('button', { name: /don't have an account|create one|create account|sign up|register/i }).click();
     await page.locator('#login-username').fill(`other${ts}`);
     await page.locator('#login-email').fill(state.user.email); // same email
     await page.locator('#login-password').fill(state.user.password);
@@ -82,7 +87,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
 
   test('1.3 register mismatched passwords is rejected', async ({ page }) => {
     await page.goto('/login');
-    await page.getByRole('button', { name: /don't have an account|create account|sign up|register/i }).click();
+    await page.getByRole('button', { name: /don't have an account|create one|create account|sign up|register/i }).click();
     await page.locator('#login-username').fill(`mismatch${ts}`);
     await page.locator('#login-email').fill(`mismatch${ts}@example.com`);
     await page.locator('#login-password').fill('TestPass123!');
@@ -94,7 +99,7 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
 
   test('1.4 register short password is rejected', async ({ page }) => {
     await page.goto('/login');
-    await page.getByRole('button', { name: /don't have an account|create account|sign up|register/i }).click();
+    await page.getByRole('button', { name: /don't have an account|create one|create account|sign up|register/i }).click();
     await page.locator('#login-username').fill(`short${ts}`);
     await page.locator('#login-email').fill(`short${ts}@example.com`);
     await page.locator('#login-password').fill('abc');
@@ -105,7 +110,10 @@ test.describe.serial('ResearchOps Studio — Full E2E Suite', () => {
   });
 
   test('1.5 logout redirects to login', async ({ page }) => {
-    await page.goto('/projects');
+    await page.goto('/login');
+    await page.locator('#login-username').fill(state.user.username);
+    await page.locator('#login-password').fill(state.user.password);
+    await page.getByRole('button', { name: /^sign in$/i }).click();
     await page.waitForURL('**/projects', { timeout: 15_000 });
     await page.getByRole('button', { name: /logout/i }).click();
     await page.waitForURL('**/login', { timeout: 10_000 });

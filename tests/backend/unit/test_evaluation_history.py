@@ -1,0 +1,312 @@
+from __future__ import annotations
+
+import os
+import sys
+import types
+from uuid import UUID
+
+import pytest
+from db.models.run_sections import RunSectionRow
+from db.models.section_reviews import SectionReviewRow
+from db.repositories.evaluation_history import (
+    create_evaluation_pass,
+    finalize_evaluation_pass,
+    list_evaluation_pass_history,
+    record_evaluation_section_result,
+)
+from db.repositories.project_runs import create_project, create_run, patch_run_usage_metrics
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+sys.modules.setdefault(
+    "bcrypt",
+    types.SimpleNamespace(
+        gensalt=lambda rounds=12: b"salt",
+        hashpw=lambda password, salt: b"hash",
+        checkpw=lambda password, hashed: True,
+    ),
+)
+
+
+def test_evaluation_history_is_append_only_across_passes() -> None:
+    import db.models  # noqa: F401
+    from db.models.base import Base
+    from db.models.runs import RunStatusDb
+
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    tenant_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    with SessionLocal() as session:  # type: Session
+        project = create_project(
+            session=session,
+            tenant_id=tenant_id,
+            name="Eval History",
+            description=None,
+            created_by="user-1",
+        )
+        run = create_run(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.id,
+            status=RunStatusDb.succeeded,
+            question="Why did evaluation change?",
+        )
+
+        pass_one = create_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            scope="pipeline",
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_one.id,
+            section_id="intro",
+            section_title="Introduction",
+            section_order=1,
+            verdict="fail",
+            grounding_score=45,
+            issues=[{"sentence_index": 0, "problem": "unsupported", "notes": "Missing evidence", "citations": []}],
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_one.id,
+            section_id="results",
+            section_title="Results",
+            section_order=2,
+            verdict="pass",
+            grounding_score=88,
+            issues=[],
+        )
+        finalize_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_one.id,
+            grounding_pct=67,
+            sections_passed=1,
+            sections_total=2,
+            issues_by_type={"unsupported": 1},
+        )
+
+        pass_two = create_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            scope="pipeline",
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_two.id,
+            section_id="intro",
+            section_title="Introduction",
+            section_order=1,
+            verdict="pass",
+            grounding_score=85,
+            issues=[],
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_two.id,
+            section_id="results",
+            section_title="Results",
+            section_order=2,
+            verdict="pass",
+            grounding_score=92,
+            issues=[],
+        )
+        finalize_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_two.id,
+            grounding_pct=89,
+            sections_passed=2,
+            sections_total=2,
+            issues_by_type={},
+        )
+        session.commit()
+
+        history = list_evaluation_pass_history(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+        )
+
+        assert len(history) == 2
+        assert history[0]["pass_index"] == 2
+        assert history[0]["sections_passed"] == 2
+        assert history[1]["pass_index"] == 1
+        assert history[1]["sections_passed"] == 1
+        assert history[1]["sections"][0]["verdict"] == "fail"
+
+
+@pytest.fixture()
+def api_client(tmp_path):
+    from app import create_app
+
+    db_path = tmp_path / "evaluation_history.db"
+    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db_path}"
+    os.environ["AUTH_REQUIRED"] = "false"
+    os.environ["DEV_BYPASS_AUTH"] = "true"
+    app = create_app()
+    with TestClient(app) as client:
+        yield client, app
+
+
+def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_client) -> None:
+    from db.models.runs import RunStatusDb
+    from db.session import session_scope
+
+    client, app = api_client
+    tenant_id = UUID("00000000-0000-0000-0000-000000000001")
+    SessionLocal = app.state.SessionLocal
+
+    with session_scope(SessionLocal) as session:
+        project = create_project(
+            session=session,
+            tenant_id=tenant_id,
+            name="Artifacts Eval History",
+            description=None,
+            created_by="dev-user",
+        )
+        run = create_run(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.id,
+            status=RunStatusDb.succeeded,
+            question="Explain evaluation history",
+        )
+        session.add_all(
+            [
+                RunSectionRow(
+                    tenant_id=tenant_id,
+                    run_id=run.id,
+                    section_id="intro",
+                    title="Introduction",
+                    goal="Intro",
+                    section_order=1,
+                ),
+                RunSectionRow(
+                    tenant_id=tenant_id,
+                    run_id=run.id,
+                    section_id="results",
+                    title="Results",
+                    goal="Results",
+                    section_order=2,
+                ),
+            ]
+        )
+
+        latest_review_intro = SectionReviewRow(
+            tenant_id=tenant_id,
+            run_id=run.id,
+            section_id="intro",
+            verdict="pass",
+        )
+        latest_review_intro.issues_json = []
+        latest_review_results = SectionReviewRow(
+            tenant_id=tenant_id,
+            run_id=run.id,
+            section_id="results",
+            verdict="pass",
+        )
+        latest_review_results.issues_json = []
+        session.add_all([latest_review_intro, latest_review_results])
+
+        pass_one = create_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            scope="pipeline",
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_one.id,
+            section_id="intro",
+            section_title="Introduction",
+            section_order=1,
+            verdict="fail",
+            grounding_score=45,
+            issues=[{"sentence_index": 0, "problem": "unsupported", "notes": "Missing evidence", "citations": []}],
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_one.id,
+            section_id="results",
+            section_title="Results",
+            section_order=2,
+            verdict="pass",
+            grounding_score=88,
+            issues=[],
+        )
+        finalize_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_one.id,
+            grounding_pct=67,
+            sections_passed=1,
+            sections_total=2,
+            issues_by_type={"unsupported": 1},
+        )
+
+        pass_two = create_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            scope="pipeline",
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_two.id,
+            section_id="intro",
+            section_title="Introduction",
+            section_order=1,
+            verdict="pass",
+            grounding_score=85,
+            issues=[],
+        )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_two.id,
+            section_id="results",
+            section_title="Results",
+            section_order=2,
+            verdict="pass",
+            grounding_score=92,
+            issues=[],
+        )
+        finalize_evaluation_pass(
+            session=session,
+            tenant_id=tenant_id,
+            evaluation_pass_id=pass_two.id,
+            grounding_pct=89,
+            sections_passed=2,
+            sections_total=2,
+            issues_by_type={},
+        )
+        patch_run_usage_metrics(run, {"eval_sections_passed": 2, "eval_sections_total": 2})
+        session.commit()
+        run_id = str(run.id)
+
+    response = client.get(f"/runs/{run_id}/evaluation")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "complete"
+    assert payload["sections_passed"] == 2
+    assert payload["sections_total"] == 2
+    assert len(payload["history"]) == 2
+    assert payload["history"][0]["pass_index"] == 2
+    assert payload["history"][1]["pass_index"] == 1
+    assert payload["history"][1]["sections_passed"] == 1
+    assert payload["history"][1]["sections"][0]["verdict"] == "fail"

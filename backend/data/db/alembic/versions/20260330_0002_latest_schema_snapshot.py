@@ -1,4 +1,4 @@
-"""Hybrid v2 normalized schema baseline."""
+"""Latest schema snapshot."""
 
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ import sqlalchemy as sa
 import db.models  # noqa: F401
 from db.models.base import Base
 
-
-revision = "20260316_0001_hybrid_v2"
+revision = "20260330_0002_evaluation_history"
 down_revision = None
 branch_labels = None
 depends_on = None

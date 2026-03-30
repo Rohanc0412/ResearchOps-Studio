@@ -15,7 +15,7 @@ export type Report = {
   sections: ReportSection[];
 };
 
-export type ActiveRunStatus = "running" | "failed" | "succeeded" | "canceled";
+export type ActiveRunStatus = "running" | "blocked" | "failed" | "succeeded" | "canceled";
 
 export type ActiveRun = {
   runId: string;

@@ -1,6 +1,6 @@
 import type { ChatMessage, RunEvent } from "../../types/dto";
 
-type ProgressStatus = "running" | "failed" | "succeeded" | "canceled";
+type ProgressStatus = "running" | "blocked" | "failed" | "succeeded" | "canceled";
 
 export type ResearchProgressStepState = "complete" | "current" | "pending";
 
@@ -166,13 +166,23 @@ export function buildResearchProgressCardModel({
     metricText: deriveMetricText(activeRun?.status ?? "running", latestEvent, events, currentStepIndex),
     progressRatio,
     status: activeRun?.status ?? "running",
-    recentEvents: recentEventsSource.slice(-6).reverse().map((event, index) => ({
-      id: `${event.ts}-${event.message}-${index}`,
-      ts: event.ts,
-      message: humanizeEventMessage(event),
-      detail: humanizeEventDetail(event),
-      level: event.level
-    })),
+    recentEvents: recentEventsSource
+      .slice(-20)
+      .reverse()
+      .reduce<ResearchProgressEventRow[]>((acc, event, index) => {
+        const message = humanizeEventMessage(event);
+        const previous = acc.at(-1);
+        if (previous && previous.message === message) return acc;
+        acc.push({
+          id: `${event.ts}-${event.message}-${index}`,
+          ts: event.ts,
+          message,
+          detail: humanizeEventDetail(event),
+          level: event.level,
+        });
+        return acc;
+      }, [])
+      .slice(0, 6),
     stepMetrics: deriveStepMetrics(events, activeRun?.status ?? "running"),
     currentAction,
   };
@@ -211,7 +221,7 @@ function deriveCurrentStepIndex(status: ProgressStatus, latestEvent?: RunEvent) 
 
 function deriveProgressRatio(status: ProgressStatus, currentStepIndex: number, latestEvent?: RunEvent) {
   if (status === "succeeded") return 1;
-  if (status === "failed" || status === "canceled") {
+  if (status === "blocked" || status === "failed" || status === "canceled") {
     return Math.max(0.08, Math.min(0.96, (currentStepIndex + 0.35) / 6));
   }
 
@@ -235,6 +245,13 @@ function deriveSummaryText(
   latestEvent?: RunEvent
 ) {
   if (activeRun?.status === "succeeded") return "Report completed and ready to review.";
+  if (activeRun?.status === "blocked") {
+    return (
+      activeRun.error?.trim() ||
+      activeRun.secondaryText?.trim() ||
+      "Another research run is already in progress. Retry after it finishes."
+    );
+  }
   if (activeRun?.status === "failed") return activeRun.error?.trim() || "Research run failed before completion.";
   if (activeRun?.status === "canceled") return "Research run stopped before finishing.";
 
@@ -251,6 +268,7 @@ function deriveMetricText(
   currentStepIndex: number
 ): string {
   if (status === "succeeded") return "Done";
+  if (status === "blocked") return "Retry required";
   if (status === "failed") return "Needs retry";
   if (status === "canceled") return "Stopped";
   if (!latestEvent) return "";

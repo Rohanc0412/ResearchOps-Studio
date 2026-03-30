@@ -6,9 +6,9 @@ from uuid import UUID
 from core.audit.logger import write_audit_log
 from core.auth.identity import Identity
 from core.runs import RunNotFoundError, RunTransitionError, request_cancel, retry_run
-from core.runs.lifecycle import emit_run_event
+from core.runs.lifecycle import emit_run_event, transition_run_status
 from db.models.run_events import RunEventLevelDb
-from db.models.runs import RunStatusDb
+from db.models.runs import RunRow, RunStatusDb
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.snippets import SnippetRow
 from db.models.snapshots import SnapshotRow
@@ -30,8 +30,12 @@ from fastapi import HTTPException, Request
 from job_queue import enqueue_run_job
 from research import RESEARCH_JOB_TYPE
 from schemas.truth import ArtifactOut, ProjectOut
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+ACTIVE_RESEARCH_RUN_MESSAGE = "Another research run is already in progress. Retry after it finishes."
+ACTIVE_RESEARCH_RUN_ERROR_CODE = "research_run_active"
 
 
 def project_to_out(project) -> ProjectOut:
@@ -91,6 +95,102 @@ def create_user_project(
     return project_to_out(row)
 
 
+def has_active_research_run(
+    *, session: Session, exclude_run_id: UUID | None = None
+) -> bool:
+    stmt = select(RunRow.id).where(RunRow.status == RunStatusDb.running)
+    if exclude_run_id is not None:
+        stmt = stmt.where(RunRow.id != exclude_run_id)
+    return session.execute(stmt.limit(1)).scalar_one_or_none() is not None
+
+
+def _mark_run_blocked(run: RunRow) -> None:
+    run.failure_reason = ACTIVE_RESEARCH_RUN_MESSAGE
+    run.error_code = ACTIVE_RESEARCH_RUN_ERROR_CODE
+    run.current_stage = None
+
+
+def create_research_run(
+    *,
+    session: Session,
+    tenant_id: UUID,
+    project_id: UUID,
+    question: str,
+    client_request_id: str | None,
+    budgets: dict,
+    llm_provider: str,
+    llm_model: str | None,
+    stage_models: str | None = None,
+) -> RunRow:
+    is_blocked = has_active_research_run(session=session)
+    run = create_run(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        status=RunStatusDb.blocked if is_blocked else RunStatusDb.queued,
+        current_stage=None if is_blocked else "retrieve",
+        question=question,
+        output_type="report",
+        client_request_id=client_request_id,
+        budgets=budgets,
+        usage={
+            "job_type": RESEARCH_JOB_TYPE,
+            "user_query": question,
+            "output_type": "report",
+            "research_goal": "report",
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "stage_models": stage_models,
+        },
+    )
+    if is_blocked:
+        _mark_run_blocked(run)
+
+    emit_run_event(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run.id,
+        event_type="run.created",
+        level=RunEventLevelDb.info,
+        message="Run created",
+        stage="retrieve",
+        payload={"run_id": str(run.id)},
+    )
+
+    if is_blocked:
+        emit_run_event(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            event_type="run.blocked",
+            level=RunEventLevelDb.warn,
+            message=ACTIVE_RESEARCH_RUN_MESSAGE,
+            stage="retrieve",
+            payload={"run_id": str(run.id), "reason": ACTIVE_RESEARCH_RUN_ERROR_CODE},
+        )
+        session.flush()
+        return run
+
+    emit_run_event(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run.id,
+        event_type="run.queued",
+        level=RunEventLevelDb.info,
+        message="Run queued",
+        stage="retrieve",
+        payload={"run_id": str(run.id)},
+    )
+    enqueue_run_job(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run.id,
+        job_type=RESEARCH_JOB_TYPE,
+    )
+    session.flush()
+    return run
+
+
 def create_project_run(
     *,
     request: Request,
@@ -130,50 +230,15 @@ def create_project_run(
         if resolved_provider != "hosted":
             raise HTTPException(status_code=400, detail="Only hosted LLM provider is supported.")
         resolved_model = llm_model or os.getenv("HOSTED_LLM_MODEL")
-        run = create_run(
+        run = create_research_run(
             session=session,
             tenant_id=tenant_id,
             project_id=project_id,
-            status=RunStatusDb.queued,
-            current_stage="retrieve",
             question=question,
-            output_type="report",
             client_request_id=client_request_id,
             budgets=budgets,
-            usage={
-                "job_type": RESEARCH_JOB_TYPE,
-                "user_query": question,
-                "output_type": "report",
-                "research_goal": "report",
-                "llm_provider": resolved_provider,
-                "llm_model": resolved_model,
-            },
-        )
-        emit_run_event(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run.id,
-            event_type="run.created",
-            level=RunEventLevelDb.info,
-            message="Run created",
-            stage="retrieve",
-            payload={"run_id": str(run.id)},
-        )
-        emit_run_event(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run.id,
-            event_type="run.queued",
-            level=RunEventLevelDb.info,
-            message="Run queued",
-            stage="retrieve",
-            payload={"run_id": str(run.id)},
-        )
-        enqueue_run_job(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run.id,
-            job_type=RESEARCH_JOB_TYPE,
+            llm_provider=resolved_provider,
+            llm_model=resolved_model,
         )
         return str(run.id), run.status.value
     except IntegrityError as exc:
@@ -263,13 +328,47 @@ def retry_user_run(
     identity: Identity,
     llm_model: str | None = None,
 ):
-    get_user_run_or_404(
+    run = get_user_run_or_404(
         session=session,
         tenant_id=tenant_id,
         run_id=run_id,
         user_id=identity.user_id,
     )
     try:
+        if has_active_research_run(session=session, exclude_run_id=run_id):
+            if run.status not in {RunStatusDb.failed, RunStatusDb.blocked}:
+                raise RunTransitionError(
+                    f"Cannot retry run in status {run.status.value}. "
+                    f"Retry is only allowed for failed or blocked runs."
+                )
+            _mark_run_blocked(run)
+            if run.status != RunStatusDb.blocked:
+                transition_run_status(
+                    session=session,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    to_status=RunStatusDb.blocked,
+                    current_stage=None,
+                    failure_reason=ACTIVE_RESEARCH_RUN_MESSAGE,
+                    error_code=ACTIVE_RESEARCH_RUN_ERROR_CODE,
+                    finished_at=None,
+                    cancel_requested_at=None,
+                    emit_event=False,
+                )
+            emit_run_event(
+                session=session,
+                tenant_id=tenant_id,
+                run_id=run.id,
+                event_type="run.blocked",
+                level=RunEventLevelDb.warn,
+                message=ACTIVE_RESEARCH_RUN_MESSAGE,
+                stage="retrieve",
+                payload={"run_id": str(run.id), "reason": ACTIVE_RESEARCH_RUN_ERROR_CODE},
+            )
+            if llm_model:
+                patch_run_usage_metrics(run, {"llm_model": llm_model})
+            session.flush()
+            return run
         run = retry_run(
             session=session,
             tenant_id=tenant_id,

@@ -134,6 +134,10 @@ export function ChatViewPage() {
   useEffect(() => {
     if (!chatId) {
       reportChatIdRef.current = null;
+      runHydrationRef.current = { chatId: null, runId: null };
+      runStatusCheckRef.current = 0;
+      lastEventIdRef.current = 0;
+      setActiveRun(null);
       setReport(EMPTY_REPORT);
       setCompletedRunArtifacts({});
       hydratedRunArtifactsRef.current = new Set();
@@ -142,6 +146,10 @@ export function ChatViewPage() {
 
     const stored = loadStoredReport(chatId);
     reportChatIdRef.current = chatId;
+    runHydrationRef.current = { chatId: null, runId: null };
+    runStatusCheckRef.current = 0;
+    lastEventIdRef.current = 0;
+    setActiveRun(null);
     setReport(stored ?? EMPTY_REPORT);
     setCompletedRunArtifacts({});
     hydratedRunArtifactsRef.current = new Set();
@@ -196,7 +204,9 @@ export function ChatViewPage() {
     [activeRun, chat?.title, messages, sse.events]
   );
   const reportStatusLabel = activeRun
-    ? activeRun.status === "failed"
+    ? activeRun.status === "blocked"
+      ? "BLOCKED"
+      : activeRun.status === "failed"
       ? "FAILED"
       : activeRun.status === "canceled"
         ? "CANCELED"
@@ -205,7 +215,9 @@ export function ChatViewPage() {
           : "PROCESSING"
     : "READY";
   const reportStatusClasses = activeRun
-    ? activeRun.status === "failed"
+    ? activeRun.status === "blocked"
+      ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+      : activeRun.status === "failed"
       ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
       : activeRun.status === "canceled"
         ? "border-slate-600 bg-slate-800 text-slate-300"
@@ -285,7 +297,7 @@ export function ChatViewPage() {
       if (terminal === "failed") {
         void hydrateRunFailure(activeRun.runId, terminalError);
       } else {
-        void handleRunCompletion(terminal);
+        void handleRunCompletion(activeRun.runId, terminal);
       }
       return;
     }
@@ -326,7 +338,7 @@ export function ChatViewPage() {
   }, [activeRun, sse.state, sse.lastError]);
 
   const hydrateReportFromArtifacts = useCallback(
-    async (runId: string) => {
+    async (runId: string, targetChatId: string | null = chatId ?? null) => {
       const artifacts = await apiFetchJson(`/runs/${encodeURIComponent(runId)}/artifacts`, {
         schema: ArtifactsSchema
       }).catch(() => [] as Artifact[]);
@@ -340,6 +352,8 @@ export function ChatViewPage() {
 
       const parsedSections = parseMarkdownToSections(response);
       if (parsedSections.length === 0) return;
+
+      if (targetChatId && reportChatIdRef.current !== targetChatId) return;
 
       const parsedTitle = extractReportTitle(response);
       setReport((prev) => ({
@@ -355,7 +369,7 @@ export function ChatViewPage() {
         highlightTimeoutRef.current = setTimeout(() => setHighlightedSection(null), 2000);
       }
     },
-    [setHighlightedSection, setReport, setCompletedRunArtifacts]
+    [chatId, setHighlightedSection, setReport, setCompletedRunArtifacts]
   );
 
   // Clean up highlight timeout on unmount to prevent state updates on unmounted component.
@@ -365,23 +379,33 @@ export function ChatViewPage() {
     };
   }, []);
 
-  async function handleRunCompletion(status: ActiveRunStatus) {
-    if (!activeRun) return;
-
-    const runId = activeRun.runId;
-
+  async function handleRunCompletion(
+    runId: string,
+    status: ActiveRunStatus,
+    targetChatId: string | null = chatId ?? null
+  ) {
     if (status === "canceled") {
-      setActiveRun(null);
-      lastEventIdRef.current = 0;
+      let cleared = false;
+      setActiveRun((prev) => {
+        if (!prev || prev.runId !== runId) return prev;
+        cleared = true;
+        return null;
+      });
+      if (cleared) lastEventIdRef.current = 0;
       return;
     }
 
     if (status === "succeeded") {
-      await hydrateReportFromArtifacts(runId);
+      await hydrateReportFromArtifacts(runId, targetChatId);
     }
 
-    setActiveRun(null);
-    lastEventIdRef.current = 0;
+    let cleared = false;
+    setActiveRun((prev) => {
+      if (!prev || prev.runId !== runId) return prev;
+      cleared = true;
+      return null;
+    });
+    if (cleared) lastEventIdRef.current = 0;
   }
 
   async function hydrateRunFailure(runId: string, fallbackError?: string) {
@@ -423,7 +447,7 @@ export function ChatViewPage() {
     }
 
     if (run.status === "succeeded" || run.status === "canceled") {
-      void handleRunCompletion(run.status as ActiveRunStatus);
+      void handleRunCompletion(runId, run.status as ActiveRunStatus);
       return;
     }
 
@@ -455,7 +479,7 @@ export function ChatViewPage() {
       if (!run) return;
 
       if (run.status === "succeeded") {
-        await hydrateReportFromArtifacts(latestRunId);
+        await hydrateReportFromArtifacts(latestRunId, chatId);
         return;
       }
 
@@ -473,9 +497,23 @@ export function ChatViewPage() {
         return;
       }
 
+      if (run.status === "blocked") {
+        const message = run.error_message ?? "Another research run is already in progress. Retry after it finishes.";
+        setActiveRun({
+          runId: latestRunId,
+          status: "blocked",
+          question: typeof run.question === "string" ? run.question : undefined,
+          primaryText: "Run blocked",
+          secondaryText: message,
+          startedAt: run.created_at ?? new Date().toISOString(),
+          error: message
+        });
+        return;
+      }
+
       if (run.status === "canceled") return;
 
-      // queued/created/running/blocked => resume progress banner + SSE
+      // queued/created/running => resume progress banner + SSE
       setActiveRun({
         runId: latestRunId,
         status: "running",
@@ -516,16 +554,23 @@ export function ChatViewPage() {
       if (assistant?.type === "run_started") {
         const runId = assistant.content_json?.["run_id"];
         const runQuestion = assistant.content_json?.["question"];
+        const runStatus = assistant.content_json?.["status"];
+        const blockedMessage =
+          typeof assistant.content_text === "string" && assistant.content_text.trim()
+            ? assistant.content_text
+            : "Another research run is already in progress. Retry after it finishes.";
         if (typeof runId === "string") {
           setActiveRun({
             runId,
-            status: "running",
+            status: runStatus === "blocked" ? "blocked" : "running",
             question: typeof runQuestion === "string" ? runQuestion : undefined,
-            primaryText: "Starting run...",
-            startedAt: new Date().toISOString()
+            primaryText: runStatus === "blocked" ? "Run blocked" : "Starting run...",
+            secondaryText: runStatus === "blocked" ? blockedMessage : undefined,
+            startedAt: new Date().toISOString(),
+            error: runStatus === "blocked" ? blockedMessage : undefined
           });
 
-          lastEventIdRef.current = 0;
+          lastEventIdRef.current = runStatus === "blocked" ? lastEventIdRef.current : 0;
         }
       }
 
@@ -586,11 +631,29 @@ export function ChatViewPage() {
     try {
       const modelValue =
         selectedModel === CUSTOM_MODEL_VALUE ? customModel.trim() : selectedModel.trim();
-      await retryRun.mutateAsync(modelValue || undefined);
+      const run = await retryRun.mutateAsync(modelValue || undefined);
+      const blockedMessage =
+        run.error_message ?? "Another research run is already in progress. Retry after it finishes.";
 
-      setActiveRun((prev) =>
-        prev ? { ...prev, status: "running", primaryText: "Retrying run", secondaryText: undefined } : prev
-      );
+      setActiveRun((prev) => {
+        if (!prev) return prev;
+        if (run.status === "blocked") {
+          return {
+            ...prev,
+            status: "blocked",
+            primaryText: "Run blocked",
+            secondaryText: blockedMessage,
+            error: blockedMessage,
+          };
+        }
+        return {
+          ...prev,
+          status: "running",
+          primaryText: "Retrying run",
+          secondaryText: undefined,
+          error: undefined,
+        };
+      });
     } catch {
     }
   }
@@ -930,7 +993,11 @@ export function ChatViewPage() {
               expanded={progressDetailsOpen}
               onToggleExpanded={() => setProgressDetailsOpen((prev) => !prev)}
               onCancel={activeRun?.status === "running" ? () => void onAnswerNow() : undefined}
-              onRetry={activeRun?.status === "failed" ? () => void onRetry() : undefined}
+              onRetry={
+                activeRun && (activeRun.status === "failed" || activeRun.status === "blocked")
+                  ? () => void onRetry()
+                  : undefined
+              }
               runId={activeRun?.runId}
             />
           ) : null}

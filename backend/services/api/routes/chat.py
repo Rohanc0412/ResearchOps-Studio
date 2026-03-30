@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from app_services.chat_router import classify_chat_intent, parse_consent_reply
+from app_services.project_runs import ACTIVE_RESEARCH_RUN_MESSAGE, create_research_run
 from core.audit.logger import write_audit_log
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
@@ -34,15 +35,13 @@ from db.repositories.chat import (
     record_last_action,
     set_pending_action,
 )
-from db.repositories.project_runs import create_run, get_latest_report_title, get_project_for_user
+from db.repositories.project_runs import get_latest_report_title, get_project_for_user
 from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse as _StreamingResponse
-from job_queue import enqueue_run_job
 from llm import LLMError, get_llm_client
 from middlewares.auth import IdentityDep
 from pydantic import BaseModel, ConfigDict, Field
-from research import RESEARCH_JOB_TYPE
 from sqlalchemy import func, select
 from search.tavily import search
 
@@ -1098,50 +1097,16 @@ def post_send_chat(
                                 "llm_model": llm_model,
                             },
                         )
-                        run = create_run(
+                        run = create_research_run(
                             session=session,
                             tenant_id=tenant_id,
                             project_id=convo.project_id,
-                            status=RunStatusDb.queued,
-                            current_stage="retrieve",
                             question=pending_prompt,
-                            output_type="report",
+                            client_request_id=None,
                             budgets={},
-                            usage={
-                                "job_type": RESEARCH_JOB_TYPE,
-                                "user_query": pending_prompt,
-                                "output_type": "report",
-                                "research_goal": "report",
-                                "llm_provider": llm_provider,
-                                "llm_model": llm_model,
-                                "stage_models": json.dumps(pending_stage_models) if pending_stage_models else None,
-                            },
-                        )
-                        emit_run_event(
-                            session=session,
-                            tenant_id=tenant_id,
-                            run_id=run.id,
-                            event_type="run.created",
-                            level=RunEventLevelDb.info,
-                            message="Run created",
-                            stage="retrieve",
-                            payload={"run_id": str(run.id)},
-                        )
-                        emit_run_event(
-                            session=session,
-                            tenant_id=tenant_id,
-                            run_id=run.id,
-                            event_type="run.queued",
-                            level=RunEventLevelDb.info,
-                            message="Run queued",
-                            stage="retrieve",
-                            payload={"run_id": str(run.id)},
-                        )
-                        enqueue_run_job(
-                            session=session,
-                            tenant_id=tenant_id,
-                            run_id=run.id,
-                            job_type=RESEARCH_JOB_TYPE,
+                            llm_provider=llm_provider,
+                            llm_model=llm_model,
+                            stage_models=json.dumps(pending_stage_models) if pending_stage_models else None,
                         )
                         logger.info(
                             "Research pipeline run created from chat",
@@ -1176,11 +1141,16 @@ def post_send_chat(
                             conversation_id=convo.id,
                             role="assistant",
                             message_type="run_started",
-                            content_text="Starting a research run now.",
+                            content_text=(
+                                ACTIVE_RESEARCH_RUN_MESSAGE
+                                if run.status == RunStatusDb.blocked
+                                else "Starting a research run now."
+                            ),
                             content_json={
                                 "run_id": str(run.id),
                                 "action_hash": action_hash,
                                 "question": pending_prompt,
+                                "status": run.status.value,
                             },
                             client_message_id=None,
                             metadata_json=None,
@@ -1191,7 +1161,7 @@ def post_send_chat(
                                 "event": "pipeline.response",
                                 "conversation_id": str(convo.id),
                                 "run_id": str(run.id),
-                                "assistant_message": "Starting a research run now.",
+                                "assistant_message": assistant_message.content_text,
                             },
                         )
                         write_audit_log(

@@ -16,8 +16,9 @@ from typing import Any
 from uuid import UUID
 
 from db.models.run_events import RunEventLevelDb, RunEventRow
+from db.models.runs import RunRow
 from db.repositories.project_runs import append_run_event
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -245,6 +246,13 @@ def emit_run_event(
     # run events become visible before the enclosing transaction commits.
     event_session = _event_session(session)
     try:
+        if event_type == "stage_start" and stage:
+            event_session.execute(
+                update(RunRow)
+                .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+                .values(current_stage=stage, updated_at=datetime.now(UTC))
+            )
+
         # Get the next event number for this run
         result = event_session.execute(
             select(RunEventRow.event_number)

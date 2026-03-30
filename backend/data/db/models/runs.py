@@ -163,19 +163,30 @@ class RunRow(Base):
     def usage_json(self, values: dict | None) -> None:
         from db.models.run_usage_metrics import RunUsageMetricRow
 
-        rows: list[RunUsageMetricRow] = []
+        existing = {row.metric_name: row for row in self.usage_metrics}
+        retained_names: set[str] = set()
+
         for key, value in (values or {}).items():
-            metric = RunUsageMetricRow(
-                tenant_id=self.tenant_id, run_id=self.id, metric_name=str(key)
-            )
+            name = str(key)
+            metric = existing.get(name)
+            if metric is None:
+                metric = RunUsageMetricRow(
+                    tenant_id=self.tenant_id, run_id=self.id, metric_name=name
+                )
+                self.usage_metrics.append(metric)
+            metric.metric_text = None
+            metric.metric_number = None
             if isinstance(value, bool):
                 metric.metric_text = "true" if value else "false"
             elif isinstance(value, int):
                 metric.metric_number = value
             elif value is not None:
                 metric.metric_text = str(value)
-            rows.append(metric)
-        self.usage_metrics = rows
+            retained_names.add(name)
+
+        for name, metric in list(existing.items()):
+            if name not in retained_names and metric in self.usage_metrics:
+                self.usage_metrics.remove(metric)
 
 
 RunRow.__table__.append_constraint(

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { apiFetchJson } from "./client";
 import { RunSchema } from "../types/dto";
 
-const TERMINAL_STATUSES = new Set(["succeeded", "failed", "canceled"]);
+const TERMINAL_STATUSES = new Set(["succeeded", "blocked", "failed", "canceled"]);
 
 const OkSchema = z.object({ ok: z.literal(true) }).passthrough();
 
@@ -35,7 +35,7 @@ export function useRetryRunMutation(runId: string) {
     mutationFn: async (llmModel?: string) =>
       apiFetchJson(`/runs/${encodeURIComponent(runId)}/retry`, {
         method: "POST",
-        schema: OkSchema,
+        schema: RunSchema,
         body: llmModel ? { llm_model: llmModel } : undefined,
       }),
     onSuccess: async () => {

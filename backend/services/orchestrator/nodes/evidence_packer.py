@@ -150,7 +150,7 @@ def _embed_texts_batched(
                     dtype=client.dtype,
                     trust_remote_code=client.trust_remote_code,
                     n_workers=pool_size,
-                    preloaded_model=getattr(client, "_model", None),
+                    preloaded_model=None if str(client.device).startswith("cuda") else getattr(client, "_model", None),
                 )
                 return pool.encode(texts, n_chunks=n_chunks)
             except Exception as exc:  # noqa: BLE001

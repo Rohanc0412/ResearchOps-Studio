@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from datetime import UTC, datetime
 
 from core.env import env_bool, now_utc
 from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA
@@ -20,20 +18,27 @@ from core.orchestrator.state import (
     OutlineSection,
 )
 from core.pipeline_events import emit_run_event, instrument_node
+from core.pipeline_events.events import truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
-from core.pipeline_events.events import truncate_text
-from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
+from db.repositories.evaluation_history import (
+    create_evaluation_pass,
+    finalize_evaluation_pass,
+    record_evaluation_section_result,
+)
+from llm import (
+    LLMError,
+    extract_json_payload,
+    get_llm_client_for_stage,
+    json_response_format,
+    log_llm_exchange,
+)
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
-
-
-
-
 
 
 def _snippet_payload(snippets: list[EvidenceSnippetRef]) -> list[dict]:
@@ -90,7 +95,7 @@ def _evaluate_section_with_llm(
     prompt = (
         "Rate the semantic grounding of the drafted section against the evidence snippets.\n\n"
         "GROUNDING SCORE DEFINITION:\n"
-        "  grounding_score = (factual sentences supported by evidence) / (total factual sentences) × 100\n"
+        "  grounding_score = (factual sentences supported by evidence) / (total factual sentences) x 100\n"
         "  - Transitional sentences that make no factual claim are excluded from the count.\n"
         "  - A sentence is SUPPORTED if at least one snippet provides direct evidence for the claim.\n"
         "  - A sentence is UNSUPPORTED if no snippet backs it up.\n"
@@ -164,14 +169,12 @@ def _evaluate_section_with_llm(
     if issues and verdict == "pass":
         verdict = "fail"
 
-    # Extract and clamp grounding_score.
     raw_score = payload.get("grounding_score")
     try:
         grounding_score = max(0, min(100, int(raw_score)))
     except (TypeError, ValueError):
         grounding_score = 85 if verdict == "pass" else 45
 
-    # If issues exist the score cannot honestly be 100.
     if issues and grounding_score == 100:
         grounding_score = 85
 
@@ -292,11 +295,15 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     if not draft_sections:
         raise ValueError("Draft sections not found for evaluation.")
 
-    # Acquire LLM client unless disabled via env.
     llm_client = None
     if env_bool("EVALUATOR_LLM_ENABLED", True):
         try:
-            llm_client = get_llm_client_for_stage("evaluate", state.llm_provider, state.llm_model, stage_models=state.stage_models)
+            llm_client = get_llm_client_for_stage(
+                "evaluate",
+                state.llm_provider,
+                state.llm_model,
+                stage_models=state.stage_models,
+            )
         except LLMError:
             logger.warning(
                 "LLM client unavailable for evaluator; falling back to pass-through.",
@@ -306,8 +313,16 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     pass_count = 0
     fail_count = 0
     grounding_scores: list[int] = []
-    failed_section_ids: set[str] = set()
-    last_section_id = outline.sections[-1].section_id if outline.sections else None
+    issues_by_type: dict[str, int] = {}
+    section_positions = {
+        section.section_id: index + 1 for index, section in enumerate(outline.sections)
+    }
+    evaluation_pass = create_evaluation_pass(
+        session=session,
+        tenant_id=state.tenant_id,
+        run_id=state.run_id,
+        scope="pipeline",
+    )
 
     for section in outline.sections:
         section_text = draft_sections.get(section.section_id)
@@ -325,7 +340,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
 
         verdict = "pass"
         issues: list[dict] = []
-        grounding_score = 100  # default when LLM is off
+        grounding_score = 100
 
         if llm_client is not None:
             snippets = _load_section_snippets(
@@ -366,6 +381,17 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             verdict=verdict,
             issues=issues,
         )
+        record_evaluation_section_result(
+            session=session,
+            tenant_id=state.tenant_id,
+            evaluation_pass_id=evaluation_pass.id,
+            section_id=section.section_id,
+            section_title=section.title,
+            section_order=section_positions.get(section.section_id),
+            verdict=verdict,
+            grounding_score=grounding_score,
+            issues=issues,
+        )
 
         emit_run_event(
             session=session,
@@ -384,12 +410,11 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             pass_count += 1
         else:
             fail_count += 1
-            failed_section_ids.add(section.section_id)
+        for issue in issues:
+            problem = str(issue.get("problem") or "unknown")
+            issues_by_type[problem] = issues_by_type.get(problem, 0) + 1
 
-    overall_grounding_pct = (
-        round(sum(grounding_scores) / len(grounding_scores))
-        if grounding_scores else 100
-    )
+    overall_grounding_pct = round(sum(grounding_scores) / len(grounding_scores)) if grounding_scores else 100
 
     emit_run_event(
         session=session,
@@ -403,21 +428,23 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             "overall_grounding_pct": overall_grounding_pct,
         },
     )
+    finalize_evaluation_pass(
+        session=session,
+        tenant_id=state.tenant_id,
+        evaluation_pass_id=evaluation_pass.id,
+        grounding_pct=overall_grounding_pct,
+        sections_passed=pass_count,
+        sections_total=pass_count + fail_count,
+        issues_by_type=issues_by_type,
+    )
 
     state.iteration_count += 1
 
-    # Route to repair only if:
-    # - overall grounding is below the 70% threshold, AND
-    # - at least one non-last section failed (repair node requires a next section), AND
-    # - repair hasn't already run this cycle (repair_attempts < 1)
-    overall_grounding = overall_grounding_pct / 100
-    repairable_failures = failed_section_ids - ({last_section_id} if last_section_id else set())
-
-    if overall_grounding < 0.70 and repairable_failures and state.repair_attempts < 1:
+    if fail_count > 0 and state.repair_attempts < 1:
         state.evaluator_decision = EvaluatorDecision.CONTINUE_REPAIR
         state.evaluation_reason = (
-            f"Overall grounding score {overall_grounding_pct}% is below the 70% threshold; "
-            f"{len(repairable_failures)} section(s) flagged for repair."
+            f"{fail_count} section(s) failed grounding checks "
+            f"(overall grounding {overall_grounding_pct}%); routing to repair."
         )
     else:
         state.evaluator_decision = EvaluatorDecision.STOP_SUCCESS
@@ -425,19 +452,10 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             state.evaluation_reason = (
                 f"All sections passed (overall grounding {overall_grounding_pct}%)."
             )
-        elif overall_grounding >= 0.70:
-            state.evaluation_reason = (
-                f"Grounding score {overall_grounding_pct}% meets the 70% threshold; exporting."
-            )
-        elif not repairable_failures:
-            state.evaluation_reason = (
-                f"Grounding score {overall_grounding_pct}% is below threshold but only the "
-                "last section is affected — skipping repair (no next section available)."
-            )
         else:
             state.evaluation_reason = (
-                f"Grounding score {overall_grounding_pct}% is below threshold but repair "
-                "limit already reached; exporting as-is."
+                f"{fail_count} section(s) failed grounding checks (overall grounding "
+                f"{overall_grounding_pct}%), but repair limit already reached; exporting as-is."
             )
 
     return state

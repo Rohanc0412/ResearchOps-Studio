@@ -22,7 +22,9 @@ export function ResearchProgressCard({
   runId,
 }: ResearchProgressCardProps) {
   const isRunning = model.status === "running";
-  const isFailed  = model.status === "failed";
+  const isFailed = model.status === "failed";
+  const isBlocked = model.status === "blocked";
+  const isRetryable = isFailed || isBlocked;
 
   return (
     <div className="mb-6 rounded-[24px] border border-white/[0.07] bg-obsidian-bg p-[22px] shadow-[0_24px_64px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.04)]">
@@ -44,10 +46,12 @@ export function ResearchProgressCard({
             <p
               className={cx(
                 "text-[9px] uppercase tracking-[0.18em]",
-                isFailed ? "text-[rgba(255,100,100,0.5)]" : "text-white/[0.28]"
+                isRetryable ? "text-[rgba(255,190,90,0.65)]" : "text-white/[0.28]"
               )}
             >
-              {isFailed
+              {isBlocked
+                ? "Run blocked - retry after current run"
+                : isFailed
                 ? "Run failed — review or retry"
                 : model.status === "canceled"
                   ? "Run stopped before the report finished"
@@ -80,7 +84,7 @@ export function ResearchProgressCard({
                 <ProgressStepBadge
                   index={index + 1}
                   state={step.state}
-                  isFailed={isFailed && step.state === "current"}
+                  isFailed={isRetryable && step.state === "current"}
                 />
                 {!isLast && (
                   <div
@@ -98,8 +102,8 @@ export function ResearchProgressCard({
                 <p
                   className={cx(
                     "min-w-0 flex-1 text-[11px] leading-relaxed",
-                    isFailed && step.state === "current"
-                      ? "text-[rgba(255,100,100,0.6)]"
+                    isRetryable && step.state === "current"
+                      ? "text-[rgba(255,190,90,0.75)]"
                       : step.state === "current"
                         ? "font-medium text-[#f8fafc]"
                         : step.state === "complete"
@@ -145,11 +149,13 @@ export function ResearchProgressCard({
         <div
           className={cx(
             "shrink-0 text-right text-[11px] font-semibold",
-            isFailed
-              ? "text-[rgba(255,100,100,0.8)]"
-              : model.status === "canceled"
-                ? "text-white/35"
-                : "text-white/65"
+            isBlocked
+              ? "text-[rgba(255,190,90,0.8)]"
+              : isFailed
+                ? "text-[rgba(255,100,100,0.8)]"
+                : model.status === "canceled"
+                  ? "text-white/35"
+                  : "text-white/65"
           )}
         >
           {model.metricText}
@@ -174,11 +180,13 @@ export function ResearchProgressCard({
             <div
               className={cx(
                 "h-full rounded-full",
-                isFailed
-                  ? "bg-[rgba(255,80,80,0.6)]"
-                  : model.status === "canceled"
-                    ? "bg-white/20"
-                    : "bg-white/75"
+                isBlocked
+                  ? "bg-[rgba(255,190,90,0.7)]"
+                  : isFailed
+                    ? "bg-[rgba(255,80,80,0.6)]"
+                    : model.status === "canceled"
+                      ? "bg-white/20"
+                      : "bg-white/75"
               )}
               style={{ width: `${Math.max(6, Math.round(model.progressRatio * 100))}%` }}
             />
@@ -198,7 +206,7 @@ export function ResearchProgressCard({
           </button>
         )}
 
-        {isFailed && onRetry && (
+        {isRetryable && onRetry && (
           <button
             type="button"
             onClick={onRetry}

@@ -11,7 +11,7 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True, populate_by_name=True)
 
 
-RunStatus = Literal["created", "queued", "running", "failed", "succeeded", "canceled"]
+RunStatus = Literal["created", "queued", "running", "blocked", "failed", "succeeded", "canceled"]
 RunEventLevel = Literal["debug", "info", "warn", "error"]
 
 

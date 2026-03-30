@@ -79,3 +79,27 @@ def test_embed_texts_batched_falls_back_when_max_workers_is_1():
     assert call_log[0] == ["a", "b"]
     assert call_log[1] == ["c"]
     assert len(result) == 3
+
+
+def test_embed_texts_batched_avoids_shared_model_fast_path_on_cuda():
+    """CUDA worker pools should not receive a preloaded model handle from the parent process."""
+    import services.orchestrator.nodes.retriever as ret
+    from embeddings import SentenceTransformerEmbedClient
+
+    client = SentenceTransformerEmbedClient.__new__(SentenceTransformerEmbedClient)
+    client.model_name = "test"
+    client.device = "cuda:0"
+    client.normalize_embeddings = True
+    client.max_seq_length = None
+    client.dtype = "bfloat16"
+    client.trust_remote_code = False
+    client._model = object()
+
+    mock_pool = mock.MagicMock()
+    mock_pool.encode.return_value = [[0.1, 0.2]]
+
+    with mock.patch("services.orchestrator.nodes.retriever.get_embed_worker_pool", return_value=mock_pool) as mock_get_pool:
+        result = ret._embed_texts_batched(client, ["hello"], batch_size=32)
+
+    assert result == [[0.1, 0.2]]
+    assert mock_get_pool.call_args.kwargs["preloaded_model"] is None

@@ -25,6 +25,21 @@ export const EvaluationSectionSchema = z.object({
 });
 export type EvaluationSection = z.infer<typeof EvaluationSectionSchema>;
 
+export const EvaluationPassSchema = z.object({
+  id: z.string(),
+  scope: z.string(),
+  pass_index: z.number(),
+  status: z.string(),
+  evaluated_at: z.string().nullable().optional(),
+  grounding_pct: z.number().nullable().optional(),
+  faithfulness_pct: z.number().nullable().optional(),
+  sections_passed: z.number().nullable().optional(),
+  sections_total: z.number().nullable().optional(),
+  issues_by_type: z.record(z.number()).optional(),
+  sections: z.array(EvaluationSectionSchema),
+});
+export type EvaluationPass = z.infer<typeof EvaluationPassSchema>;
+
 export const EvaluationResultSchema = z.object({
   status: z.enum(["none", "running", "complete"]),
   evaluated_at: z.string().nullable().optional(),
@@ -34,6 +49,7 @@ export const EvaluationResultSchema = z.object({
   sections_total: z.number().optional(),
   issues_by_type: z.record(z.number()).optional(),
   sections: z.array(EvaluationSectionSchema).optional(),
+  history: z.array(EvaluationPassSchema).optional(),
 });
 export type EvaluationResult = z.infer<typeof EvaluationResultSchema>;
 

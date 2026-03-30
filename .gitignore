@@ -17,6 +17,7 @@ env/
 # Local tool settings
 .claude/settings.local.json
 .claude/
+.codex/
 .playwright-mcp/
 .superpowers/
 
@@ -64,6 +65,7 @@ screenshots/
 e2e*.png
 e2e2*.png
 fix-*.png
+frontend/dashboard/playwright-results/
 
 # AI planning artifacts (superpowers brainstorming outputs)
 docs/superpowers/

@@ -24,6 +24,7 @@ from core.tenancy import get_tenant_id
 from db.models.run_sections import RunSectionRow
 from db.models.runs import RunStatusDb
 from db.models.section_reviews import SectionReviewRow
+from db.repositories.evaluation_history import list_evaluation_pass_history
 from db.repositories.project_runs import get_run_usage_metrics, list_run_events
 from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request
@@ -387,9 +388,16 @@ def get_evaluation(
         )
         usage = get_run_usage_metrics(run)
         status = usage.get(METRIC_EVAL_STATUS, "none")
+        history = list_evaluation_pass_history(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+        )
 
-        if status not in ("complete", "running"):
+        if status not in ("complete", "running") and not history:
             return {"status": "none"}
+        if status not in ("complete", "running") and history:
+            status = "complete"
 
         # Load section titles
         section_rows = (
@@ -408,6 +416,12 @@ def get_evaluation(
 
         issues_by_type: dict[str, int] = {}
         sections_out = []
+        latest_history_sections = history[0]["sections"] if history else []
+        latest_scores = {
+            section["section_id"]: section.get("grounding_score")
+            for section in latest_history_sections
+            if isinstance(section, dict)
+        }
         for review in reviews:
             issues = review.issues_json or []
             for issue in issues:
@@ -416,7 +430,7 @@ def get_evaluation(
             sections_out.append({
                 "section_id": review.section_id,
                 "title": titles.get(review.section_id, review.section_id),
-                "grounding_score": None,
+                "grounding_score": latest_scores.get(review.section_id),
                 "verdict": review.verdict,
                 "issues": issues,
             })
@@ -430,4 +444,5 @@ def get_evaluation(
             "sections_total": usage.get("eval_sections_total", len(reviews)),
             "issues_by_type": issues_by_type,
             "sections": sections_out,
+            "history": history,
         }

@@ -99,17 +99,29 @@ def get_run_budget_limits(run: RunRow) -> dict[str, int]:
 
 
 def replace_run_usage_metrics(run: RunRow, usage: dict | None) -> None:
-    rows: list[RunUsageMetricRow] = []
+    existing = {row.metric_name: row for row in run.usage_metrics}
+    retained_names: set[str] = set()
+
     for key, value in (usage or {}).items():
-        metric = RunUsageMetricRow(tenant_id=run.tenant_id, run_id=run.id, metric_name=str(key))
+        name = str(key)
+        metric = existing.get(name)
+        if metric is None:
+            metric = RunUsageMetricRow(tenant_id=run.tenant_id, run_id=run.id, metric_name=name)
+            run.usage_metrics.append(metric)
+
+        metric.metric_text = None
+        metric.metric_number = None
         if isinstance(value, bool):
             metric.metric_text = "true" if value else "false"
         elif isinstance(value, int):
             metric.metric_number = value
         elif value is not None:
             metric.metric_text = str(value)
-        rows.append(metric)
-    run.usage_metrics = rows
+        retained_names.add(name)
+
+    for name, metric in list(existing.items()):
+        if name not in retained_names and metric in run.usage_metrics:
+            run.usage_metrics.remove(metric)
 
 
 def patch_run_usage_metrics(run: RunRow, updates: dict | None) -> None:
@@ -293,6 +305,10 @@ def append_run_event(
         payload_json=payload_json or {},
     )
     session.add(row)
+
+    if event_type == "stage_start" and stage:
+        run.current_stage = stage
+        run.updated_at = now
 
     _touch_project_from_run(
         session=session, project_id=run.project_id, tenant_id=tenant_id, now=now

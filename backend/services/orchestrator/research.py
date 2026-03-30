@@ -7,6 +7,17 @@ from uuid import UUID
 
 from db.models.runs import RunRow
 from db.repositories.project_runs import get_run_usage_metrics
+from embeddings import (
+    get_embed_worker_pool,
+    resolve_embed_device,
+    resolve_embed_dtype,
+    resolve_embed_max_seq_len,
+    resolve_embed_model,
+    resolve_embed_normalize,
+    resolve_embed_provider,
+    resolve_embed_trust_remote_code,
+    resolve_embed_workers,
+)
 from observability.context import bind
 from runner import run_orchestrator
 from sqlalchemy import select
@@ -15,6 +26,39 @@ from sqlalchemy.orm import Session
 RESEARCH_JOB_TYPE = "research.run"
 
 logger = logging.getLogger(__name__)
+
+
+def _warm_local_embed_pool(*, llm_provider: str | None) -> None:
+    provider = resolve_embed_provider(llm_provider)
+    if provider not in {"local", "sentence-transformers", "bge"}:
+        return
+
+    workers = resolve_embed_workers()
+    if workers <= 1:
+        return
+
+    device = resolve_embed_device()
+    model_name = resolve_embed_model(provider)
+    get_embed_worker_pool(
+        model_name=model_name,
+        device=device,
+        normalize_embeddings=resolve_embed_normalize(),
+        max_seq_length=resolve_embed_max_seq_len(),
+        dtype=resolve_embed_dtype(device),
+        trust_remote_code=resolve_embed_trust_remote_code(model_name),
+        n_workers=workers,
+        preloaded_model=None,
+    )
+    logger.info(
+        "Research embed worker pool warmed",
+        extra={
+            "event": "pipeline.embed_pool.ready",
+            "provider": provider,
+            "model_name": model_name,
+            "device": device,
+            "workers": workers,
+        },
+    )
 
 
 def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> None:
@@ -58,6 +102,7 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
         },
     )
     try:
+        _warm_local_embed_pool(llm_provider=llm_provider)
         logger.info(
             "Research pipeline invoking orchestrator",
             extra={

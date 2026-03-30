@@ -2,34 +2,38 @@
 On-demand evaluation runner for research reports.
 
 Computes three quality metrics independently of the LangGraph pipeline:
-  Step 1 — Grounding:      LLM grades each section against its evidence snippets
-  Step 2 — Faithfulness:   LLM extracts claims and verifies them against evidence
-  Step 3 — Sections Passed: DB count of pass/fail verdicts
+  Step 1 - Grounding:      LLM grades each section against its evidence snippets
+  Step 2 - Faithfulness:   LLM extracts claims and verifies them against evidence
+  Step 3 - Sections Passed: DB count of pass/fail verdicts
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Generator
 from uuid import UUID
 
-from db.models.artifacts import ArtifactRow  # used in _run_faithfulness (Task 2)
+from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA, METRIC_EVAL_GROUNDING_PCT, METRIC_EVAL_STATUS
+from db.models.artifacts import ArtifactRow
 from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow
-from db.models.run_usage_metrics import RunUsageMetricRow  # used in _run_faithfulness and _run_finalize (Tasks 2-3)
+from db.models.run_usage_metrics import RunUsageMetricRow
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
-from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA, METRIC_EVAL_GROUNDING_PCT, METRIC_EVAL_STATUS
+from db.repositories.evaluation_history import (
+    create_evaluation_pass,
+    finalize_evaluation_pass,
+    record_evaluation_section_result,
+)
 from llm import LLMError, get_llm_client_for_stage, json_response_format
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-
-# ── Faithfulness schemas ───────────────────────────────────────────────────────
 
 _CLAIMS_SCHEMA = {
     "type": "object",
@@ -61,16 +65,13 @@ _FAITHFULNESS_SCHEMA = {
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _extract_json_payload(text: str) -> dict | list | None:
     if not text:
         return None
     cleaned = text.strip()
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
-        # drop opening fence line (e.g. ```json or ```) and closing fence line
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
     start_candidates = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos != -1]
     if not start_candidates:
@@ -80,7 +81,7 @@ def _extract_json_payload(text: str) -> dict | list | None:
     if end == -1 or end <= start:
         return None
     try:
-        return json.loads(cleaned[start: end + 1])
+        return json.loads(cleaned[start : end + 1])
     except json.JSONDecodeError:
         return None
 
@@ -88,6 +89,11 @@ def _extract_json_payload(text: str) -> dict | list | None:
 def _truncate(text: str, max_chars: int) -> str:
     cleaned = text.strip()
     return cleaned if len(cleaned) <= max_chars else cleaned[:max_chars].rstrip() + "..."
+
+
+_CITATION_MARKER_RE = re.compile(r"\[\^\d+\]")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SECTION_HEADING_RE = re.compile(r"^##\s+(?:\d+\.\s+)?(.+?)\s*$")
 
 
 def _normalize_issue(item: dict, allowed_ids: set[str]) -> dict | None:
@@ -107,8 +113,6 @@ def _normalize_issue(item: dict, allowed_ids: set[str]) -> dict | None:
     return {"sentence_index": sentence_index, "problem": problem, "notes": notes, "citations": filtered}
 
 
-# ── EvaluationRunner ──────────────────────────────────────────────────────────
-
 class EvaluationRunner:
     """Runs on-demand quality evaluation for a completed research report."""
 
@@ -118,11 +122,17 @@ class EvaluationRunner:
         self.run_id = run_id
         self._grounding_pct: int | None = None
         self._faithfulness_pct: int | None = None
+        self._history_pass_id: UUID | None = None
 
     def run(self) -> Generator[dict, None, None]:
-        """Yield SSE-ready event dicts. Runs steps 1-3 sequentially."""
         yield {"type": "evaluation.started", "steps": 3}
-        # Mark evaluation as running so GET /evaluation returns status="running" during the pipeline
+        history_pass = create_evaluation_pass(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            scope="manual",
+        )
+        self._history_pass_id = history_pass.id
         self._write_metric(METRIC_EVAL_STATUS, "running")
         self.session.flush()
         yield {"type": "evaluation.step", "step": 1, "label": "Scoring section grounding…"}
@@ -133,7 +143,6 @@ class EvaluationRunner:
         yield from self._run_finalize()
 
     def _write_metric(self, name: str, value: int | str | None) -> None:
-        """Upsert a single metric into run_usage_metrics."""
         existing = (
             self.session.query(RunUsageMetricRow)
             .filter(
@@ -150,49 +159,46 @@ class EvaluationRunner:
             else:
                 existing.metric_text = str(value) if value is not None else None
                 existing.metric_number = None
-        else:
-            row = RunUsageMetricRow(
-                tenant_id=self.tenant_id,
-                run_id=self.run_id,
-                metric_name=name,
-            )
-            if isinstance(value, int) and not isinstance(value, bool):
-                row.metric_number = value
-            else:
-                row.metric_text = str(value) if value is not None else None
-            self.session.add(row)
+            return
 
-    # ── Step 1: Grounding ─────────────────────────────────────────────────────
+        row = RunUsageMetricRow(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            metric_name=name,
+        )
+        if isinstance(value, int) and not isinstance(value, bool):
+            row.metric_number = value
+        else:
+            row.metric_text = str(value) if value is not None else None
+        self.session.add(row)
 
     def _run_grounding(self) -> Generator[dict, None, None]:
         session = self.session
         tenant_id = self.tenant_id
         run_id = self.run_id
 
-        # Load draft texts keyed by section_id
         draft_rows = (
             session.query(DraftSectionRow.section_id, DraftSectionRow.text)
             .filter(DraftSectionRow.tenant_id == tenant_id, DraftSectionRow.run_id == run_id)
             .all()
         )
-        drafts: dict[str, str] = {r.section_id: r.text for r in draft_rows}
+        drafts: dict[str, str] = {row.section_id: row.text for row in draft_rows}
         if not drafts:
             raise ValueError("no_draft_sections")
 
-        # Load section order/titles
         section_rows = (
             session.query(RunSectionRow)
             .filter(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
             .order_by(RunSectionRow.section_order)
             .all()
         )
-        section_order = [r.section_id for r in section_rows]
-        section_titles = {r.section_id: r.title for r in section_rows}
+        section_order = [row.section_id for row in section_rows]
+        section_titles = {row.section_id: row.title for row in section_rows}
+        section_positions = {row.section_id: row.section_order for row in section_rows}
         if not section_order:
             section_order = list(drafts.keys())
 
         llm_client = get_llm_client_for_stage("evaluate")
-
         scores: list[int] = []
         pass_count = 0
         fail_count = 0
@@ -202,7 +208,6 @@ class EvaluationRunner:
             if not section_text:
                 continue
 
-            # Load evidence snippets for this section
             snippet_rows = (
                 session.query(SnippetRow.id, SnippetRow.text)
                 .join(SnapshotRow, SnapshotRow.id == SnippetRow.snapshot_id)
@@ -218,11 +223,8 @@ class EvaluationRunner:
                 )
                 .all()
             )
-            snippets = [
-                {"snippet_id": str(r.id), "text": _truncate(r.text or "", 800)}
-                for r in snippet_rows
-            ]
-            allowed_ids = {s["snippet_id"] for s in snippets}
+            snippets = [{"snippet_id": str(row.id), "text": _truncate(row.text or "", 800)} for row in snippet_rows]
+            allowed_ids = {snippet["snippet_id"] for snippet in snippets}
 
             verdict = "pass"
             issues: list[dict] = []
@@ -248,6 +250,18 @@ class EvaluationRunner:
                 fail_count += 1
 
             self._persist_section_review(section_id=section_id, verdict=verdict, issues=issues)
+            if self._history_pass_id is not None:
+                record_evaluation_section_result(
+                    session=session,
+                    tenant_id=tenant_id,
+                    evaluation_pass_id=self._history_pass_id,
+                    section_id=section_id,
+                    section_title=section_titles.get(section_id, section_id),
+                    section_order=section_positions.get(section_id),
+                    verdict=verdict,
+                    grounding_score=grounding_score,
+                    issues=issues,
+                )
             session.flush()
 
             yield {
@@ -284,7 +298,7 @@ class EvaluationRunner:
         )
         prompt = (
             "Rate the semantic grounding of the drafted section against the evidence snippets.\n\n"
-            "GROUNDING SCORE: (supported factual sentences / total factual sentences) × 100\n"
+            "GROUNDING SCORE: (supported factual sentences / total factual sentences) x 100\n"
             "  - Transitional sentences with no factual claim are excluded.\n"
             "  - UNSUPPORTED: no snippet backs it up.\n"
             "  - OVERSTATED: snippets only partially support the claim strength.\n"
@@ -324,8 +338,11 @@ class EvaluationRunner:
             grounding_score = 85 if verdict == "pass" else 45
 
         issues_raw = payload.get("issues") or []
-        issues = [n for item in (issues_raw if isinstance(issues_raw, list) else [])
-                  if (n := _normalize_issue(item, allowed_ids)) is not None]
+        issues = [
+            normalized
+            for item in (issues_raw if isinstance(issues_raw, list) else [])
+            if (normalized := _normalize_issue(item, allowed_ids)) is not None
+        ]
 
         if issues and verdict == "pass":
             verdict = "fail"
@@ -347,94 +364,46 @@ class EvaluationRunner:
         )
         now = datetime.utcnow()
         if row:
-            # Clear existing child rows and flush to DB before the issues_json setter
-            # appends new SectionReviewIssueRow children. Without this flush the
-            # cascade="all, delete-orphan" on the relationship conflicts with the
-            # new children and raises a UniqueViolation on (review_id, issue_order).
             row.issues = []
             session.flush()
             row.verdict = verdict
             row.issues_json = issues
             row.reviewed_at = now
             row.updated_at = now
-        else:
-            row = SectionReviewRow(
-                tenant_id=self.tenant_id,
-                run_id=self.run_id,
-                section_id=section_id,
-                verdict=verdict,
-                issues_json=issues,
-                reviewed_at=now,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(row)
-
-    # ── Step 2: Faithfulness ──────────────────────────────────────────────────
-
-    def _run_faithfulness(self) -> Generator[dict, None, None]:
-        session = self.session
-        tenant_id = self.tenant_id
-        run_id = self.run_id
-
-        # Load report_md artifact
-        artifact = (
-            session.query(ArtifactRow)
-            .filter(
-                ArtifactRow.tenant_id == tenant_id,
-                ArtifactRow.run_id == run_id,
-                ArtifactRow.artifact_type == "report_md",
-            )
-            .first()
-        )
-        if artifact is None:
-            raise ValueError("no_report_artifact")
-
-        markdown = (artifact.metadata_json or {}).get("markdown", "")
-        if not markdown.strip():
-            raise ValueError("no_report_artifact")
-
-        # Load all unique evidence snippets for this run (used as verification context).
-        # Intentionally skips the SnapshotRow join used in _run_grounding — we only need
-        # snippet id + text here, not source metadata. Tenant isolation is enforced by the
-        # SectionEvidenceRow.tenant_id condition in both the JOIN predicate and .filter().
-        snippet_rows = (
-            session.query(SnippetRow.id, SnippetRow.text)
-            .join(SectionEvidenceRow, (SectionEvidenceRow.snippet_id == SnippetRow.id) & (SectionEvidenceRow.tenant_id == SnippetRow.tenant_id))
-            .filter(SectionEvidenceRow.tenant_id == tenant_id, SectionEvidenceRow.run_id == run_id)
-            .distinct()
-            .all()
-        )
-        if not snippet_rows:
-            raise ValueError("no_evidence")
-
-        snippets_payload = [
-            {"snippet_id": str(r.id), "text": _truncate(r.text or "", 600)}
-            for r in snippet_rows
-        ]
-
-        llm_client = get_llm_client_for_stage("evaluate")
-        if llm_client is None:
-            yield {
-                "type": "evaluation.faithfulness_done",
-                "faithfulness_pct": None,
-                "supported_claims": 0,
-                "total_claims": 0,
-            }
             return
 
-        # Call 1: extract factual claims from the full report
+        row = SectionReviewRow(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            section_id=section_id,
+            verdict=verdict,
+            issues_json=issues,
+            reviewed_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+
+    def _extract_section_claims(
+        self,
+        *,
+        llm_client,
+        section_title: str,
+        section_text: str,
+    ) -> list[str]:
         extract_prompt = (
-            "Extract all distinct factual claims from the research report below. "
-            "A factual claim is a sentence that asserts a verifiable fact (not a transition, opinion, or meta-commentary). "
+            "Extract all distinct factual claims from the report section below. "
+            "A factual claim is a sentence that asserts a verifiable fact. "
+            "Ignore markdown headings, inline citation markers like [^1], and bibliography/reference text. "
             "Return ONLY valid JSON: {\"claims\": [\"claim 1\", \"claim 2\", ...]}\n\n"
-            f"Report:\n{_truncate(markdown, 6000)}"
+            f"Section title: {section_title}\n\n"
+            f"Section text:\n{_truncate(section_text, 4000)}"
         )
         try:
             extract_response = llm_client.generate(
                 extract_prompt,
                 system="You are a precise fact extraction assistant.",
-                max_tokens=1200,
+                max_tokens=900,
                 temperature=0.1,
                 response_format=json_response_format("claims", _CLAIMS_SCHEMA),
             )
@@ -442,26 +411,84 @@ class EvaluationRunner:
             raise ValueError("LLM claim extraction failed") from exc
 
         extract_payload = _extract_json_payload(extract_response)
+        raw_claims = extract_payload.get("claims") if isinstance(extract_payload, dict) else []
         claims: list[str] = []
-        if isinstance(extract_payload, dict):
-            raw = extract_payload.get("claims")
-            claims = [str(c).strip() for c in (raw if isinstance(raw, list) else []) if str(c).strip()]
+        seen: set[str] = set()
+        for raw_claim in raw_claims if isinstance(raw_claims, list) else []:
+            claim = str(raw_claim).strip()
+            if not claim:
+                continue
+            normalized = claim.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            claims.append(claim)
+        return claims
 
-        if not claims:
-            yield {
-                "type": "evaluation.faithfulness_done",
-                "faithfulness_pct": None,
-                "supported_claims": 0,
-                "total_claims": 0,
-            }
-            return
+    def _extract_cited_claims(self, section_text: str) -> list[str]:
+        claims: list[str] = []
+        seen: set[str] = set()
+        for sentence in _SENTENCE_SPLIT_RE.split(section_text.strip()):
+            if "[^" not in sentence:
+                continue
+            cleaned = _CITATION_MARKER_RE.sub("", sentence)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip(" -\n\t")
+            if not cleaned:
+                continue
+            normalized = cleaned.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            claims.append(cleaned)
+        return claims
 
-        # Call 2: batch-verify all claims against evidence snippets in one LLM call
-        claims_text = "\n".join(f"{i}. {c}" for i, c in enumerate(claims))
+    def _normalize_section_title(self, title: str) -> str:
+        return re.sub(r"\s+", " ", title.strip()).lower()
+
+    def _parse_report_sections(self, markdown: str) -> dict[str, str]:
+        sections: dict[str, str] = {}
+        current_title: str | None = None
+        current_lines: list[str] = []
+
+        def flush_current() -> None:
+            nonlocal current_title, current_lines
+            if not current_title:
+                current_lines = []
+                return
+            body = "\n".join(current_lines).strip()
+            if body:
+                sections[self._normalize_section_title(current_title)] = body
+            current_lines = []
+
+        for raw_line in markdown.splitlines():
+            match = _SECTION_HEADING_RE.match(raw_line.strip())
+            if match:
+                flush_current()
+                title = match.group(1).strip()
+                if self._normalize_section_title(title) == "references":
+                    current_title = None
+                    current_lines = []
+                    continue
+                current_title = title
+                current_lines = []
+                continue
+            if current_title is not None:
+                current_lines.append(raw_line)
+
+        flush_current()
+        return sections
+
+    def _verify_section_claims(
+        self,
+        *,
+        llm_client,
+        claims: list[str],
+        snippets_payload: list[dict[str, str]],
+    ) -> int:
+        claims_text = "\n".join(f"{index}. {claim}" for index, claim in enumerate(claims))
         verify_prompt = (
             "For each numbered claim below, determine if ANY of the provided evidence snippets "
-            "directly supports it. A claim is supported if at least one snippet provides clear "
-            "evidence for the assertion.\n\n"
+            "directly supports it. A claim is supported only if at least one snippet provides clear, specific evidence.\n\n"
             "Return ONLY valid JSON:\n"
             "{\"verdicts\": [{\"claim_index\": 0, \"supported\": true}, ...]}\n\n"
             f"Claims:\n{claims_text}\n\n"
@@ -479,20 +506,124 @@ class EvaluationRunner:
             raise ValueError("LLM faithfulness verification failed") from exc
 
         verify_payload = _extract_json_payload(verify_response)
-        supported_count = 0
-        if isinstance(verify_payload, dict):
-            verdicts = verify_payload.get("verdicts") or []
-            supported_count = sum(
-                1 for v in (verdicts if isinstance(verdicts, list) else [])
-                if isinstance(v, dict) and v.get("supported") is True
+        if not isinstance(verify_payload, dict):
+            return 0
+        verdicts = verify_payload.get("verdicts") or []
+        return sum(
+            1
+            for verdict in (verdicts if isinstance(verdicts, list) else [])
+            if isinstance(verdict, dict) and verdict.get("supported") is True
+        )
+
+    def _run_faithfulness(self) -> Generator[dict, None, None]:
+        session = self.session
+        tenant_id = self.tenant_id
+        run_id = self.run_id
+
+        artifact = (
+            session.query(ArtifactRow)
+            .filter(
+                ArtifactRow.tenant_id == tenant_id,
+                ArtifactRow.run_id == run_id,
+                ArtifactRow.artifact_type == "report_md",
             )
+            .first()
+        )
+        markdown = (artifact.metadata_json or {}).get("markdown", "") if artifact is not None else ""
+        report_sections = self._parse_report_sections(markdown) if markdown.strip() else {}
 
-        total = len(claims)
-        faithfulness_pct = round(supported_count / total * 100) if total > 0 else None
+        draft_rows = (
+            session.query(DraftSectionRow.section_id, DraftSectionRow.text)
+            .filter(DraftSectionRow.tenant_id == tenant_id, DraftSectionRow.run_id == run_id)
+            .all()
+        )
+        drafts = {row.section_id: row.text for row in draft_rows}
+        if not drafts:
+            raise ValueError("no_draft_sections")
+
+        section_rows = (
+            session.query(RunSectionRow)
+            .filter(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
+            .order_by(RunSectionRow.section_order)
+            .all()
+        )
+        ordered_sections = [
+            (row.section_id, row.title or row.section_id)
+            for row in section_rows
+            if drafts.get(row.section_id)
+        ]
+        if not ordered_sections:
+            ordered_sections = [(section_id, section_id) for section_id in sorted(drafts.keys())]
+
+        llm_client = get_llm_client_for_stage("evaluate")
+        if llm_client is None:
+            yield {
+                "type": "evaluation.faithfulness_done",
+                "faithfulness_pct": None,
+                "supported_claims": 0,
+                "total_claims": 0,
+            }
+            return
+
+        supported_count = 0
+        total = 0
+        for section_id, section_title in ordered_sections:
+            section_text = report_sections.get(self._normalize_section_title(section_title)) or drafts.get(section_id) or ""
+            if not section_text.strip():
+                continue
+
+            claims = self._extract_cited_claims(section_text)
+            if not claims:
+                claims = self._extract_section_claims(
+                    llm_client=llm_client,
+                    section_title=section_title,
+                    section_text=section_text,
+                )
+            if not claims:
+                continue
+
+            snippet_rows = (
+                session.query(SnippetRow.id, SnippetRow.text)
+                .join(
+                    SectionEvidenceRow,
+                    (SectionEvidenceRow.snippet_id == SnippetRow.id)
+                    & (SectionEvidenceRow.tenant_id == SnippetRow.tenant_id),
+                )
+                .filter(
+                    SectionEvidenceRow.tenant_id == tenant_id,
+                    SectionEvidenceRow.run_id == run_id,
+                    SectionEvidenceRow.section_id == section_id,
+                )
+                .all()
+            )
+            snippets_payload: list[dict[str, str]] = []
+            seen_snippet_ids: set[str] = set()
+            for row in snippet_rows:
+                snippet_id = str(row.id)
+                if snippet_id in seen_snippet_ids:
+                    continue
+                seen_snippet_ids.add(snippet_id)
+                snippets_payload.append({"snippet_id": snippet_id, "text": _truncate(row.text or "", 600)})
+
+            supported_count += self._verify_section_claims(
+                llm_client=llm_client,
+                claims=claims,
+                snippets_payload=snippets_payload,
+            )
+            total += len(claims)
+
+        if total == 0:
+            yield {
+                "type": "evaluation.faithfulness_done",
+                "faithfulness_pct": None,
+                "supported_claims": 0,
+                "total_claims": 0,
+            }
+            return
+
+        faithfulness_pct = round(supported_count / total * 100)
         self._faithfulness_pct = faithfulness_pct
-        assert faithfulness_pct is not None  # guaranteed: method returns early if claims is empty
 
-        # Persist faithfulness score to run_usage_metrics
         existing = (
             session.query(RunUsageMetricRow)
             .filter(
@@ -505,12 +636,14 @@ class EvaluationRunner:
         if existing:
             existing.metric_number = faithfulness_pct
         else:
-            session.add(RunUsageMetricRow(
-                tenant_id=tenant_id,
-                run_id=run_id,
-                metric_name="eval_faithfulness_pct",
-                metric_number=faithfulness_pct,
-            ))
+            session.add(
+                RunUsageMetricRow(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    metric_name="eval_faithfulness_pct",
+                    metric_number=faithfulness_pct,
+                )
+            )
         session.flush()
 
         yield {
@@ -520,31 +653,26 @@ class EvaluationRunner:
             "total_claims": total,
         }
 
-    # ── Step 3: Finalize ──────────────────────────────────────────────────────
-
     def _run_finalize(self) -> Generator[dict, None, None]:
         session = self.session
         tenant_id = self.tenant_id
         run_id = self.run_id
 
-        # Load all section reviews for this run
         reviews = (
             session.query(SectionReviewRow)
             .filter(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
             .all()
         )
 
-        sections_passed = sum(1 for r in reviews if r.verdict == "pass")
+        sections_passed = sum(1 for review in reviews if review.verdict == "pass")
         sections_total = len(reviews)
 
-        # Tally issue types across all failed sections
         issues_by_type: dict[str, int] = {}
         for review in reviews:
             for issue in (review.issues_json or []):
                 problem = issue.get("problem", "unknown")
                 issues_by_type[problem] = issues_by_type.get(problem, 0) + 1
 
-        # Persist final metrics
         now_str = datetime.utcnow().isoformat()
         self._write_metric(METRIC_EVAL_STATUS, "complete")
         self._write_metric("eval_evaluated_at", now_str)
@@ -552,6 +680,17 @@ class EvaluationRunner:
         self._write_metric("eval_sections_total", sections_total)
         if self._grounding_pct is not None:
             self._write_metric(METRIC_EVAL_GROUNDING_PCT, self._grounding_pct)
+        if self._history_pass_id is not None:
+            finalize_evaluation_pass(
+                session=session,
+                tenant_id=tenant_id,
+                evaluation_pass_id=self._history_pass_id,
+                grounding_pct=self._grounding_pct,
+                faithfulness_pct=self._faithfulness_pct,
+                sections_passed=sections_passed,
+                sections_total=sections_total,
+                issues_by_type=issues_by_type,
+            )
         self.session.flush()
 
         yield {

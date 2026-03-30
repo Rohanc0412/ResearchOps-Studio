@@ -19,6 +19,9 @@ from research import RESEARCH_JOB_TYPE, process_research_run
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+ORPHANED_JOB_RECOVERY_ERROR = "Recovered orphaned running job after service restart"
+ORPHANED_RUN_RECOVERY_ERROR_CODE = "stale_running_recovered"
+
 
 def _now_utc() -> datetime:
     return datetime.now(UTC)
@@ -74,11 +77,62 @@ def _mark_run_failed(session: Session, *, run_id: UUID, tenant_id: UUID, error: 
     )
 
 
+def recover_orphaned_jobs(session: Session) -> int:
+    now = _now_utc()
+    recovered_run_ids: set[UUID] = set()
+
+    running_jobs = session.execute(
+        select(JobRow).where(JobRow.status == JobStatusDb.running)
+    ).scalars().all()
+    for job in running_jobs:
+        job.status = JobStatusDb.failed
+        job.last_error = ORPHANED_JOB_RECOVERY_ERROR
+        job.updated_at = now
+        recovered_run_ids.add(job.run_id)
+        session.execute(
+            update(RunRow)
+            .where(RunRow.id == job.run_id, RunRow.tenant_id == job.tenant_id)
+            .values(
+                status=RunStatusDb.failed,
+                failure_reason=ORPHANED_JOB_RECOVERY_ERROR,
+                error_code=ORPHANED_RUN_RECOVERY_ERROR_CODE,
+                finished_at=now,
+                updated_at=now,
+            )
+        )
+
+    active_job_run_ids = set(
+        session.execute(
+            select(JobRow.run_id).where(JobRow.status.in_([JobStatusDb.queued, JobStatusDb.running]))
+        ).scalars()
+    )
+    stale_run_stmt = select(RunRow).where(RunRow.status == RunStatusDb.running)
+    stale_runs = [
+        run
+        for run in session.execute(stale_run_stmt).scalars().all()
+        if run.id not in active_job_run_ids
+    ]
+    for run in stale_runs:
+        if run.id in recovered_run_ids:
+            continue
+        run.status = RunStatusDb.failed
+        run.failure_reason = ORPHANED_JOB_RECOVERY_ERROR
+        run.error_code = ORPHANED_RUN_RECOVERY_ERROR_CODE
+        run.finished_at = now
+        run.updated_at = now
+        recovered_run_ids.add(run.id)
+
+    return len(recovered_run_ids)
+
+
 def run_forever(*, poll_seconds: float, stop_event: Event | None = None) -> None:
     settings = get_settings()
     engine = create_db_engine(settings)
     init_db(engine)
     SessionLocal = create_sessionmaker(engine)
+
+    with session_scope(SessionLocal) as session:
+        recover_orphaned_jobs(session)
 
     while stop_event is None or not stop_event.is_set():
         ran = run_once(SessionLocal=SessionLocal)

@@ -12,6 +12,8 @@ __all__ = [
     "ClaimMapRow",
     "ConversationActionRow",
     "DraftSectionRow",
+    "EvaluationPassRow",
+    "EvaluationPassSectionRow",
     "JobRow",
     "OutlineNoteRow",
     "ProjectRow",
@@ -53,6 +55,8 @@ from db.models.chat_messages import ChatMessageRow
 from db.models.claim_map import ClaimMapRow
 from db.models.conversation_actions import ConversationActionRow
 from db.models.draft_sections import DraftSectionRow
+from db.models.evaluation_pass_sections import EvaluationPassSectionRow
+from db.models.evaluation_passes import EvaluationPassRow
 from db.models.jobs import JobRow
 from db.models.outline_notes import OutlineNoteRow
 from db.models.projects import ProjectRow

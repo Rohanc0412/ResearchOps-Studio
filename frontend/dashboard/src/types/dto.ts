@@ -68,7 +68,7 @@ export const ProjectSchema: z.ZodType<Project, z.ZodTypeDef, unknown> = ProjectW
   return { ...p, id };
 });
 
-export const RunStatusSchema = z.enum(["created", "queued", "running", "failed", "succeeded", "canceled"]);
+export const RunStatusSchema = z.enum(["created", "queued", "running", "blocked", "failed", "succeeded", "canceled"]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
 export type Artifact = {

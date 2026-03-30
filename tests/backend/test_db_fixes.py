@@ -350,6 +350,48 @@ def test_table_exists_only_called_once_across_multiple_create_runs():
     session.close()
 
 
+# ── Issue 8b: replace_run_usage_metrics must update existing rows in place ───────
+
+
+def test_replace_run_usage_metrics_updates_existing_rows_without_unique_conflict():
+    """Replacing usage metrics on an existing run must not create duplicate metric_name rows."""
+    import db.repositories.project_runs as pr
+    from db.models.runs import RunStatusDb
+
+    session = _make_session()
+    _seed_roles(session)
+    tenant_id = uuid4()
+    project = _make_project(session, tenant_id)
+
+    run = pr.create_run(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project.id,
+        status=RunStatusDb.queued,
+        current_stage="retrieve",
+        usage={
+            "job_type": "research.run",
+            "user_query": "compare multilingual embeddings",
+            "output_type": "report",
+        },
+    )
+    session.flush()
+
+    updated_usage = dict(pr.get_run_usage_metrics(run))
+    updated_usage["evidence_snippets"] = 20
+    updated_usage["job_type"] = "research.run"
+
+    pr.replace_run_usage_metrics(run, updated_usage)
+    session.flush()
+
+    refreshed = pr.get_run_usage_metrics(run)
+    assert refreshed["job_type"] == "research.run"
+    assert refreshed["evidence_snippets"] == 20
+    metric_names = sorted(row.metric_name for row in run.usage_metrics)
+    assert metric_names.count("job_type") == 1
+    session.close()
+
+
 # ── Issue 9: get_last_action timestamps must not swap when created_at is None ──
 
 

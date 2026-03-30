@@ -5,6 +5,7 @@ import { RotateCcw, PlayCircle, CheckCircle2, XCircle } from "lucide-react";
 import {
   useEvaluationQuery,
   useRunEvaluateMutation,
+  type EvaluationPass,
   type EvaluationSection,
   type EvaluationIssue,
 } from "../../api/evaluation";
@@ -150,6 +151,74 @@ function IssueBreakdownBar({ issuesByType }: { issuesByType: Record<string, numb
   );
 }
 
+function formatPassScope(scope: string) {
+  return scope === "manual" ? "Manual" : "Pipeline";
+}
+
+function EvaluationHistoryCard({ evaluationPass }: { evaluationPass: EvaluationPass }) {
+  const [open, setOpen] = useState(false);
+  const hasFailures = (evaluationPass.sections ?? []).some((section) => section.verdict === "fail");
+  const evaluatedLabel = evaluationPass.evaluated_at
+    ? new Date(evaluationPass.evaluated_at).toLocaleString()
+    : "Unknown";
+
+  return (
+    <div className="rounded-xl border border-obsidian-border bg-obsidian-surface-elevated">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+      >
+        <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
+              {formatPassScope(evaluationPass.scope)} pass {evaluationPass.pass_index}
+            </span>
+            <span
+              className={cx(
+                "rounded px-2 py-0.5 font-mono text-[10px] font-bold",
+                hasFailures ? "bg-amber-500/10 text-amber-400" : "bg-green-500/10 text-green-400"
+              )}
+            >
+              {(evaluationPass.sections_passed ?? 0)}/{evaluationPass.sections_total ?? 0} passed
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-obsidian-border">{evaluatedLabel}</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="hidden text-right sm:block">
+            <div className="text-[12px] font-medium text-obsidian-text">
+              {evaluationPass.grounding_pct != null ? `${evaluationPass.grounding_pct}% grounding` : "No grounding score"}
+            </div>
+            {evaluationPass.faithfulness_pct != null && (
+              <div className="font-mono text-[10px] text-obsidian-muted">
+                {evaluationPass.faithfulness_pct}% faithfulness
+              </div>
+            )}
+          </div>
+          <span className="text-[10px] text-obsidian-border">{open ? "Collapse" : "Expand"}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t border-obsidian-border px-4 py-4">
+          {evaluationPass.issues_by_type && Object.keys(evaluationPass.issues_by_type).length > 0 && (
+            <div className="mb-4">
+              <IssueBreakdownBar issuesByType={evaluationPass.issues_by_type} />
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1">
+            {evaluationPass.sections.map((section) => (
+              <SectionRow key={`${evaluationPass.id}-${section.section_id}`} section={section} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function EvaluationTab({ runId }: { runId: string }) {
@@ -246,6 +315,7 @@ export function EvaluationTab({ runId }: { runId: string }) {
   if (result && result.status === "complete") {
     const scoreColor = (pct: number | null | undefined) =>
       pct == null ? "text-obsidian-muted" : pct >= 70 ? "text-green-400" : "text-amber-400";
+    const history = result.history ?? [];
 
     return (
       <div className="flex flex-col gap-4">
@@ -299,6 +369,19 @@ export function EvaluationTab({ runId }: { runId: string }) {
             <div className="flex flex-col gap-1">
               {(result.sections ?? []).map((section) => (
                 <SectionRow key={section.section_id} section={section} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {history.length > 0 && (
+          <div className="flex flex-col gap-4">
+            <p className="font-mono text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
+              Evaluation History
+            </p>
+            <div className="flex flex-col gap-3">
+              {history.map((evaluationPass) => (
+                <EvaluationHistoryCard key={evaluationPass.id} evaluationPass={evaluationPass} />
               ))}
             </div>
           </div>
