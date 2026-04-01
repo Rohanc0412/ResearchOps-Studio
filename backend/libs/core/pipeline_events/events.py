@@ -17,7 +17,7 @@ from uuid import UUID
 
 from db.models.run_events import RunEventLevelDb, RunEventRow
 from db.models.runs import RunRow
-from db.repositories.project_runs import append_run_event
+from db.repositories.project_runs import append_run_event_sync as append_run_event
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -210,7 +210,7 @@ def emit_run_event(
     stage: str | None = None,
     message: str | None = None,
     data: dict[str, Any] | None = None,
-) -> RunEventRow:
+) -> RunEventRow | None:
     """
     Emit a run event to the run_events table.
 
@@ -230,17 +230,24 @@ def emit_run_event(
     resolved_message = message or f"{event_type}: {stage or 'unknown'}"
 
     if _should_use_current_session(session):
-        return append_run_event(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            level=RunEventLevelDb.info,
-            message=resolved_message,
-            stage=stage or "unknown",
-            event_type=event_type,
-            payload_json=data or {},
-            allow_finished=True,
-        )
+        try:
+            return append_run_event(
+                session=session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                level=RunEventLevelDb.info,
+                message=resolved_message,
+                stage=stage or "unknown",
+                event_type=event_type,
+                payload_json=data or {},
+                allow_finished=True,
+            )
+        except Exception:
+            logger.debug(
+                "emit_run_event suppressed error (run not found or session closed)",
+                exc_info=True,
+            )
+            return None
 
     # Use a short-lived session on databases that support concurrent writers so
     # run events become visible before the enclosing transaction commits.

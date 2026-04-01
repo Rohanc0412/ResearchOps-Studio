@@ -34,7 +34,7 @@ from db.models.snapshots import SnapshotRow
 from db.models.source_embeddings import SourceEmbeddingRow
 from db.models.sources import SourceRow
 from db.repositories.corpus import (
-    create_or_get_source,
+    create_or_get_source_sync as create_or_get_source,
     get_source_identifier,
     list_source_author_names,
 )

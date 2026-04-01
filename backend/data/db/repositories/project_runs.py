@@ -352,6 +352,73 @@ async def append_run_event(
     return row
 
 
+# ---------------------------------------------------------------------------
+# Sync variant for orchestrator nodes (receive a sync sqlalchemy.orm.Session)
+# ---------------------------------------------------------------------------
+
+def append_run_event_sync(
+    *,
+    session: "Session",
+    tenant_id: UUID,
+    run_id: UUID,
+    level: RunEventLevelDb,
+    message: str,
+    stage: str | None = None,
+    event_type: str = "log",
+    payload_json: dict | None = None,
+    allow_finished: bool = False,
+) -> RunEventRow:
+    """Synchronous counterpart of append_run_event for use inside sync orchestrator nodes."""
+    from sqlalchemy.orm import Session  # noqa: F401 – used in type hint
+
+    run = session.execute(
+        select(RunRow).where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+    ).scalar_one_or_none()
+    if run is None:
+        raise ValueError("run not found")
+    if not allow_finished and run.status in {
+        RunStatusDb.failed,
+        RunStatusDb.succeeded,
+        RunStatusDb.canceled,
+    }:
+        raise ValueError("cannot append events to a finished run")
+
+    now = _now_utc()
+    next_event_number = (
+        session.execute(
+            select(func.coalesce(func.max(RunEventRow.event_number), 0) + 1).where(
+                RunEventRow.tenant_id == tenant_id,
+                RunEventRow.run_id == run_id,
+            )
+        ).scalar_one()
+        or 1
+    )
+    row = RunEventRow(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        event_number=int(next_event_number),
+        ts=now,
+        stage=stage,
+        event_type=event_type,
+        level=level,
+        message=message,
+        payload_json=payload_json or {},
+    )
+    session.add(row)
+
+    if event_type == "stage_start" and stage:
+        run.current_stage = stage
+        run.updated_at = now
+
+    session.execute(
+        update(ProjectRow)
+        .where(ProjectRow.tenant_id == tenant_id, ProjectRow.id == run.project_id)
+        .values(updated_at=now)
+    )
+    session.flush()
+    return row
+
+
 async def list_run_events(
     *,
     session: AsyncSession,
@@ -424,6 +491,7 @@ async def _table_exists(session: AsyncSession, table_name: str) -> bool:
 
 __all__ = [
     "append_run_event",
+    "append_run_event_sync",
     "create_project",
     "create_run",
     "get_latest_report_title",

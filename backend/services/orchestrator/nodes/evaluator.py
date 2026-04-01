@@ -27,9 +27,9 @@ from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
 from db.repositories.evaluation_history import (
-    create_evaluation_pass,
-    finalize_evaluation_pass,
-    record_evaluation_section_result,
+    create_evaluation_pass_sync as create_evaluation_pass,
+    finalize_evaluation_pass_sync as finalize_evaluation_pass,
+    record_evaluation_section_result_sync as record_evaluation_section_result,
 )
 from llm import (
     LLMError,
