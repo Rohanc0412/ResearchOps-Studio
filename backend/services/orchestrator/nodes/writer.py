@@ -14,6 +14,7 @@ import os
 from core.env import env_int, now_utc
 from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
 from core.pipeline_events import emit_run_event, instrument_node
+from langfuse.decorators import observe
 from core.pipeline_events.events import truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
@@ -202,6 +203,7 @@ def _persist_draft_section(
     session.flush()
 
 
+@observe(name="writer")
 @instrument_node("draft")
 def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     """

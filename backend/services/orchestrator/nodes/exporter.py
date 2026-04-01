@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from core.orchestrator.state import OrchestratorState
 from core.pipeline_events import emit_run_event, instrument_node
+from langfuse.decorators import observe
 from db.models.artifacts import ArtifactRow
 from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow
@@ -24,6 +25,7 @@ _CITATION_PATTERN = re.compile(r"\[CITE:([a-f0-9-]+)\]")
 _CITATION_STRAY_PATTERN = re.compile(r"\[CITE:[^\]]*\]")
 
 
+@observe(name="exporter")
 @instrument_node("export")
 def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     """

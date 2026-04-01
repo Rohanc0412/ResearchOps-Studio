@@ -27,6 +27,7 @@ from connectors.dedup import deduplicate_sources
 from core.env import env_float, env_int
 from core.orchestrator.state import OrchestratorState, SourceRef
 from core.pipeline_events import emit_run_event, instrument_node
+from langfuse.decorators import observe
 from db.models.run_checkpoints import RunCheckpointRow
 from db.models.run_sources import RunSourceRow
 from db.models.snapshots import SnapshotRow
@@ -1178,6 +1179,7 @@ def _parallel_mcp_search(
     return all_sources
 
 
+@observe(name="retriever")
 @instrument_node("retrieve")
 def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     question = state.user_query

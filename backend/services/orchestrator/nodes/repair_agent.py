@@ -18,6 +18,7 @@ from core.orchestrator.state import (
     OutlineSection,
 )
 from core.pipeline_events import instrument_node
+from langfuse.decorators import observe
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
@@ -507,6 +508,7 @@ def _persist_draft_section(
     session.flush()
 
 
+@observe(name="repair_agent")
 @instrument_node("repair")
 def repair_agent_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     if state.repair_attempts >= 1:

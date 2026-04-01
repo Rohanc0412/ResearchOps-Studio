@@ -16,6 +16,7 @@ from core.orchestrator.state import (
     OutlineSection,
 )
 from core.pipeline_events import emit_run_event, instrument_node
+from langfuse.decorators import observe
 from db.models.outline_notes import OutlineNoteRow
 from db.models.run_sections import RunSectionRow
 from llm import (
@@ -66,6 +67,7 @@ OUTLINE_SCHEMA = {
 }
 
 
+@observe(name="outliner")
 @instrument_node("outline")
 def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     """

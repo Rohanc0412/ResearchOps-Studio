@@ -19,6 +19,7 @@ from core.orchestrator.state import (
     OutlineSection,
 )
 from core.pipeline_events import emit_run_event, instrument_node
+from langfuse.decorators import observe
 from core.pipeline_events.events import truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
@@ -426,6 +427,7 @@ def _persist_section_review(
     session.flush()
 
 
+@observe(name="evaluator")
 @instrument_node("evaluate")
 def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     outline = state.outline

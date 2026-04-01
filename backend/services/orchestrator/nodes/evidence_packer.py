@@ -16,6 +16,7 @@ from typing import Protocol
 
 from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
 from core.pipeline_events import emit_run_event, instrument_node
+from langfuse.decorators import observe
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
@@ -443,6 +444,7 @@ def _persist_section_evidence(
     session.flush()
 
 
+@observe(name="evidence_packer")
 @instrument_node("evidence_pack")
 def evidence_pack_node(state: OrchestratorState, session: Session) -> OrchestratorState:
     outline = state.outline
