@@ -15,12 +15,12 @@ from checkpoints import PostgresCheckpointSaver
 from core.env import env_int
 from observability import langfuse_enabled
 from core.orchestrator.state import OrchestratorState
-from core.runs.lifecycle import transition_run_status
+from core.runs.lifecycle import transition_run_status_async
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.artifacts import create_artifact, list_artifacts
 from graph import RunCancelledError, create_orchestrator_graph
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,11 @@ def _artifact_metadata(name: str, text: str) -> dict:
     return metadata
 
 
-def _persist_artifacts(session: Session, run_row: RunRow, artifacts: dict[str, object]) -> int:
+async def _persist_artifacts(session: AsyncSession, run_row: RunRow, artifacts: dict[str, object]) -> int:
     if not artifacts:
         return 0
 
-    existing = list_artifacts(
+    existing = await list_artifacts(
         session=session, tenant_id=run_row.tenant_id, run_id=run_row.id, limit=1
     )
     if existing:
@@ -75,7 +75,7 @@ def _persist_artifacts(session: Session, run_row: RunRow, artifacts: dict[str, o
         mime_type = _guess_mime_type(name)
         metadata = _artifact_metadata(name, text)
         size_bytes = len(text.encode("utf-8"))
-        create_artifact(
+        await create_artifact(
             session=session,
             tenant_id=run_row.tenant_id,
             project_id=run_row.project_id,
@@ -92,7 +92,7 @@ def _persist_artifacts(session: Session, run_row: RunRow, artifacts: dict[str, o
 
 
 async def run_orchestrator(
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     user_query: str,
@@ -120,14 +120,14 @@ async def run_orchestrator(
         Exception: If graph execution fails
     """
     # Transition run to running
-    transition_run_status(
+    await transition_run_status_async(
         session=session,
         tenant_id=tenant_id,
         run_id=run_id,
         to_status=RunStatusDb.running,
         current_stage="retrieve",
     )
-    session.commit()
+    await session.commit()
     logger.info(
         "Run transitioned to running",
         extra={
@@ -169,9 +169,12 @@ async def run_orchestrator(
         started_at=datetime.now(UTC),
     )
 
+    # Extract sync session proxy for synchronous graph execution
+    sync_session = session.sync_session
+
     # Create checkpoint saver
     checkpoint_saver = PostgresCheckpointSaver(
-        session=session, tenant_id=tenant_id, run_id=run_id
+        session=sync_session, tenant_id=tenant_id, run_id=run_id
     )
     logger.info(
         "Checkpoint saver initialized",
@@ -184,7 +187,7 @@ async def run_orchestrator(
     )
 
     # Create graph
-    graph = create_orchestrator_graph(session)
+    graph = create_orchestrator_graph(sync_session)
     logger.info(
         "Orchestrator graph compiled",
         extra={
@@ -230,19 +233,19 @@ async def run_orchestrator(
         final_state.completed_at = datetime.now(UTC)
 
         # Update run status
-        session.execute(
+        await session.execute(
             update(RunRow)
             .where(RunRow.id == run_id)
             .values(current_stage="export", updated_at=datetime.now(UTC))
         )
-        run_row = session.execute(
+        run_row = (await session.execute(
             select(RunRow).where(RunRow.id == run_id)
-        ).scalar_one_or_none()
+        )).scalar_one_or_none()
         if run_row:
-            _persist_artifacts(session, run_row, final_state.artifacts or {})
+            await _persist_artifacts(session, run_row, final_state.artifacts or {})
 
         # Transition to succeeded
-        transition_run_status(
+        await transition_run_status_async(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
@@ -250,38 +253,38 @@ async def run_orchestrator(
             current_stage="export",
         )
 
-        session.commit()
+        await session.commit()
 
         return final_state
 
     except RunCancelledError:
-        session.rollback()
-        transition_run_status(
+        await session.rollback()
+        await transition_run_status_async(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
             to_status=RunStatusDb.canceled,
         )
-        session.commit()
+        await session.commit()
         return initial_state
 
     except Exception as e:
-        session.rollback()
+        await session.rollback()
         # Transition to failed
-        transition_run_status(
+        await transition_run_status_async(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
             to_status=RunStatusDb.failed,
             failure_reason=str(e),
         )
-        session.commit()
+        await session.commit()
 
         raise
 
 
 async def resume_orchestrator(
-    session: Session, tenant_id: UUID, run_id: UUID
+    session: AsyncSession, tenant_id: UUID, run_id: UUID
 ) -> OrchestratorState:
     """
     Resume orchestrator from last checkpoint.
@@ -297,9 +300,12 @@ async def resume_orchestrator(
     Raises:
         Exception: If no checkpoint found or execution fails
     """
+    # Extract sync session proxy for synchronous graph execution
+    sync_session = session.sync_session
+
     # Create checkpoint saver
     checkpoint_saver = PostgresCheckpointSaver(
-        session=session, tenant_id=tenant_id, run_id=run_id
+        session=sync_session, tenant_id=tenant_id, run_id=run_id
     )
 
     # Get latest checkpoint
@@ -316,7 +322,7 @@ async def resume_orchestrator(
         raise ValueError(f"No checkpoint found for run {run_id}")
 
     # Resume from checkpoint
-    graph = create_orchestrator_graph(session)
+    graph = create_orchestrator_graph(sync_session)
 
     # Continue execution
     final_state_dict = graph.invoke(checkpoint, config=config)
@@ -326,7 +332,7 @@ async def resume_orchestrator(
     final_state.completed_at = datetime.now(UTC)
 
     # Update run status
-    transition_run_status(
+    await transition_run_status_async(
         session=session,
         tenant_id=tenant_id,
         run_id=run_id,
@@ -334,6 +340,6 @@ async def resume_orchestrator(
         current_stage="export",
     )
 
-    session.commit()
+    await session.commit()
 
     return final_state

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from threading import Event
@@ -17,7 +18,7 @@ from dotenv import load_dotenv
 from observability import setup_logging
 from research import RESEARCH_JOB_TYPE, process_research_run
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 ORPHANED_JOB_RECOVERY_ERROR = "Recovered orphaned running job after service restart"
 ORPHANED_RUN_RECOVERY_ERROR_CODE = "stale_running_recovered"
@@ -27,17 +28,17 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def _claim_next_job(session: Session) -> JobRow | None:
+async def _claim_next_job(session: AsyncSession) -> JobRow | None:
     stmt = (
         select(JobRow)
         .where(JobRow.status == JobStatusDb.queued)
         .order_by(JobRow.created_at.asc())
         .limit(1)
     )
-    # SQLite doesn't support SKIP LOCKED; this code path is for local tests only.
-    if session.get_bind().dialect.name != "sqlite":
+    sync_engine = session.sync_session.get_bind()
+    if sync_engine.dialect.name != "sqlite":
         stmt = stmt.with_for_update(skip_locked=True)
-    job = session.execute(stmt).scalars().first()
+    job = (await session.execute(stmt)).scalars().first()
     if job is None:
         return None
     job.status = JobStatusDb.running
@@ -46,25 +47,27 @@ def _claim_next_job(session: Session) -> JobRow | None:
     return job
 
 
-def _mark_job_done(session: Session, job_id: UUID) -> None:
-    session.execute(
+async def _mark_job_done(session: AsyncSession, job_id: UUID) -> None:
+    await session.execute(
         update(JobRow)
         .where(JobRow.id == job_id)
         .values(status=JobStatusDb.succeeded, updated_at=_now_utc())
     )
 
 
-def _mark_job_failed(session: Session, job_id: UUID, error: str) -> None:
-    session.execute(
+async def _mark_job_failed(session: AsyncSession, job_id: UUID, error: str) -> None:
+    await session.execute(
         update(JobRow)
         .where(JobRow.id == job_id)
         .values(status=JobStatusDb.failed, last_error=error, updated_at=_now_utc())
     )
 
 
-def _mark_run_failed(session: Session, *, run_id: UUID, tenant_id: UUID, error: str) -> None:
+async def _mark_run_failed(
+    session: AsyncSession, *, run_id: UUID, tenant_id: UUID, error: str
+) -> None:
     now = _now_utc()
-    session.execute(
+    await session.execute(
         update(RunRow)
         .where(RunRow.id == run_id, RunRow.tenant_id == tenant_id)
         .values(
@@ -77,52 +80,101 @@ def _mark_run_failed(session: Session, *, run_id: UUID, tenant_id: UUID, error: 
     )
 
 
-def recover_orphaned_jobs(session: Session) -> int:
-    now = _now_utc()
-    recovered_run_ids: set[UUID] = set()
+async def recover_orphaned_jobs(SessionLocal: async_sessionmaker[AsyncSession]) -> int:
+    async with session_scope(SessionLocal) as session:
+        now = _now_utc()
+        recovered_run_ids: set[UUID] = set()
 
-    running_jobs = session.execute(
-        select(JobRow).where(JobRow.status == JobStatusDb.running)
-    ).scalars().all()
-    for job in running_jobs:
-        job.status = JobStatusDb.failed
-        job.last_error = ORPHANED_JOB_RECOVERY_ERROR
-        job.updated_at = now
-        recovered_run_ids.add(job.run_id)
-        session.execute(
-            update(RunRow)
-            .where(RunRow.id == job.run_id, RunRow.tenant_id == job.tenant_id)
-            .values(
-                status=RunStatusDb.failed,
-                failure_reason=ORPHANED_JOB_RECOVERY_ERROR,
-                error_code=ORPHANED_RUN_RECOVERY_ERROR_CODE,
-                finished_at=now,
-                updated_at=now,
+        running_jobs = (await session.execute(
+            select(JobRow).where(JobRow.status == JobStatusDb.running)
+        )).scalars().all()
+        for job in running_jobs:
+            job.status = JobStatusDb.failed
+            job.last_error = ORPHANED_JOB_RECOVERY_ERROR
+            job.updated_at = now
+            recovered_run_ids.add(job.run_id)
+            await session.execute(
+                update(RunRow)
+                .where(RunRow.id == job.run_id, RunRow.tenant_id == job.tenant_id)
+                .values(
+                    status=RunStatusDb.failed,
+                    failure_reason=ORPHANED_JOB_RECOVERY_ERROR,
+                    error_code=ORPHANED_RUN_RECOVERY_ERROR_CODE,
+                    finished_at=now,
+                    updated_at=now,
+                )
             )
+
+        active_job_run_ids = set(
+            (await session.execute(
+                select(JobRow.run_id).where(
+                    JobRow.status.in_([JobStatusDb.queued, JobStatusDb.running])
+                )
+            )).scalars()
         )
+        stale_runs = [
+            run
+            for run in (await session.execute(
+                select(RunRow).where(RunRow.status == RunStatusDb.running)
+            )).scalars().all()
+            if run.id not in active_job_run_ids
+        ]
+        for run in stale_runs:
+            if run.id in recovered_run_ids:
+                continue
+            run.status = RunStatusDb.failed
+            run.failure_reason = ORPHANED_JOB_RECOVERY_ERROR
+            run.error_code = ORPHANED_RUN_RECOVERY_ERROR_CODE
+            run.finished_at = now
+            run.updated_at = now
+            recovered_run_ids.add(run.id)
 
-    active_job_run_ids = set(
-        session.execute(
-            select(JobRow.run_id).where(JobRow.status.in_([JobStatusDb.queued, JobStatusDb.running]))
-        ).scalars()
-    )
-    stale_run_stmt = select(RunRow).where(RunRow.status == RunStatusDb.running)
-    stale_runs = [
-        run
-        for run in session.execute(stale_run_stmt).scalars().all()
-        if run.id not in active_job_run_ids
-    ]
-    for run in stale_runs:
-        if run.id in recovered_run_ids:
-            continue
-        run.status = RunStatusDb.failed
-        run.failure_reason = ORPHANED_JOB_RECOVERY_ERROR
-        run.error_code = ORPHANED_RUN_RECOVERY_ERROR_CODE
-        run.finished_at = now
-        run.updated_at = now
-        recovered_run_ids.add(run.id)
+        return len(recovered_run_ids)
 
-    return len(recovered_run_ids)
+
+def run_once(*, SessionLocal: async_sessionmaker[AsyncSession]) -> bool:
+    async def _inner():
+        async with session_scope(SessionLocal) as session:
+            job = await _claim_next_job(session)
+            if job is None:
+                return False, None, None, None, None
+            return True, job.id, job.run_id, job.tenant_id, job.job_type
+
+    found, job_id, run_id, tenant_id, job_type = asyncio.run(_inner())
+    if not found:
+        return False
+
+    try:
+        async def _process() -> None:
+            async with session_scope(SessionLocal) as session:
+                if job_type == RESEARCH_JOB_TYPE:
+                    await process_research_run(
+                        session=session, run_id=run_id, tenant_id=tenant_id
+                    )
+                else:
+                    raise RuntimeError(f"Unknown job_type: {job_type}")
+
+        asyncio.run(_process())
+        asyncio.run(_finish(SessionLocal, job_id))
+    except Exception as e:
+        err = str(e)
+        asyncio.run(_fail(SessionLocal, job_id, run_id, tenant_id, err))
+    finally:
+        from embeddings import release_gpu_memory
+        release_gpu_memory()
+
+    return True
+
+
+async def _finish(SessionLocal, job_id):
+    async with session_scope(SessionLocal) as session:
+        await _mark_job_done(session, job_id)
+
+
+async def _fail(SessionLocal, job_id, run_id, tenant_id, err):
+    async with session_scope(SessionLocal) as session:
+        await _mark_job_failed(session, job_id, err)
+        await _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
 
 
 def run_forever(*, poll_seconds: float, stop_event: Event | None = None) -> None:
@@ -131,45 +183,12 @@ def run_forever(*, poll_seconds: float, stop_event: Event | None = None) -> None
     init_db(engine)
     SessionLocal = create_sessionmaker(engine)
 
-    with session_scope(SessionLocal) as session:
-        recover_orphaned_jobs(session)
+    asyncio.run(recover_orphaned_jobs(SessionLocal))
 
     while stop_event is None or not stop_event.is_set():
         ran = run_once(SessionLocal=SessionLocal)
         if not ran:
             time.sleep(poll_seconds)
-
-
-def run_once(*, SessionLocal) -> bool:
-    with session_scope(SessionLocal) as session:
-        job = _claim_next_job(session)
-        if job is None:
-            return False
-
-        job_id = job.id
-        run_id = job.run_id
-        tenant_id = job.tenant_id
-        job_type = job.job_type
-
-    try:
-        with session_scope(SessionLocal) as session:
-            if job_type == RESEARCH_JOB_TYPE:
-                process_research_run(session=session, run_id=run_id, tenant_id=tenant_id)
-            else:
-                raise RuntimeError(f"Unknown job_type: {job_type}")
-
-        with session_scope(SessionLocal) as session:
-            _mark_job_done(session, job_id)
-    except Exception as e:
-        err = str(e)
-        with session_scope(SessionLocal) as session:
-            _mark_job_failed(session, job_id, err)
-            _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
-    finally:
-        from embeddings import release_gpu_memory
-        release_gpu_memory()
-
-    return True
 
 
 def main() -> None:

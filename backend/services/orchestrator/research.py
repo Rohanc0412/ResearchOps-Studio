@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json as _json
 import logging
 from uuid import UUID
@@ -21,7 +20,7 @@ from embeddings import (
 from observability.context import bind
 from runner import run_orchestrator
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 RESEARCH_JOB_TYPE = "research.run"
 
@@ -61,11 +60,11 @@ def _warm_local_embed_pool(*, llm_provider: str | None) -> None:
     )
 
 
-def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> None:
+async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id: UUID) -> None:
     """Process a full research run using the LangGraph pipeline."""
-    run = session.execute(
+    run = (await session.execute(
         select(RunRow).where(RunRow.id == run_id, RunRow.tenant_id == tenant_id)
-    ).scalar_one_or_none()
+    )).scalar_one_or_none()
     if run is None:
         raise ValueError("run not found")
 
@@ -111,17 +110,15 @@ def process_research_run(*, session: Session, run_id: UUID, tenant_id: UUID) -> 
                 "tenant_id": str(tenant_id),
             },
         )
-        asyncio.run(
-            run_orchestrator(
-                session=session,
-                tenant_id=tenant_id,
-                run_id=run_id,
-                user_query=user_query,
-                research_goal=research_goal,
-                llm_provider=llm_provider,
-                llm_model=llm_model,
-                stage_models=stage_models,
-            )
+        await run_orchestrator(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            user_query=user_query,
+            research_goal=research_goal,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            stage_models=stage_models,
         )
         logger.info(
             "Research pipeline run finished",
