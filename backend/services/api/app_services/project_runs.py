@@ -5,8 +5,13 @@ from uuid import UUID
 
 from core.audit.logger import write_audit_log
 from core.auth.identity import Identity
-from core.runs import RunNotFoundError, RunTransitionError, request_cancel, retry_run
-from core.runs.lifecycle import emit_run_event, transition_run_status
+from core.runs import RunNotFoundError, RunTransitionError
+from core.runs.lifecycle import (
+    emit_run_event_async,
+    transition_run_status_async,
+    request_cancel_async,
+    retry_run_async,
+)
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunRow, RunStatusDb
 from db.models.section_evidence import SectionEvidenceRow
@@ -26,12 +31,12 @@ from db.repositories.project_runs import (
     patch_run_usage_metrics,
 )
 from fastapi import HTTPException, Request
-from job_queue import enqueue_run_job
+from job_queue import enqueue_run_job_async
 from research import RESEARCH_JOB_TYPE
 from schemas.truth import ArtifactOut, ProjectOut
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 ACTIVE_RESEARCH_RUN_MESSAGE = (
     "Another research run is already in progress. Retry after it finishes."
@@ -43,29 +48,29 @@ def project_to_out(project) -> ProjectOut:
     return ProjectOut.model_validate(project)
 
 
-def list_user_projects(*, session: Session, tenant_id: UUID, user_id: str) -> list[ProjectOut]:
+async def list_user_projects(*, session: AsyncSession, tenant_id: UUID, user_id: str) -> list[ProjectOut]:
     return [
         ProjectOut.model_validate(row)
-        for row in list_projects_for_user(session=session, tenant_id=tenant_id, created_by=user_id)
+        for row in await list_projects_for_user(session=session, tenant_id=tenant_id, created_by=user_id)
     ]
 
 
-def get_user_project(*, session: Session, tenant_id: UUID, project_id: UUID, user_id: str):
-    return get_project_for_user(
+async def get_user_project(*, session: AsyncSession, tenant_id: UUID, project_id: UUID, user_id: str):
+    return await get_project_for_user(
         session=session, tenant_id=tenant_id, project_id=project_id, created_by=user_id
     )
 
 
-def patch_user_project(
+async def patch_user_project(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID,
     user_id: str,
     name: str | None,
     description: str | None,
 ) -> ProjectOut:
-    project = get_user_project(
+    project = await get_user_project(
         session=session, tenant_id=tenant_id, project_id=project_id, user_id=user_id
     )
     if project is None:
@@ -74,19 +79,19 @@ def patch_user_project(
         project.name = name
     if description is not None:
         project.description = description
-    session.flush()
+    await session.flush()
     return project_to_out(project)
 
 
-def create_user_project(
+async def create_user_project(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     user_id: str,
     name: str,
     description: str | None,
 ) -> ProjectOut:
-    row = create_project(
+    row = await create_project(
         session=session,
         tenant_id=tenant_id,
         name=name,
@@ -96,13 +101,13 @@ def create_user_project(
     return project_to_out(row)
 
 
-def has_active_research_run(
-    *, session: Session, exclude_run_id: UUID | None = None
+async def has_active_research_run(
+    *, session: AsyncSession, exclude_run_id: UUID | None = None
 ) -> bool:
     stmt = select(RunRow.id).where(RunRow.status == RunStatusDb.running)
     if exclude_run_id is not None:
         stmt = stmt.where(RunRow.id != exclude_run_id)
-    return session.execute(stmt.limit(1)).scalar_one_or_none() is not None
+    return (await session.execute(stmt.limit(1))).scalar_one_or_none() is not None
 
 
 def _mark_run_blocked(run: RunRow) -> None:
@@ -111,9 +116,9 @@ def _mark_run_blocked(run: RunRow) -> None:
     run.current_stage = None
 
 
-def create_research_run(
+async def create_research_run(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID,
     question: str,
@@ -123,8 +128,8 @@ def create_research_run(
     llm_model: str | None,
     stage_models: str | None = None,
 ) -> RunRow:
-    is_blocked = has_active_research_run(session=session)
-    run = create_run(
+    is_blocked = await has_active_research_run(session=session)
+    run = await create_run(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,
@@ -147,7 +152,7 @@ def create_research_run(
     if is_blocked:
         _mark_run_blocked(run)
 
-    emit_run_event(
+    await emit_run_event_async(
         session=session,
         tenant_id=tenant_id,
         run_id=run.id,
@@ -159,7 +164,7 @@ def create_research_run(
     )
 
     if is_blocked:
-        emit_run_event(
+        await emit_run_event_async(
             session=session,
             tenant_id=tenant_id,
             run_id=run.id,
@@ -169,10 +174,10 @@ def create_research_run(
             stage="retrieve",
             payload={"run_id": str(run.id), "reason": ACTIVE_RESEARCH_RUN_ERROR_CODE},
         )
-        session.flush()
+        await session.flush()
         return run
 
-    emit_run_event(
+    await emit_run_event_async(
         session=session,
         tenant_id=tenant_id,
         run_id=run.id,
@@ -182,20 +187,20 @@ def create_research_run(
         stage="retrieve",
         payload={"run_id": str(run.id)},
     )
-    enqueue_run_job(
+    await enqueue_run_job_async(
         session=session,
         tenant_id=tenant_id,
         run_id=run.id,
         job_type=RESEARCH_JOB_TYPE,
     )
-    session.flush()
+    await session.flush()
     return run
 
 
-def create_project_run(
+async def create_project_run(
     *,
     request: Request,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID,
     identity: Identity,
@@ -205,7 +210,7 @@ def create_project_run(
     llm_provider: str | None,
     llm_model: str | None,
 ) -> tuple[str, str]:
-    project = get_user_project(
+    project = await get_user_project(
         session=session, tenant_id=tenant_id, project_id=project_id, user_id=identity.user_id
     )
     if project is None:
@@ -216,7 +221,7 @@ def create_project_run(
         raise HTTPException(status_code=400, detail="question is required")
 
     if client_request_id:
-        existing = get_run_by_client_request_id(
+        existing = await get_run_by_client_request_id(
             session=session,
             tenant_id=tenant_id,
             project_id=project_id,
@@ -231,7 +236,7 @@ def create_project_run(
         if resolved_provider != "hosted":
             raise HTTPException(status_code=400, detail="Only hosted LLM provider is supported.")
         resolved_model = llm_model or os.getenv("HOSTED_LLM_MODEL")
-        run = create_research_run(
+        run = await create_research_run(
             session=session,
             tenant_id=tenant_id,
             project_id=project_id,
@@ -243,9 +248,9 @@ def create_project_run(
         )
         return str(run.id), run.status.value
     except IntegrityError as exc:
-        session.rollback()
+        await session.rollback()
         if client_request_id:
-            existing = get_run_by_client_request_id(
+            existing = await get_run_by_client_request_id(
                 session=session,
                 tenant_id=tenant_id,
                 project_id=project_id,
@@ -279,29 +284,29 @@ def run_to_web(run):
     }
 
 
-def get_user_run_or_404(*, session: Session, tenant_id: UUID, run_id: UUID, user_id: str):
-    run = get_run_for_user(session=session, tenant_id=tenant_id, run_id=run_id, created_by=user_id)
+async def get_user_run_or_404(*, session: AsyncSession, tenant_id: UUID, run_id: UUID, user_id: str):
+    run = await get_run_for_user(session=session, tenant_id=tenant_id, run_id=run_id, created_by=user_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return run
 
 
-def cancel_user_run(
+async def cancel_user_run(
     *,
     request: Request,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     identity: Identity,
 ) -> None:
-    get_user_run_or_404(
+    await get_user_run_or_404(
         session=session,
         tenant_id=tenant_id,
         run_id=run_id,
         user_id=identity.user_id,
     )
     try:
-        run = request_cancel(
+        run = await request_cancel_async(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
@@ -320,23 +325,23 @@ def cancel_user_run(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-def retry_user_run(
+async def retry_user_run(
     *,
     request: Request,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     identity: Identity,
     llm_model: str | None = None,
 ):
-    run = get_user_run_or_404(
+    run = await get_user_run_or_404(
         session=session,
         tenant_id=tenant_id,
         run_id=run_id,
         user_id=identity.user_id,
     )
     try:
-        if has_active_research_run(session=session, exclude_run_id=run_id):
+        if await has_active_research_run(session=session, exclude_run_id=run_id):
             if run.status not in {RunStatusDb.failed, RunStatusDb.blocked}:
                 raise RunTransitionError(
                     f"Cannot retry run in status {run.status.value}. "
@@ -344,7 +349,7 @@ def retry_user_run(
                 )
             _mark_run_blocked(run)
             if run.status != RunStatusDb.blocked:
-                transition_run_status(
+                await transition_run_status_async(
                     session=session,
                     tenant_id=tenant_id,
                     run_id=run_id,
@@ -356,7 +361,7 @@ def retry_user_run(
                     cancel_requested_at=None,
                     emit_event=False,
                 )
-            emit_run_event(
+            await emit_run_event_async(
                 session=session,
                 tenant_id=tenant_id,
                 run_id=run.id,
@@ -368,9 +373,9 @@ def retry_user_run(
             )
             if llm_model:
                 patch_run_usage_metrics(run, {"llm_model": llm_model})
-            session.flush()
+            await session.flush()
             return run
-        run = retry_run(
+        run = await retry_run_async(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
@@ -380,7 +385,7 @@ def retry_user_run(
         job_type = get_run_usage_metrics(run).get("job_type")
         if not isinstance(job_type, str) or not job_type:
             job_type = RESEARCH_JOB_TYPE
-        enqueue_run_job(
+        await enqueue_run_job_async(
             session=session,
             tenant_id=tenant_id,
             run_id=run.id,
@@ -400,20 +405,16 @@ def retry_user_run(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def list_user_run_snippets(
+async def list_user_run_snippets(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     user_id: str,
 ) -> list[dict]:
-    from sqlalchemy import select
+    await get_user_run_or_404(session=session, tenant_id=tenant_id, run_id=run_id, user_id=user_id)
 
-    get_user_run_or_404(session=session, tenant_id=tenant_id, run_id=run_id, user_id=user_id)
-
-    # Single query: join section_evidence → snippet → snapshot → source to avoid N+1.
-    # All tenant_id guards are applied in the WHERE clause.
-    rows = session.execute(
+    rows = (await session.execute(
         select(
             SnippetRow.id,
             SnippetRow.text,
@@ -433,7 +434,7 @@ def list_user_run_snippets(
             SourceRow.tenant_id == tenant_id,
         )
         .distinct(SnippetRow.id)
-    ).all()
+    )).all()
 
     return [
         {
@@ -447,15 +448,15 @@ def list_user_run_snippets(
     ]
 
 
-def list_user_run_artifacts(
+async def list_user_run_artifacts(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     user_id: str,
 ) -> list[ArtifactOut]:
-    get_user_run_or_404(session=session, tenant_id=tenant_id, run_id=run_id, user_id=user_id)
-    rows = list_artifacts(session=session, tenant_id=tenant_id, run_id=run_id)
+    await get_user_run_or_404(session=session, tenant_id=tenant_id, run_id=run_id, user_id=user_id)
+    rows = await list_artifacts(session=session, tenant_id=tenant_id, run_id=run_id)
     return [
         ArtifactOut(
             id=a.id,

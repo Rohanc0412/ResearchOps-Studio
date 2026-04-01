@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Generator
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -35,7 +35,8 @@ from db.repositories.evaluation_history import (
     record_evaluation_section_result,
 )
 from llm import LLMError, get_llm_client_for_stage, json_response_format
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def _normalize_issue(item: dict, allowed_ids: set[str]) -> dict | None:
 class EvaluationRunner:
     """Runs on-demand quality evaluation for a completed research report."""
 
-    def __init__(self, *, session: Session, tenant_id: UUID, run_id: UUID) -> None:
+    def __init__(self, *, session: AsyncSession, tenant_id: UUID, run_id: UUID) -> None:
         self.session = session
         self.tenant_id = tenant_id
         self.run_id = run_id
@@ -129,40 +130,42 @@ class EvaluationRunner:
         self._faithfulness_pct: int | None = None
         self._history_pass_id: UUID | None = None
 
-    def run(self) -> Generator[dict, None, None]:
+    async def run(self) -> AsyncGenerator[dict, None]:
         yield {"type": "evaluation.started", "steps": 3}
-        history_pass = create_evaluation_pass(
+        history_pass = await create_evaluation_pass(
             session=self.session,
             tenant_id=self.tenant_id,
             run_id=self.run_id,
             scope="manual",
         )
         self._history_pass_id = history_pass.id
-        self._write_metric(METRIC_EVAL_STATUS, "running")
-        self._write_metric(METRIC_EVAL_GROUNDING_PCT, None)
-        self._write_metric("eval_faithfulness_pct", None)
-        self._write_metric("eval_sections_passed", None)
-        self._write_metric("eval_sections_total", None)
-        self._write_metric("eval_evaluated_at", None)
-        self.session.flush()
-        self.session.commit()
+        await self._write_metric(METRIC_EVAL_STATUS, "running")
+        await self._write_metric(METRIC_EVAL_GROUNDING_PCT, None)
+        await self._write_metric("eval_faithfulness_pct", None)
+        await self._write_metric("eval_sections_passed", None)
+        await self._write_metric("eval_sections_total", None)
+        await self._write_metric("eval_evaluated_at", None)
+        await self.session.flush()
+        await self.session.commit()
         yield {"type": "evaluation.step", "step": 1, "label": "Scoring section grounding…"}
-        yield from self._run_grounding()
+        async for event in self._run_grounding():
+            yield event
         yield {"type": "evaluation.step", "step": 2, "label": "Computing answer faithfulness…"}
-        yield from self._run_faithfulness()
+        async for event in self._run_faithfulness():
+            yield event
         yield {"type": "evaluation.step", "step": 3, "label": "Tallying section results…"}
-        yield from self._run_finalize()
+        async for event in self._run_finalize():
+            yield event
 
-    def _write_metric(self, name: str, value: int | str | None) -> None:
-        existing = (
-            self.session.query(RunUsageMetricRow)
-            .filter(
+    async def _write_metric(self, name: str, value: int | str | None) -> None:
+        result = await self.session.execute(
+            select(RunUsageMetricRow).where(
                 RunUsageMetricRow.tenant_id == self.tenant_id,
                 RunUsageMetricRow.run_id == self.run_id,
                 RunUsageMetricRow.metric_name == name,
             )
-            .one_or_none()
         )
+        existing = result.scalar_one_or_none()
         if existing:
             if isinstance(value, int) and not isinstance(value, bool):
                 existing.metric_number = value
@@ -183,26 +186,26 @@ class EvaluationRunner:
             row.metric_text = str(value) if value is not None else None
         self.session.add(row)
 
-    def _run_grounding(self) -> Generator[dict, None, None]:
+    async def _run_grounding(self) -> AsyncGenerator[dict, None]:
         session = self.session
         tenant_id = self.tenant_id
         run_id = self.run_id
 
-        draft_rows = (
-            session.query(DraftSectionRow.section_id, DraftSectionRow.text)
-            .filter(DraftSectionRow.tenant_id == tenant_id, DraftSectionRow.run_id == run_id)
-            .all()
+        draft_result = await session.execute(
+            select(DraftSectionRow.section_id, DraftSectionRow.text)
+            .where(DraftSectionRow.tenant_id == tenant_id, DraftSectionRow.run_id == run_id)
         )
+        draft_rows = draft_result.all()
         drafts: dict[str, str] = {row.section_id: row.text for row in draft_rows}
         if not drafts:
             raise ValueError("no_draft_sections")
 
-        section_rows = (
-            session.query(RunSectionRow)
-            .filter(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
+        section_result = await session.execute(
+            select(RunSectionRow)
+            .where(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
             .order_by(RunSectionRow.section_order)
-            .all()
         )
+        section_rows = list(section_result.scalars().all())
         section_order = [row.section_id for row in section_rows]
         section_titles = {row.section_id: row.title for row in section_rows}
         section_positions = {row.section_id: row.section_order for row in section_rows}
@@ -219,21 +222,21 @@ class EvaluationRunner:
             if not section_text:
                 continue
 
-            snippet_rows = (
-                session.query(SnippetRow.id, SnippetRow.text)
+            snippet_result = await session.execute(
+                select(SnippetRow.id, SnippetRow.text)
                 .join(SnapshotRow, SnapshotRow.id == SnippetRow.snapshot_id)
                 .join(
                     SectionEvidenceRow,
                     (SectionEvidenceRow.snippet_id == SnippetRow.id)
                     & (SectionEvidenceRow.tenant_id == SnippetRow.tenant_id),
                 )
-                .filter(
+                .where(
                     SectionEvidenceRow.tenant_id == tenant_id,
                     SectionEvidenceRow.run_id == run_id,
                     SectionEvidenceRow.section_id == section_id,
                 )
-                .all()
             )
+            snippet_rows = snippet_result.all()
             snippets = [{"snippet_id": str(row.id), "text": _truncate(row.text or "", 800)} for row in snippet_rows]
             allowed_ids = {snippet["snippet_id"] for snippet in snippets}
 
@@ -260,9 +263,9 @@ class EvaluationRunner:
             else:
                 fail_count += 1
 
-            self._persist_section_review(section_id=section_id, verdict=verdict, issues=issues)
+            await self._persist_section_review(section_id=section_id, verdict=verdict, issues=issues)
             if self._history_pass_id is not None:
-                record_evaluation_section_result(
+                await record_evaluation_section_result(
                     session=session,
                     tenant_id=tenant_id,
                     evaluation_pass_id=self._history_pass_id,
@@ -273,7 +276,7 @@ class EvaluationRunner:
                     grounding_score=grounding_score,
                     issues=issues,
                 )
-            session.flush()
+            await session.flush()
 
             yield {
                 "type": "evaluation.section",
@@ -286,11 +289,11 @@ class EvaluationRunner:
 
         overall = round(sum(scores) / len(scores)) if scores else 100
         self._grounding_pct = overall
-        self._write_metric(METRIC_EVAL_GROUNDING_PCT, overall)
-        self._write_metric("eval_sections_passed", pass_count)
-        self._write_metric("eval_sections_total", pass_count + fail_count)
-        session.flush()
-        session.commit()
+        await self._write_metric(METRIC_EVAL_GROUNDING_PCT, overall)
+        await self._write_metric("eval_sections_passed", pass_count)
+        await self._write_metric("eval_sections_total", pass_count + fail_count)
+        await session.flush()
+        await session.commit()
         yield {
             "type": "evaluation.grounding_done",
             "overall_grounding_pct": overall,
@@ -367,21 +370,20 @@ class EvaluationRunner:
 
         return grounding_score, verdict, issues
 
-    def _persist_section_review(self, *, section_id: str, verdict: str, issues: list[dict]) -> None:
+    async def _persist_section_review(self, *, section_id: str, verdict: str, issues: list[dict]) -> None:
         session = self.session
-        row = (
-            session.query(SectionReviewRow)
-            .filter(
+        result = await session.execute(
+            select(SectionReviewRow).where(
                 SectionReviewRow.tenant_id == self.tenant_id,
                 SectionReviewRow.run_id == self.run_id,
                 SectionReviewRow.section_id == section_id,
             )
-            .one_or_none()
         )
+        row = result.scalar_one_or_none()
         now = datetime.now(UTC)
         if row:
             row.issues = []
-            session.flush()
+            await session.flush()
             row.verdict = verdict
             row.issues_json = issues
             row.reviewed_at = now
@@ -531,38 +533,38 @@ class EvaluationRunner:
             if isinstance(verdict, dict) and verdict.get("supported") is True
         )
 
-    def _run_faithfulness(self) -> Generator[dict, None, None]:
+    async def _run_faithfulness(self) -> AsyncGenerator[dict, None]:
         session = self.session
         tenant_id = self.tenant_id
         run_id = self.run_id
 
-        artifact = (
-            session.query(ArtifactRow)
-            .filter(
+        artifact_result = await session.execute(
+            select(ArtifactRow)
+            .where(
                 ArtifactRow.tenant_id == tenant_id,
                 ArtifactRow.run_id == run_id,
                 ArtifactRow.artifact_type == "report_md",
             )
-            .first()
         )
+        artifact = artifact_result.scalars().first()
         markdown = (artifact.metadata_json or {}).get("markdown", "") if artifact is not None else ""
         report_sections = self._parse_report_sections(markdown) if markdown.strip() else {}
 
-        draft_rows = (
-            session.query(DraftSectionRow.section_id, DraftSectionRow.text)
-            .filter(DraftSectionRow.tenant_id == tenant_id, DraftSectionRow.run_id == run_id)
-            .all()
+        draft_result = await session.execute(
+            select(DraftSectionRow.section_id, DraftSectionRow.text)
+            .where(DraftSectionRow.tenant_id == tenant_id, DraftSectionRow.run_id == run_id)
         )
+        draft_rows = draft_result.all()
         drafts = {row.section_id: row.text for row in draft_rows}
         if not drafts:
             raise ValueError("no_draft_sections")
 
-        section_rows = (
-            session.query(RunSectionRow)
-            .filter(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
+        section_result = await session.execute(
+            select(RunSectionRow)
+            .where(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
             .order_by(RunSectionRow.section_order)
-            .all()
         )
+        section_rows = list(section_result.scalars().all())
         ordered_sections = [
             (row.section_id, row.title or row.section_id)
             for row in section_rows
@@ -607,28 +609,28 @@ class EvaluationRunner:
             if not claims:
                 continue
 
-            snippet_rows = (
-                session.query(SnippetRow.id, SnippetRow.text)
+            snippet_result = await session.execute(
+                select(SnippetRow.id, SnippetRow.text)
                 .join(
                     SectionEvidenceRow,
                     (SectionEvidenceRow.snippet_id == SnippetRow.id)
                     & (SectionEvidenceRow.tenant_id == SnippetRow.tenant_id),
                 )
-                .filter(
+                .where(
                     SectionEvidenceRow.tenant_id == tenant_id,
                     SectionEvidenceRow.run_id == run_id,
                     SectionEvidenceRow.section_id == section_id,
                 )
-                .all()
             )
+            snippet_rows = snippet_result.all()
             snippets_payload: list[dict[str, str]] = []
             seen_snippet_ids: set[str] = set()
             for row in snippet_rows:
-                snippet_id = str(row.id)
-                if snippet_id in seen_snippet_ids:
+                snippet_id_str = str(row.id)
+                if snippet_id_str in seen_snippet_ids:
                     continue
-                seen_snippet_ids.add(snippet_id)
-                snippets_payload.append({"snippet_id": snippet_id, "text": _truncate(row.text or "", 600)})
+                seen_snippet_ids.add(snippet_id_str)
+                snippets_payload.append({"snippet_id": snippet_id_str, "text": _truncate(row.text or "", 600)})
 
             try:
                 supported_count += self._verify_section_claims(
@@ -658,15 +660,14 @@ class EvaluationRunner:
         faithfulness_pct = round(supported_count / total * 100)
         self._faithfulness_pct = faithfulness_pct
 
-        existing = (
-            session.query(RunUsageMetricRow)
-            .filter(
+        existing_result = await session.execute(
+            select(RunUsageMetricRow).where(
                 RunUsageMetricRow.tenant_id == tenant_id,
                 RunUsageMetricRow.run_id == run_id,
                 RunUsageMetricRow.metric_name == "eval_faithfulness_pct",
             )
-            .one_or_none()
         )
+        existing = existing_result.scalar_one_or_none()
         if existing:
             existing.metric_number = faithfulness_pct
         else:
@@ -678,8 +679,8 @@ class EvaluationRunner:
                     metric_number=faithfulness_pct,
                 )
             )
-        session.flush()
-        session.commit()
+        await session.flush()
+        await session.commit()
 
         yield {
             "type": "evaluation.faithfulness_done",
@@ -688,16 +689,18 @@ class EvaluationRunner:
             "total_claims": total,
         }
 
-    def _run_finalize(self) -> Generator[dict, None, None]:
+    async def _run_finalize(self) -> AsyncGenerator[dict, None]:
         session = self.session
         tenant_id = self.tenant_id
         run_id = self.run_id
 
-        reviews = (
-            session.query(SectionReviewRow)
-            .filter(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
-            .all()
+        reviews_result = await session.execute(
+            select(SectionReviewRow).where(
+                SectionReviewRow.tenant_id == tenant_id,
+                SectionReviewRow.run_id == run_id,
+            )
         )
+        reviews = list(reviews_result.scalars().all())
 
         sections_passed = sum(1 for review in reviews if review.verdict == "pass")
         sections_total = len(reviews)
@@ -709,14 +712,14 @@ class EvaluationRunner:
                 issues_by_type[problem] = issues_by_type.get(problem, 0) + 1
 
         now_str = datetime.now(UTC).isoformat()
-        self._write_metric(METRIC_EVAL_STATUS, "complete")
-        self._write_metric("eval_evaluated_at", now_str)
-        self._write_metric("eval_sections_passed", sections_passed)
-        self._write_metric("eval_sections_total", sections_total)
+        await self._write_metric(METRIC_EVAL_STATUS, "complete")
+        await self._write_metric("eval_evaluated_at", now_str)
+        await self._write_metric("eval_sections_passed", sections_passed)
+        await self._write_metric("eval_sections_total", sections_total)
         if self._grounding_pct is not None:
-            self._write_metric(METRIC_EVAL_GROUNDING_PCT, self._grounding_pct)
+            await self._write_metric(METRIC_EVAL_GROUNDING_PCT, self._grounding_pct)
         if self._history_pass_id is not None:
-            finalize_evaluation_pass(
+            await finalize_evaluation_pass(
                 session=session,
                 tenant_id=tenant_id,
                 evaluation_pass_id=self._history_pass_id,
@@ -726,8 +729,8 @@ class EvaluationRunner:
                 sections_total=sections_total,
                 issues_by_type=issues_by_type,
             )
-        self.session.flush()
-        self.session.commit()
+        await self.session.flush()
+        await self.session.commit()
 
         yield {
             "type": "evaluation.complete",

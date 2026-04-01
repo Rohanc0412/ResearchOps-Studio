@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import attributes
+from sqlalchemy.orm import attributes, selectinload
 
 from db.models import ProjectRow, RunEventRow, RunRow
 from db.models.run_budget_limits import RunBudgetLimitRow
@@ -34,6 +34,9 @@ async def create_project(
         description=description,
         created_by=created_by,
     )
+    # Pre-initialize the `runs` collection so that accessing `last_run_id` etc. via
+    # pydantic model_validate doesn't trigger an implicit lazy load in async context.
+    attributes.set_committed_value(row, "runs", [])
     session.add(row)
     try:
         await session.flush()
@@ -46,6 +49,7 @@ async def list_projects(*, session: AsyncSession, tenant_id: UUID, limit: int = 
     stmt = (
         select(ProjectRow)
         .where(ProjectRow.tenant_id == tenant_id)
+        .options(selectinload(ProjectRow.runs))
         .order_by(ProjectRow.updated_at.desc(), ProjectRow.created_at.desc())
         .limit(limit)
     )
@@ -58,6 +62,7 @@ async def list_projects_for_user(
     stmt = (
         select(ProjectRow)
         .where(ProjectRow.tenant_id == tenant_id, ProjectRow.created_by == created_by)
+        .options(selectinload(ProjectRow.runs))
         .order_by(ProjectRow.updated_at.desc(), ProjectRow.created_at.desc())
         .limit(limit)
     )
@@ -65,17 +70,25 @@ async def list_projects_for_user(
 
 
 async def get_project(*, session: AsyncSession, tenant_id: UUID, project_id: UUID) -> ProjectRow | None:
-    stmt = select(ProjectRow).where(ProjectRow.tenant_id == tenant_id, ProjectRow.id == project_id)
+    stmt = (
+        select(ProjectRow)
+        .where(ProjectRow.tenant_id == tenant_id, ProjectRow.id == project_id)
+        .options(selectinload(ProjectRow.runs))
+    )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def get_project_for_user(
     *, session: AsyncSession, tenant_id: UUID, project_id: UUID, created_by: str
 ) -> ProjectRow | None:
-    stmt = select(ProjectRow).where(
-        ProjectRow.tenant_id == tenant_id,
-        ProjectRow.id == project_id,
-        ProjectRow.created_by == created_by,
+    stmt = (
+        select(ProjectRow)
+        .where(
+            ProjectRow.tenant_id == tenant_id,
+            ProjectRow.id == project_id,
+            ProjectRow.created_by == created_by,
+        )
+        .options(selectinload(ProjectRow.runs))
     )
     return (await session.execute(stmt)).scalar_one_or_none()
 
@@ -207,8 +220,20 @@ async def create_run(
     return run
 
 
+def _run_eager_options():
+    """Return selectinload options for RunRow relationships used by run_to_web."""
+    return [
+        selectinload(RunRow.budget_limits),
+        selectinload(RunRow.usage_metrics),
+    ]
+
+
 async def get_run(*, session: AsyncSession, tenant_id: UUID, run_id: UUID) -> RunRow | None:
-    stmt = select(RunRow).where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+    stmt = (
+        select(RunRow)
+        .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        .options(*_run_eager_options())
+    )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
@@ -229,6 +254,7 @@ async def get_run_for_user(
             RunRow.id == run_id,
             ProjectRow.created_by == created_by,
         )
+        .options(*_run_eager_options())
     )
     return (await session.execute(stmt)).scalar_one_or_none()
 

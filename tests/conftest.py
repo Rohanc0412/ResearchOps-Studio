@@ -4,8 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 
 def _add_path(p: Path) -> None:
@@ -29,6 +28,6 @@ def repo_root() -> Path:
 
 
 @pytest.fixture()
-def sqlite_engine(tmp_path: Path) -> Engine:
+def sqlite_engine(tmp_path: Path) -> AsyncEngine:
     db_path = tmp_path / "test.db"
-    return create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    return create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)

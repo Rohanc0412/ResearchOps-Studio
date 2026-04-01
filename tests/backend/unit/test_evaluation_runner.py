@@ -1,49 +1,53 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from llm import LLMError
 
 
-def _make_session_with_drafts_and_snippets(tenant_id, run_id, section_id):
-    """Returns a mock SQLAlchemy session pre-loaded with one draft section and one snippet."""
+def _make_execute_result(rows=None, scalar_result=None):
+    """Return a mock result object suitable for await session.execute(...)."""
+    result = MagicMock()
+    if rows is not None:
+        result.all.return_value = rows
+        result.scalars.return_value.all.return_value = rows
+        result.scalars.return_value.first.return_value = rows[0] if rows else None
+        result.scalar_one_or_none.return_value = rows[0] if rows else None
+    elif scalar_result is not None:
+        result.scalar_one_or_none.return_value = scalar_result
+        result.scalars.return_value.first.return_value = scalar_result
+        result.all.return_value = [scalar_result] if scalar_result is not None else []
+    else:
+        result.all.return_value = []
+        result.scalars.return_value.all.return_value = []
+        result.scalars.return_value.first.return_value = None
+        result.scalar_one_or_none.return_value = None
+    return result
+
+
+def _make_async_session(*execute_returns):
+    """Return a mock AsyncSession whose execute() calls return the given results in order."""
     session = MagicMock()
-
-    draft_row = MagicMock()
-    draft_row.section_id = section_id
-    draft_row.text = "The model achieved 95% accuracy on the test set."
-
-    snippet_row = MagicMock()
-    snippet_row.id = uuid4()
-    snippet_row.text = "Evaluation results show 95% accuracy on held-out test data."
-    snippet_row.char_start = 0
-    snippet_row.char_end = 60
-    snippet_row.source_id = uuid4()
-
-    sec_row = MagicMock()
-    sec_row.section_id = section_id
-    sec_row.title = "Results"
-    sec_row.section_order = 0
-
-    draft_query = MagicMock()
-    draft_query.filter.return_value.all.return_value = [draft_row]
-    snippet_query = MagicMock()
-    snippet_query.join.return_value.join.return_value.filter.return_value.all.return_value = [snippet_row]
-    review_query = MagicMock()
-    review_query.filter.return_value.one_or_none.return_value = None
-    section_query = MagicMock()
-    section_query.filter.return_value.order_by.return_value.all.return_value = [sec_row]
-    metric_query = MagicMock()
-    metric_query.filter.return_value.one_or_none.return_value = None
-
-    session.query.side_effect = [draft_query, section_query, snippet_query, review_query, metric_query, metric_query, metric_query]
+    session.execute = AsyncMock(side_effect=list(execute_returns))
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+    session.add = MagicMock()
     return session
 
 
-def test_grounding_step_yields_section_and_done_events():
+async def _collect(async_gen):
+    """Exhaust an async generator into a list."""
+    events = []
+    async for event in async_gen:
+        events.append(event)
+    return events
+
+
+@pytest.mark.asyncio
+async def test_grounding_step_yields_section_and_done_events():
     """EvaluationRunner yields evaluation.section and evaluation.grounding_done events."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -61,11 +65,37 @@ def test_grounding_step_yields_section_and_done_events():
     mock_llm = MagicMock()
     mock_llm.generate.return_value = grounding_response
 
-    session = _make_session_with_drafts_and_snippets(tenant_id, run_id, section_id)
+    draft_row = MagicMock()
+    draft_row.section_id = section_id
+    draft_row.text = "The model achieved 95% accuracy on the test set."
+
+    sec_row = MagicMock()
+    sec_row.section_id = section_id
+    sec_row.title = "Results"
+    sec_row.section_order = 0
+
+    snippet_row = MagicMock()
+    snippet_row.id = uuid4()
+    snippet_row.text = "Evaluation results show 95% accuracy on held-out test data."
+
+    # _run_grounding executes: drafts, sections, snippets per section, _persist_section_review (select), flush
+    # _persist_section_review: select SectionReviewRow -> None (no existing), then add
+    # After loop: write_metric (select x2), flush, commit
+    metric_none = _make_execute_result(scalar_result=None)
+
+    session = _make_async_session(
+        _make_execute_result(rows=[draft_row]),    # drafts
+        _make_execute_result(rows=[sec_row]),      # sections
+        _make_execute_result(rows=[snippet_row]),  # snippets for section
+        _make_execute_result(scalar_result=None),  # _persist_section_review select
+        _make_execute_result(scalar_result=None),  # _write_metric(METRIC_EVAL_GROUNDING_PCT)
+        _make_execute_result(scalar_result=None),  # _write_metric(eval_sections_passed)
+        _make_execute_result(scalar_result=None),  # _write_metric(eval_sections_total)
+    )
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-        events = list(runner._run_grounding())
+        events = await _collect(runner._run_grounding())
 
     event_types = [e["type"] for e in events]
     assert "evaluation.section" in event_types
@@ -81,7 +111,8 @@ def test_grounding_step_yields_section_and_done_events():
     assert done_event["fail_count"] == 0
 
 
-def test_faithfulness_step_yields_faithfulness_done_event():
+@pytest.mark.asyncio
+async def test_faithfulness_step_yields_faithfulness_done_event():
     """Faithfulness step extracts claims and verifies them, yielding faithfulness_done."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -113,23 +144,17 @@ def test_faithfulness_step_yields_faithfulness_done_event():
     snippet_row.id = uuid4()
     snippet_row.text = "Evaluation shows 95% accuracy on held-out test data."
 
-    artifact_query = MagicMock()
-    artifact_query.filter.return_value.first.return_value = None
-    draft_query = MagicMock()
-    draft_query.filter.return_value.all.return_value = [draft_row]
-    section_query = MagicMock()
-    section_query.filter.return_value.order_by.return_value.all.return_value = [section_row]
-    snippet_query = MagicMock()
-    snippet_query.join.return_value.filter.return_value.all.return_value = [snippet_row]
-    metric_query = MagicMock()
-    metric_query.filter.return_value.one_or_none.return_value = None
-
-    session = MagicMock()
-    session.query.side_effect = [artifact_query, draft_query, section_query, snippet_query, metric_query]
+    session = _make_async_session(
+        _make_execute_result(scalar_result=None),   # artifact
+        _make_execute_result(rows=[draft_row]),     # drafts
+        _make_execute_result(rows=[section_row]),   # sections
+        _make_execute_result(rows=[snippet_row]),   # snippets
+        _make_execute_result(scalar_result=None),   # faithfulness_pct metric
+    )
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-        events = list(runner._run_faithfulness())
+        events = await _collect(runner._run_faithfulness())
 
     assert len(events) == 1
     event = events[0]
@@ -138,10 +163,11 @@ def test_faithfulness_step_yields_faithfulness_done_event():
     assert event["supported_claims"] == 1
     assert event["faithfulness_pct"] == 50
     session.add.assert_called_once()
-    session.flush.assert_called_once()
+    session.flush.assert_called()
 
 
-def test_faithfulness_runs_per_section_against_section_evidence():
+@pytest.mark.asyncio
+async def test_faithfulness_runs_per_section_against_section_evidence():
     """Faithfulness should verify claims section-by-section against each section's evidence."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -178,30 +204,18 @@ def test_faithfulness_runs_per_section_against_section_evidence():
         json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]}),
     ]
 
-    draft_query = MagicMock()
-    draft_query.filter.return_value.all.return_value = [intro_draft, gpu_draft]
-    section_query = MagicMock()
-    section_query.filter.return_value.order_by.return_value.all.return_value = [intro_section, gpu_section]
-    intro_snippet_query = MagicMock()
-    intro_snippet_query.join.return_value.filter.return_value.all.return_value = [intro_snippet]
-    gpu_snippet_query = MagicMock()
-    gpu_snippet_query.join.return_value.filter.return_value.all.return_value = [gpu_snippet]
-    metric_query = MagicMock()
-    metric_query.filter.return_value.one_or_none.return_value = None
-
-    session = MagicMock()
-    session.query.side_effect = [
-        MagicMock(filter=MagicMock(return_value=MagicMock(first=MagicMock(return_value=None)))),
-        draft_query,
-        section_query,
-        intro_snippet_query,
-        gpu_snippet_query,
-        metric_query,
-    ]
+    session = _make_async_session(
+        _make_execute_result(scalar_result=None),           # artifact
+        _make_execute_result(rows=[intro_draft, gpu_draft]),  # drafts
+        _make_execute_result(rows=[intro_section, gpu_section]),  # sections
+        _make_execute_result(rows=[intro_snippet]),         # intro snippets
+        _make_execute_result(rows=[gpu_snippet]),           # gpu snippets
+        _make_execute_result(scalar_result=None),           # faithfulness_pct metric
+    )
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-        events = list(runner._run_faithfulness())
+        events = await _collect(runner._run_faithfulness())
 
     assert len(events) == 1
     event = events[0]
@@ -223,7 +237,8 @@ def test_faithfulness_runs_per_section_against_section_evidence():
     assert "100 languages" not in verify_prompts[1]
 
 
-def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
+@pytest.mark.asyncio
+async def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
     """When a section already contains cited factual sentences, use them directly as traceable claims."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -246,19 +261,13 @@ def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
     snippet_row.id = uuid4()
     snippet_row.text = "Benchmarks show Model A supports 100 languages and Model B fits within 8 GB VRAM."
 
-    draft_query = MagicMock()
-    draft_query.filter.return_value.all.return_value = [draft_row]
-    section_query = MagicMock()
-    section_query.filter.return_value.order_by.return_value.all.return_value = [section_row]
-    snippet_query = MagicMock()
-    snippet_query.join.return_value.filter.return_value.all.return_value = [snippet_row]
-    metric_query = MagicMock()
-    metric_query.filter.return_value.one_or_none.return_value = None
-
-    session = MagicMock()
-    artifact_query = MagicMock()
-    artifact_query.filter.return_value.first.return_value = None
-    session.query.side_effect = [artifact_query, draft_query, section_query, snippet_query, metric_query]
+    session = _make_async_session(
+        _make_execute_result(scalar_result=None),   # artifact
+        _make_execute_result(rows=[draft_row]),     # drafts
+        _make_execute_result(rows=[section_row]),   # sections
+        _make_execute_result(rows=[snippet_row]),   # snippets
+        _make_execute_result(scalar_result=None),   # faithfulness_pct metric
+    )
 
     mock_llm = MagicMock()
     mock_llm.generate.return_value = json.dumps({
@@ -270,7 +279,7 @@ def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-        events = list(runner._run_faithfulness())
+        events = await _collect(runner._run_faithfulness())
 
     event = events[0]
     assert event["total_claims"] == 2
@@ -279,7 +288,8 @@ def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
     assert mock_llm.generate.call_count == 1
 
 
-def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
+@pytest.mark.asyncio
+async def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
     """Artifact markdown should win over plain draft text because it preserves citation markers."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -302,19 +312,13 @@ def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
     snippet_row.id = uuid4()
     snippet_row.text = "Benchmarks show Model A supports 100 languages and Model B fits within 8 GB VRAM."
 
-    artifact_query = MagicMock()
-    artifact_query.filter.return_value.first.return_value = artifact_row
-    draft_query = MagicMock()
-    draft_query.filter.return_value.all.return_value = [draft_row]
-    section_query = MagicMock()
-    section_query.filter.return_value.order_by.return_value.all.return_value = [section_row]
-    snippet_query = MagicMock()
-    snippet_query.join.return_value.filter.return_value.all.return_value = [snippet_row]
-    metric_query = MagicMock()
-    metric_query.filter.return_value.one_or_none.return_value = None
-
-    session = MagicMock()
-    session.query.side_effect = [artifact_query, draft_query, section_query, snippet_query, metric_query]
+    session = _make_async_session(
+        _make_execute_result(rows=[artifact_row]),  # artifact
+        _make_execute_result(rows=[draft_row]),     # drafts
+        _make_execute_result(rows=[section_row]),   # sections
+        _make_execute_result(rows=[snippet_row]),   # snippets
+        _make_execute_result(scalar_result=None),   # faithfulness_pct metric
+    )
 
     mock_llm = MagicMock()
     mock_llm.generate.return_value = json.dumps({
@@ -326,7 +330,7 @@ def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-        events = list(runner._run_faithfulness())
+        events = await _collect(runner._run_faithfulness())
 
     event = events[0]
     assert event["total_claims"] == 2
@@ -335,7 +339,8 @@ def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
     assert mock_llm.generate.call_count == 1
 
 
-def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
+@pytest.mark.asyncio
+async def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
     """Manual evaluation should skip extraction failures instead of aborting the whole rerun."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -362,19 +367,13 @@ def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
     snippet_row.id = uuid4()
     snippet_row.text = "The benchmark measured 15% lower latency."
 
-    artifact_query = MagicMock()
-    artifact_query.filter.return_value.first.return_value = None
-    draft_query = MagicMock()
-    draft_query.filter.return_value.all.return_value = [uncited_draft, cited_draft]
-    section_query = MagicMock()
-    section_query.filter.return_value.order_by.return_value.all.return_value = [uncited_section, cited_section]
-    snippet_query = MagicMock()
-    snippet_query.join.return_value.filter.return_value.all.return_value = [snippet_row]
-    metric_query = MagicMock()
-    metric_query.filter.return_value.one_or_none.return_value = None
-
-    session = MagicMock()
-    session.query.side_effect = [artifact_query, draft_query, section_query, snippet_query, metric_query]
+    session = _make_async_session(
+        _make_execute_result(scalar_result=None),                      # artifact
+        _make_execute_result(rows=[uncited_draft, cited_draft]),        # drafts
+        _make_execute_result(rows=[uncited_section, cited_section]),    # sections
+        _make_execute_result(rows=[snippet_row]),                       # snippets for cited section
+        _make_execute_result(scalar_result=None),                       # faithfulness_pct metric
+    )
 
     mock_llm = MagicMock()
     mock_llm.generate.side_effect = [
@@ -384,7 +383,7 @@ def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-        events = list(runner._run_faithfulness())
+        events = await _collect(runner._run_faithfulness())
 
     assert len(events) == 1
     event = events[0]
@@ -394,7 +393,8 @@ def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
     assert event["faithfulness_pct"] == 100
 
 
-def test_faithfulness_skips_section_when_verification_llm_fails():
+@pytest.mark.asyncio
+async def test_faithfulness_skips_section_when_verification_llm_fails():
     """Manual evaluation should keep scoring later sections when one verification call fails."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -425,28 +425,14 @@ def test_faithfulness_skips_section_when_verification_llm_fails():
     second_snippet.id = uuid4()
     second_snippet.text = "Measurements show Model B fits within an 8 GB VRAM budget."
 
-    artifact_query = MagicMock()
-    artifact_query.filter.return_value.first.return_value = None
-    draft_query = MagicMock()
-    draft_query.filter.return_value.all.return_value = [first_draft, second_draft]
-    section_query = MagicMock()
-    section_query.filter.return_value.order_by.return_value.all.return_value = [first_section, second_section]
-    first_snippet_query = MagicMock()
-    first_snippet_query.join.return_value.filter.return_value.all.return_value = [first_snippet]
-    second_snippet_query = MagicMock()
-    second_snippet_query.join.return_value.filter.return_value.all.return_value = [second_snippet]
-    metric_query = MagicMock()
-    metric_query.filter.return_value.one_or_none.return_value = None
-
-    session = MagicMock()
-    session.query.side_effect = [
-        artifact_query,
-        draft_query,
-        section_query,
-        first_snippet_query,
-        second_snippet_query,
-        metric_query,
-    ]
+    session = _make_async_session(
+        _make_execute_result(scalar_result=None),                        # artifact
+        _make_execute_result(rows=[first_draft, second_draft]),          # drafts
+        _make_execute_result(rows=[first_section, second_section]),      # sections
+        _make_execute_result(rows=[first_snippet]),                      # snippets for first
+        _make_execute_result(rows=[second_snippet]),                     # snippets for second
+        _make_execute_result(scalar_result=None),                        # faithfulness_pct metric
+    )
 
     mock_llm = MagicMock()
     mock_llm.generate.side_effect = [
@@ -456,7 +442,7 @@ def test_faithfulness_skips_section_when_verification_llm_fails():
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-        events = list(runner._run_faithfulness())
+        events = await _collect(runner._run_faithfulness())
 
     assert len(events) == 1
     event = events[0]
@@ -466,7 +452,8 @@ def test_faithfulness_skips_section_when_verification_llm_fails():
     assert event["faithfulness_pct"] == 100
 
 
-def test_finalize_step_yields_complete_event_with_issue_counts():
+@pytest.mark.asyncio
+async def test_finalize_step_yields_complete_event_with_issue_counts():
     """Finalize step counts section verdicts and yields evaluation.complete."""
     from app_services.evaluation_runner import EvaluationRunner
 
@@ -484,14 +471,19 @@ def test_finalize_step_yields_complete_event_with_issue_counts():
         {"sentence_index": 1, "problem": "missing_citation", "notes": "needs cite", "citations": []},
     ]
 
-    session = MagicMock()
-    session.query.return_value.filter.return_value.all.return_value = [review1, review2]
-    session.query.return_value.filter.return_value.one_or_none.return_value = None
+    session = _make_async_session(
+        _make_execute_result(rows=[review1, review2]),  # reviews
+        _make_execute_result(scalar_result=None),       # _write_metric(METRIC_EVAL_STATUS)
+        _make_execute_result(scalar_result=None),       # _write_metric(eval_evaluated_at)
+        _make_execute_result(scalar_result=None),       # _write_metric(eval_sections_passed)
+        _make_execute_result(scalar_result=None),       # _write_metric(eval_sections_total)
+        _make_execute_result(scalar_result=None),       # _write_metric(METRIC_EVAL_GROUNDING_PCT) - _grounding_pct=75
+    )
 
     runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
     runner._grounding_pct = 75
 
-    events = list(runner._run_finalize())
+    events = await _collect(runner._run_finalize())
 
     assert len(events) == 1
     event = events[0]
@@ -500,7 +492,7 @@ def test_finalize_step_yields_complete_event_with_issue_counts():
     assert event["sections_total"] == 2
     assert event["issues_by_type"]["unsupported"] == 1
     assert event["issues_by_type"]["missing_citation"] == 1
-    session.flush.assert_called_once()
+    session.flush.assert_called()
 
 
 @pytest.mark.asyncio
@@ -545,10 +537,10 @@ async def test_runner_persists_running_status_before_completion(tmp_path):
         runner = EvaluationRunner(session=writer_session, tenant_id=tenant_id, run_id=run_id)
         event_stream = runner.run()
 
-        started = next(event_stream)
+        started = await event_stream.__anext__()
         assert started["type"] == "evaluation.started"
 
-        step_event = next(event_stream)
+        step_event = await event_stream.__anext__()
         assert step_event["type"] == "evaluation.step"
         assert step_event["step"] == 1
 

@@ -8,7 +8,7 @@ def test_create_db_engine_returns_async_engine():
     settings = MagicMock()
     settings.database_url = "postgresql+psycopg://user:pass@localhost/db"
 
-    with patch("sqlalchemy.ext.asyncio.create_async_engine") as mock_create:
+    with patch("db.session.create_async_engine") as mock_create:
         mock_engine = MagicMock(spec=AsyncEngine)
         mock_create.return_value = mock_engine
         from db.session import create_db_engine

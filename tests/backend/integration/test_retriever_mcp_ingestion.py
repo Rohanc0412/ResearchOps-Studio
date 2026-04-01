@@ -7,7 +7,7 @@ import nodes.retriever as retriever_module
 import pytest
 from connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
 from core.orchestrator.state import OrchestratorState
-from db.init_db import init_db
+from db.init_db import init_db_sync as init_db
 from db.models.projects import ProjectRow
 from db.models.runs import RunRow, RunStatusDb
 from db.models.snapshots import SnapshotRow

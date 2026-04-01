@@ -15,21 +15,22 @@ def healthz() -> dict[str, str]:
 
 
 @router.get("/health")
-def health(request: Request) -> dict[str, str | None]:
+async def health(request: Request) -> dict[str, str | None]:
     engine = getattr(request.app.state, "engine", None)
     db_ok = True
     schema_ok: bool | None = None
     if engine is not None:
         try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-                if engine.dialect.name == "postgresql":
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+                dialect_name = engine.dialect.name
+                if dialect_name == "postgresql":
                     schema_ok = (
-                        conn.execute(text("SELECT to_regclass('public.alembic_version')"))
+                        (await conn.execute(text("SELECT to_regclass('public.alembic_version')")))
                         .scalar_one()
                         is not None
                     )
-                elif engine.dialect.name == "sqlite":
+                elif dialect_name == "sqlite":
                     schema_ok = True
         except Exception:
             db_ok = False

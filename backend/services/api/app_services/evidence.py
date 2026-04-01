@@ -11,17 +11,17 @@ from fastapi import HTTPException
 from fastapi.responses import Response
 from retrieval import get_snippet_with_context
 from schemas.truth import SourceOut
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
-def download_user_artifact(
+async def download_user_artifact(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     artifact_id: UUID,
     user_id: str,
 ) -> Response:
-    artifact = get_artifact_for_user(
+    artifact = await get_artifact_for_user(
         session=session, tenant_id=tenant_id, artifact_id=artifact_id, created_by=user_id
     )
     if artifact is None:
@@ -60,33 +60,35 @@ def download_user_artifact(
     )
 
 
-def get_source_out(*, session: Session, tenant_id: UUID, source_id: UUID) -> SourceOut:
-    row = get_source(session, tenant_id=tenant_id, source_id=source_id)
+async def get_source_out(*, session: AsyncSession, tenant_id: UUID, source_id: UUID) -> SourceOut:
+    row = await get_source(session, tenant_id=tenant_id, source_id=source_id)
     if row is None:
         raise HTTPException(status_code=404, detail="source not found")
     return SourceOut.model_validate(source_to_api_payload(row))
 
 
-def get_snippet_payload(
+async def get_snippet_payload(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     snippet_id: UUID,
     context_snippets: int,
 ) -> dict:
     try:
-        return get_snippet_with_context(
-            session=session,
-            tenant_id=tenant_id,
-            snippet_id=snippet_id,
-            context_snippets=context_snippets,
+        return await session.run_sync(
+            lambda sync_session: get_snippet_with_context(
+                session=sync_session,
+                tenant_id=tenant_id,
+                snippet_id=snippet_id,
+                context_snippets=context_snippets,
+            )
         )
     except ValueError as exc:
-        snippet = session.get(SnippetRow, snippet_id)
+        snippet = await session.get(SnippetRow, snippet_id)
         if snippet is None or snippet.tenant_id != tenant_id:
             raise HTTPException(status_code=404, detail="snippet not found") from exc
-        snapshot = session.get(SnapshotRow, snippet.snapshot_id)
-        source = session.get(SourceRow, snapshot.source_id) if snapshot is not None else None
+        snapshot = await session.get(SnapshotRow, snippet.snapshot_id)
+        source = await session.get(SourceRow, snapshot.source_id) if snapshot is not None else None
         if (
             snapshot is None
             or source is None

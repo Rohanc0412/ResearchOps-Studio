@@ -96,7 +96,7 @@ def test_tool_call_triggers_search_and_returns_final_answer():
     )
 
     fake_results = [
-        mock.MagicMock(title="Weather", url="https://weather.com", snippet="Sunny, 22°C"),
+        {"title": "Weather", "url": "https://weather.com", "content": "Sunny, 22°C"},
     ]
 
     fake_history: list = []
@@ -121,12 +121,13 @@ def test_tool_call_triggers_search_and_returns_final_answer():
     result = answer_events[0] if answer_events else ""
 
     assert result == "It is sunny today."
-    mock_search.assert_called_once_with("today weather")
+    mock_search.assert_called_once_with("today weather", max_results=3)
     # Second LLM call should have tool result in messages
     second_call_messages = client.generate_with_tools.call_args_list[1][0][0]
     tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
-    tool_content = json.loads(tool_result_msg["content"])
-    assert tool_content[0]["title"] == "Weather"
+    # Tool result is now a formatted string with search snippets
+    assert "Weather" in tool_result_msg["content"]
+    assert "Sunny, 22°C" in tool_result_msg["content"]
 
 
 def test_no_api_key_skips_tools():
@@ -174,7 +175,7 @@ def test_tavily_error_falls_back_gracefully():
     assert "could not find" in result
     second_call_messages = client.generate_with_tools.call_args_list[1][0][0]
     tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
-    assert tool_result_msg["content"] == "[]"
+    assert tool_result_msg["content"] == "Web search unavailable."
 
 
 def test_llm_error_returns_fallback_string():
@@ -215,8 +216,10 @@ def _collect_events(client, message="What is the weather today?", tavily_key="te
 
 
 def test_generator_emits_answer_without_search():
-    client = _make_client()  # no tool calls
-    events, mock_search = _collect_events(client)
+    """When TAVILY_API_KEY is absent, no status event is emitted and only the answer is yielded."""
+    client = mock.MagicMock()
+    client.generate.return_value = "Final answer"
+    events, mock_search = _collect_events(client, tavily_key="")
     assert events == [("answer", "Final answer")]
     mock_search.assert_not_called()
 
@@ -226,5 +229,5 @@ def test_generator_emits_status_then_answer_with_search():
     events, mock_search = _collect_events(client)
     types = [e[0] for e in events]
     assert types == ["status", "answer"]
-    assert events[0][1] == "Searching the web..."
-    mock_search.assert_called_once_with("weather today")
+    assert events[0][1] == "Searching the web\u2026"
+    mock_search.assert_called_once_with("weather today", max_results=3)

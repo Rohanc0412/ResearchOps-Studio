@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from core.orchestrator.state import EvidenceSnippetRef, EvaluatorDecision, OrchestratorState, OutlineModel, OutlineSection
 from db.repositories.evaluation_history import list_evaluation_pass_history
-from db.init_db import init_db
+from db.init_db import init_db_sync as init_db
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_reviews import SectionReviewRow
 from sqlalchemy import create_engine

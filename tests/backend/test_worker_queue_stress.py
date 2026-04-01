@@ -23,7 +23,7 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from db.init_db import init_db
+from db.init_db import init_db_sync as init_db
 from db.models import JobRow, ProjectRow, RunRow
 from db.models.jobs import JobStatusDb
 from db.models.runs import RunStatusDb

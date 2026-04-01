@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 from connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
-from db.init_db import init_db
+from db.init_db import init_db_sync as init_db
 from nodes import retriever as retriever_module
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

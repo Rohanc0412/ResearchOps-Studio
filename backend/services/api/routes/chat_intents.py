@@ -5,6 +5,7 @@ from uuid import UUID
 
 from db.models.chat_messages import ChatMessageRow
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _normalize_text(message: str) -> str:
@@ -95,9 +96,9 @@ def _is_substantive_prompt_candidate(message: str) -> bool:
     return len(text.split()) >= 6
 
 
-def _latest_prior_research_prompt(
+async def _latest_prior_research_prompt(
     *,
-    session,
+    session: AsyncSession,
     tenant_id: UUID,
     conversation_id: UUID,
     exclude_message_id: UUID,
@@ -114,7 +115,7 @@ def _latest_prior_research_prompt(
         .order_by(ChatMessageRow.created_at.desc(), ChatMessageRow.id.desc())
         .limit(12)
     )
-    rows = list(session.execute(stmt).scalars().all())
+    rows = list((await session.execute(stmt)).scalars().all())
     for row in rows:
         candidate = (row.content_text or "").strip()
         if not _is_substantive_prompt_candidate(candidate):
@@ -123,9 +124,9 @@ def _latest_prior_research_prompt(
     return None
 
 
-def _resolve_force_pipeline_prompt(
+async def _resolve_force_pipeline_prompt(
     *,
-    session,
+    session: AsyncSession,
     tenant_id: UUID,
     conversation_id: UUID,
     user_message: ChatMessageRow,
@@ -134,7 +135,7 @@ def _resolve_force_pipeline_prompt(
     if not _is_generic_pipeline_trigger(prompt):
         return prompt
 
-    prior_prompt = _latest_prior_research_prompt(
+    prior_prompt = await _latest_prior_research_prompt(
         session=session,
         tenant_id=tenant_id,
         conversation_id=conversation_id,
@@ -143,8 +144,8 @@ def _resolve_force_pipeline_prompt(
     return prior_prompt or prompt
 
 
-def _recent_chat_history(
-    *, session, tenant_id: UUID, conversation_id: UUID, limit: int = 6
+async def _recent_chat_history(
+    *, session: AsyncSession, tenant_id: UUID, conversation_id: UUID, limit: int = 6
 ) -> list[ChatMessageRow]:
     stmt = (
         select(ChatMessageRow)
@@ -157,7 +158,7 @@ def _recent_chat_history(
         .order_by(ChatMessageRow.created_at.desc())
         .limit(limit)
     )
-    rows = list(session.execute(stmt).scalars().all())
+    rows = list((await session.execute(stmt)).scalars().all())
     return list(reversed(rows))
 
 

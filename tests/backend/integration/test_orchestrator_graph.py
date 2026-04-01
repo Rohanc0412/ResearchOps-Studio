@@ -18,7 +18,7 @@ from core.orchestrator.state import (
     EvaluatorDecision,
     OrchestratorState,
 )
-from db.init_db import init_db
+from db.init_db import init_db_sync as init_db
 from db.models.projects import ProjectRow
 from db.models.runs import RunRow, RunStatusDb
 from graph import create_orchestrator_graph

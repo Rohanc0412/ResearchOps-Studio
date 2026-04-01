@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 
-def test_init_db_uses_session_level_advisory_lock_for_postgres(monkeypatch):
+
+@pytest.mark.asyncio
+async def test_init_db_uses_session_level_advisory_lock_for_postgres(monkeypatch):
     from db import init_db as init_db_module
 
     executed: list[str] = []
@@ -38,6 +41,7 @@ def test_init_db_uses_session_level_advisory_lock_for_postgres(monkeypatch):
 
         def __init__(self):
             self.connection = FakeConnection()
+            self.sync_engine = self  # init_db calls engine.sync_engine on AsyncEngine
 
         def connect(self):
             return self.connection
@@ -69,7 +73,7 @@ def test_init_db_uses_session_level_advisory_lock_for_postgres(monkeypatch):
 
     engine = FakeEngine()
 
-    init_db_module.init_db(engine, retries=1, sleep_seconds=0)
+    await init_db_module.init_db(engine, retries=1, sleep_seconds=0)
 
     assert upgrade_calls, "Alembic upgrade should run"
     assert upgrade_calls[0][0].attributes["connection"] is engine.connection

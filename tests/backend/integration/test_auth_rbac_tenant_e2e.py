@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
     db_path = tmp_path / "e2e.db"
-    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db_path}"
+    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
     os.environ["WORKER_POLL_SECONDS"] = "0.01"
 
     os.environ["AUTH_REQUIRED"] = "true"

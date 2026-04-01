@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+from deps import DBDep
 from core.auth.config import get_auth_config
 from core.auth.identity import Identity
 from core.auth.mfa import build_otpauth_uri, generate_totp_secret, verify_totp
@@ -37,11 +38,11 @@ from db.repositories.identity import (
     revoke_refresh_tokens_for_user,
     upsert_mfa_factor,
 )
-from db.session import session_scope
 from fastapi import APIRouter, HTTPException, Request, Response
 from middlewares.auth import IdentityDep
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from utils.email import send_password_reset_otp
 
 router = APIRouter(tags=["auth"])
@@ -225,8 +226,8 @@ def _issue_tokens(user: AuthUserRow) -> tuple[str, str, datetime, int]:
     return access_token, refresh_token, refresh_expires, cfg.auth_access_token_minutes * 60
 
 
-def _persist_refresh_token(
-    session,
+async def _persist_refresh_token(
+    session: AsyncSession,
     *,
     user: AuthUserRow,
     refresh_token: str,
@@ -237,7 +238,7 @@ def _persist_refresh_token(
     if not secret:
         raise HTTPException(status_code=500, detail="Refresh token secret not configured")
     token_hash = hash_refresh_token(refresh_token, secret=secret)
-    create_refresh_token(
+    await create_refresh_token(
         session,
         tenant_id=user.tenant_id,
         user_id=user.id,
@@ -246,8 +247,8 @@ def _persist_refresh_token(
     )
 
 
-def _mfa_factor(session, *, user_id) -> AuthMfaFactorRow | None:
-    return get_mfa_factor(session, user_id=user_id, enabled_only=True)
+async def _mfa_factor(session: AsyncSession, *, user_id) -> AuthMfaFactorRow | None:
+    return await get_mfa_factor(session, user_id=user_id, enabled_only=True)
 
 
 def _issue_mfa_challenge(user: AuthUserRow) -> AuthTokensOut:
@@ -271,16 +272,16 @@ def _issue_mfa_challenge(user: AuthUserRow) -> AuthTokensOut:
     )
 
 
-def _get_user_from_identity(session, identity: Identity) -> AuthUserRow | None:
+async def _get_user_from_identity(session: AsyncSession, identity: Identity) -> AuthUserRow | None:
     try:
         tenant = tenant_uuid(identity.tenant_id)
     except Exception:
         return None
-    return get_user_by_identity(session, tenant_id=tenant, username=identity.user_id)
+    return await get_user_by_identity(session, tenant_id=tenant, username=identity.user_id)
 
 
 @router.post("/auth/register", response_model=AuthTokensOut)
-def register(request: Request, response: Response, body: RegisterIn) -> AuthTokensOut:
+async def register(request: Request, response: Response, body: RegisterIn, session: DBDep) -> AuthTokensOut:
     cfg = get_auth_config()
     if not cfg.auth_allow_register:
         raise HTTPException(status_code=403, detail="Registration disabled")
@@ -290,78 +291,74 @@ def register(request: Request, response: Response, body: RegisterIn) -> AuthToke
     tenant_id = tenant_uuid(body.tenant_id) if body.tenant_id else uuid4()
     password_hash = hash_password(body.password)
 
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        try:
-            user = create_user(
-                session=session,
-                tenant_id=tenant_id,
-                username=username,
-                email=email,
-                password_hash=password_hash,
-                role_names=["owner"],
-                is_active=True,
-            )
-        except IntegrityError as e:
-            raise HTTPException(status_code=409, detail="Username already exists") from e
+    try:
+        user = await create_user(
+            session=session,
+            tenant_id=tenant_id,
+            username=username,
+            email=email,
+            password_hash=password_hash,
+            role_names=["owner"],
+            is_active=True,
+        )
+    except IntegrityError as e:
+        raise HTTPException(status_code=409, detail="Username already exists") from e
 
-        access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
-        _persist_refresh_token(
-            session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
-        )
-        _set_refresh_cookie(
-            response,
-            refresh_token,
-            max_age_seconds=int((refresh_expires - datetime.now(UTC)).total_seconds()),
-        )
+    access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
+    await _persist_refresh_token(
+        session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
+    )
+    _set_refresh_cookie(
+        response,
+        refresh_token,
+        max_age_seconds=int((refresh_expires - datetime.now(UTC)).total_seconds()),
+    )
 
-        return AuthTokensOut(
-            access_token=access_token,
-            expires_in=expires_in,
-            user_id=user.username,
-            username=user.username,
-            tenant_id=str(user.tenant_id),
-            roles=list_role_names(user),
-        )
+    return AuthTokensOut(
+        access_token=access_token,
+        expires_in=expires_in,
+        user_id=user.username,
+        username=user.username,
+        tenant_id=str(user.tenant_id),
+        roles=list_role_names(user),
+    )
 
 
 @router.post("/auth/login", response_model=AuthTokensOut)
-def login(request: Request, response: Response, body: LoginIn) -> AuthTokensOut:
+async def login(request: Request, response: Response, body: LoginIn, session: DBDep) -> AuthTokensOut:
     raw = _normalize_username(body.username)
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        user = get_user_by_username_or_email(session, value=raw)
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        if not verify_password(body.password, user.password_hash):
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+    user = await get_user_by_username_or_email(session, value=raw)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        mfa_factor = _mfa_factor(session, user_id=user.id)
-        if mfa_factor is not None:
-            return _issue_mfa_challenge(user)
+    mfa_factor = await _mfa_factor(session, user_id=user.id)
+    if mfa_factor is not None:
+        return _issue_mfa_challenge(user)
 
-        access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
-        _persist_refresh_token(
-            session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
-        )
-        _set_refresh_cookie(
-            response,
-            refresh_token,
-            max_age_seconds=int((refresh_expires - datetime.now(UTC)).total_seconds()),
-        )
+    access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
+    await _persist_refresh_token(
+        session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
+    )
+    _set_refresh_cookie(
+        response,
+        refresh_token,
+        max_age_seconds=int((refresh_expires - datetime.now(UTC)).total_seconds()),
+    )
 
-        return AuthTokensOut(
-            access_token=access_token,
-            expires_in=expires_in,
-            user_id=user.username,
-            username=user.username,
-            tenant_id=str(user.tenant_id),
-            roles=list_role_names(user),
-        )
+    return AuthTokensOut(
+        access_token=access_token,
+        expires_in=expires_in,
+        user_id=user.username,
+        username=user.username,
+        tenant_id=str(user.tenant_id),
+        roles=list_role_names(user),
+    )
 
 
 @router.post("/auth/refresh", response_model=AuthTokensOut)
-def refresh(request: Request, response: Response) -> AuthTokensOut:
+async def refresh(request: Request, response: Response, session: DBDep) -> AuthTokensOut:
     cfg = get_auth_config()
     secret = _refresh_secret(cfg)
     if not secret:
@@ -372,44 +369,43 @@ def refresh(request: Request, response: Response) -> AuthTokensOut:
     token_hash = hash_refresh_token(raw, secret=secret)
     now = datetime.now(UTC)
 
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        token_row = get_refresh_token_by_hash(session, token_hash=token_hash)
-        if token_row is None or token_row.revoked_at is not None:
-            raise HTTPException(status_code=401, detail="Invalid refresh token")
-        if _utc(token_row.expires_at) <= now:
-            raise HTTPException(status_code=401, detail="Refresh token expired")
+    token_row = await get_refresh_token_by_hash(session, token_hash=token_hash)
+    if token_row is None or token_row.revoked_at is not None:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if _utc(token_row.expires_at) <= now:
+        raise HTTPException(status_code=401, detail="Refresh token expired")
 
-        user = get_user_by_id(session, tenant_id=token_row.tenant_id, user_id=token_row.user_id)
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid refresh token")
+    user = await get_user_by_id(session, tenant_id=token_row.tenant_id, user_id=token_row.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-        revoke_refresh_token(token_row, now=now)
+    revoke_refresh_token(token_row, now=now)
 
-        access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
-        _persist_refresh_token(
-            session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
-        )
-        _set_refresh_cookie(
-            response,
-            refresh_token,
-            max_age_seconds=int((refresh_expires - now).total_seconds()),
-        )
+    access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
+    await _persist_refresh_token(
+        session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
+    )
+    _set_refresh_cookie(
+        response,
+        refresh_token,
+        max_age_seconds=int((refresh_expires - now).total_seconds()),
+    )
 
-        return AuthTokensOut(
-            access_token=access_token,
-            expires_in=expires_in,
-            user_id=user.username,
-            username=user.username,
-            tenant_id=str(user.tenant_id),
-            roles=list_role_names(user),
-        )
+    return AuthTokensOut(
+        access_token=access_token,
+        expires_in=expires_in,
+        user_id=user.username,
+        username=user.username,
+        tenant_id=str(user.tenant_id),
+        roles=list_role_names(user),
+    )
 
 
 @router.post("/auth/password/reset/request", response_model=PasswordResetRequestOut)
-def password_reset_request(
+async def password_reset_request(
     request: Request,
     body: PasswordResetRequestIn,
+    session: DBDep,
 ) -> PasswordResetRequestOut:
     cfg = get_auth_config()
     settings = get_settings()
@@ -426,32 +422,30 @@ def password_reset_request(
             "environment": settings.environment,
         },
     )
-    SessionLocal = request.app.state.SessionLocal
     reset_token: str | None = None
 
-    with session_scope(SessionLocal) as session:
-        user = get_user_by_email(session, email=email)
-        if user is None or not user.is_active:
-            logger.info(
-                "Password reset request ignored (user not found/inactive)",
-                extra={
-                    "event": "auth.password_reset.request.ignored",
-                    "email_domain": _email_domain(email),
-                },
-            )
-            return PasswordResetRequestOut(status="ok")
-
-        reset_token = f"{uuid4().int % 1000000:06d}"
-        token_hash = hash_password_reset_token(reset_token, secret=secret)
-        expires_at = datetime.now(UTC) + timedelta(minutes=cfg.auth_password_reset_minutes)
-
-        create_password_reset(
-            session,
-            tenant_id=user.tenant_id,
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=expires_at,
+    user = await get_user_by_email(session, email=email)
+    if user is None or not user.is_active:
+        logger.info(
+            "Password reset request ignored (user not found/inactive)",
+            extra={
+                "event": "auth.password_reset.request.ignored",
+                "email_domain": _email_domain(email),
+            },
         )
+        return PasswordResetRequestOut(status="ok")
+
+    reset_token = f"{uuid4().int % 1000000:06d}"
+    token_hash = hash_password_reset_token(reset_token, secret=secret)
+    expires_at = datetime.now(UTC) + timedelta(minutes=cfg.auth_password_reset_minutes)
+
+    await create_password_reset(
+        session,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+    )
 
     try:
         send_password_reset_otp(to_email=user.email, otp=reset_token)
@@ -488,7 +482,7 @@ def password_reset_request(
 
 
 @router.post("/auth/password/reset/confirm")
-def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> dict[str, str]:
+async def password_reset_confirm(request: Request, body: PasswordResetConfirmIn, session: DBDep) -> dict[str, str]:
     cfg = get_auth_config()
     secret = _password_reset_secret(cfg)
     if not secret:
@@ -504,160 +498,153 @@ def password_reset_confirm(request: Request, body: PasswordResetConfirmIn) -> di
         },
     )
     now = datetime.now(UTC)
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        reset_row = get_password_reset_by_hash(session, token_hash=token_hash)
-        if (
-            reset_row is None
-            or reset_row.used_at is not None
-            or _utc(reset_row.expires_at) <= now
-        ):
-            logger.warning(
-                "Password reset confirm rejected (invalid/expired token)",
-                extra={
-                    "event": "auth.password_reset.confirm.rejected",
-                    "token_hash_prefix": token_hash[:8],
-                    "reason": "invalid_or_expired_token",
-                },
-            )
-            raise HTTPException(status_code=401, detail="Invalid or expired reset token")
 
-        user = get_user_by_id(session, tenant_id=reset_row.tenant_id, user_id=reset_row.user_id)
-        if user is None or not user.is_active:
-            logger.warning(
-                "Password reset confirm rejected (invalid user)",
-                extra={
-                    "event": "auth.password_reset.confirm.rejected",
-                    "token_hash_prefix": token_hash[:8],
-                    "reason": "invalid_user",
-                },
-            )
-            raise HTTPException(status_code=401, detail="Invalid or expired reset token")
-
-        user.password_hash = hash_password(body.password)
-        reset_row.used_at = now
-
-        revoke_refresh_tokens_for_user(session, user_id=user.id, now=now)
-
-        logger.info(
-            "Password reset confirmed",
+    reset_row = await get_password_reset_by_hash(session, token_hash=token_hash)
+    if (
+        reset_row is None
+        or reset_row.used_at is not None
+        or _utc(reset_row.expires_at) <= now
+    ):
+        logger.warning(
+            "Password reset confirm rejected (invalid/expired token)",
             extra={
-                "event": "auth.password_reset.confirmed",
-                "tenant_id": str(user.tenant_id),
-                "user_id": str(user.id),
+                "event": "auth.password_reset.confirm.rejected",
+                "token_hash_prefix": token_hash[:8],
+                "reason": "invalid_or_expired_token",
             },
         )
+        raise HTTPException(status_code=401, detail="Invalid or expired reset token")
+
+    user = await get_user_by_id(session, tenant_id=reset_row.tenant_id, user_id=reset_row.user_id)
+    if user is None or not user.is_active:
+        logger.warning(
+            "Password reset confirm rejected (invalid user)",
+            extra={
+                "event": "auth.password_reset.confirm.rejected",
+                "token_hash_prefix": token_hash[:8],
+                "reason": "invalid_user",
+            },
+        )
+        raise HTTPException(status_code=401, detail="Invalid or expired reset token")
+
+    user.password_hash = hash_password(body.password)
+    reset_row.used_at = now
+
+    await revoke_refresh_tokens_for_user(session, user_id=user.id, now=now)
+
+    logger.info(
+        "Password reset confirmed",
+        extra={
+            "event": "auth.password_reset.confirmed",
+            "tenant_id": str(user.tenant_id),
+            "user_id": str(user.id),
+        },
+    )
 
     return {"status": "ok"}
 
 
 @router.get("/auth/mfa/status", response_model=MfaStatusOut)
-def mfa_status(request: Request, identity: Identity = IdentityDep) -> MfaStatusOut:
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        user = _get_user_from_identity(session, identity)
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid account")
-        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
-        enabled = bool(factor and factor.enabled_at)
-        pending = bool(factor and not factor.enabled_at)
-        return MfaStatusOut(enabled=enabled, pending=pending)
+async def mfa_status(request: Request, session: DBDep, identity: Identity = IdentityDep) -> MfaStatusOut:
+    user = await _get_user_from_identity(session, identity)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid account")
+    factor = await get_mfa_factor(session, user_id=user.id, enabled_only=False)
+    enabled = bool(factor and factor.enabled_at)
+    pending = bool(factor and not factor.enabled_at)
+    return MfaStatusOut(enabled=enabled, pending=pending)
 
 
 @router.post("/auth/mfa/enroll/start", response_model=MfaEnrollStartOut)
-def mfa_enroll_start(
-    request: Request, identity: Identity = IdentityDep
+async def mfa_enroll_start(
+    request: Request, session: DBDep, identity: Identity = IdentityDep
 ) -> MfaEnrollStartOut:
     cfg = get_auth_config()
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        user = _get_user_from_identity(session, identity)
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid account")
-        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
-        if factor is not None and factor.enabled_at is not None:
-            raise HTTPException(status_code=409, detail="MFA already enabled")
+    user = await _get_user_from_identity(session, identity)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid account")
+    factor = await get_mfa_factor(session, user_id=user.id, enabled_only=False)
+    if factor is not None and factor.enabled_at is not None:
+        raise HTTPException(status_code=409, detail="MFA already enabled")
 
-        secret = generate_totp_secret()
-        factor = upsert_mfa_factor(session, user=user, secret=secret)
+    secret = generate_totp_secret()
+    factor = await upsert_mfa_factor(session, user=user, secret=secret)
 
-        otpauth_uri = build_otpauth_uri(
-            secret=secret,
-            account_name=user.username,
-            issuer=cfg.auth_mfa_totp_issuer,
-            period=cfg.auth_mfa_totp_period_seconds,
-            digits=cfg.auth_mfa_totp_digits,
-        )
-        return MfaEnrollStartOut(
-            secret=secret,
-            otpauth_uri=otpauth_uri,
-            issuer=cfg.auth_mfa_totp_issuer,
-            account_name=user.username,
-            period=cfg.auth_mfa_totp_period_seconds,
-            digits=cfg.auth_mfa_totp_digits,
-        )
+    otpauth_uri = build_otpauth_uri(
+        secret=secret,
+        account_name=user.username,
+        issuer=cfg.auth_mfa_totp_issuer,
+        period=cfg.auth_mfa_totp_period_seconds,
+        digits=cfg.auth_mfa_totp_digits,
+    )
+    return MfaEnrollStartOut(
+        secret=secret,
+        otpauth_uri=otpauth_uri,
+        issuer=cfg.auth_mfa_totp_issuer,
+        account_name=user.username,
+        period=cfg.auth_mfa_totp_period_seconds,
+        digits=cfg.auth_mfa_totp_digits,
+    )
 
 
 @router.post("/auth/mfa/enroll/verify")
-def mfa_enroll_verify(
+async def mfa_enroll_verify(
     request: Request,
     body: MfaVerifyIn,
+    session: DBDep,
     identity: Identity = IdentityDep,
 ) -> dict[str, object]:
     cfg = get_auth_config()
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        user = _get_user_from_identity(session, identity)
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid account")
-        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
-        if factor is None:
-            raise HTTPException(status_code=404, detail="MFA enrollment not found")
-        if factor.enabled_at is not None:
-            return {"enabled": True}
-        if not verify_totp(
-            code=body.code,
-            secret=factor.secret,
-            period=cfg.auth_mfa_totp_period_seconds,
-            digits=cfg.auth_mfa_totp_digits,
-            window=cfg.auth_mfa_totp_window,
-        ):
-            raise HTTPException(status_code=401, detail="Invalid MFA code")
-        now = datetime.now(UTC)
-        factor.enabled_at = now
-        factor.last_used_at = now
+    user = await _get_user_from_identity(session, identity)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid account")
+    factor = await get_mfa_factor(session, user_id=user.id, enabled_only=False)
+    if factor is None:
+        raise HTTPException(status_code=404, detail="MFA enrollment not found")
+    if factor.enabled_at is not None:
         return {"enabled": True}
+    if not verify_totp(
+        code=body.code,
+        secret=factor.secret,
+        period=cfg.auth_mfa_totp_period_seconds,
+        digits=cfg.auth_mfa_totp_digits,
+        window=cfg.auth_mfa_totp_window,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid MFA code")
+    now = datetime.now(UTC)
+    factor.enabled_at = now
+    factor.last_used_at = now
+    return {"enabled": True}
 
 
 @router.post("/auth/mfa/disable")
-def mfa_disable(
+async def mfa_disable(
     request: Request,
     body: MfaVerifyIn,
+    session: DBDep,
     identity: Identity = IdentityDep,
 ) -> dict[str, object]:
     cfg = get_auth_config()
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        user = _get_user_from_identity(session, identity)
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid account")
-        factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
-        if factor is None or factor.enabled_at is None:
-            return {"enabled": False}
-        if not verify_totp(
-            code=body.code,
-            secret=factor.secret,
-            period=cfg.auth_mfa_totp_period_seconds,
-            digits=cfg.auth_mfa_totp_digits,
-            window=cfg.auth_mfa_totp_window,
-        ):
-            raise HTTPException(status_code=401, detail="Invalid MFA code")
-        delete_mfa_factor(session, factor)
+    user = await _get_user_from_identity(session, identity)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid account")
+    factor = await get_mfa_factor(session, user_id=user.id, enabled_only=False)
+    if factor is None or factor.enabled_at is None:
         return {"enabled": False}
+    if not verify_totp(
+        code=body.code,
+        secret=factor.secret,
+        period=cfg.auth_mfa_totp_period_seconds,
+        digits=cfg.auth_mfa_totp_digits,
+        window=cfg.auth_mfa_totp_window,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid MFA code")
+    await delete_mfa_factor(session, factor)
+    return {"enabled": False}
 
 
 @router.post("/auth/mfa/verify", response_model=AuthTokensOut)
-def mfa_verify(request: Request, response: Response, body: MfaChallengeIn) -> AuthTokensOut:
+async def mfa_verify(request: Request, response: Response, body: MfaChallengeIn, session: DBDep) -> AuthTokensOut:
     cfg = get_auth_config()
     if not cfg.auth_jwt_secret:
         raise HTTPException(status_code=500, detail="Auth secret not configured")
@@ -687,57 +674,53 @@ def mfa_verify(request: Request, response: Response, body: MfaChallengeIn) -> Au
     except ValueError as e:
         raise HTTPException(status_code=401, detail="Invalid MFA token") from e
 
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        user = get_user_by_id(session, tenant_id=tenant_uuid_from_claim, user_id=user_uuid)
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=401, detail="Invalid MFA token")
-        factor = _mfa_factor(session, user_id=user.id)
-        if factor is None:
-            raise HTTPException(status_code=401, detail="MFA not enabled")
-        if not verify_totp(
-            code=body.code,
-            secret=factor.secret,
-            period=cfg.auth_mfa_totp_period_seconds,
-            digits=cfg.auth_mfa_totp_digits,
-            window=cfg.auth_mfa_totp_window,
-        ):
-            raise HTTPException(status_code=401, detail="Invalid MFA code")
+    user = await get_user_by_id(session, tenant_id=tenant_uuid_from_claim, user_id=user_uuid)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+    factor = await _mfa_factor(session, user_id=user.id)
+    if factor is None:
+        raise HTTPException(status_code=401, detail="MFA not enabled")
+    if not verify_totp(
+        code=body.code,
+        secret=factor.secret,
+        period=cfg.auth_mfa_totp_period_seconds,
+        digits=cfg.auth_mfa_totp_digits,
+        window=cfg.auth_mfa_totp_window,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid MFA code")
 
-        now = datetime.now(UTC)
-        factor.last_used_at = now
+    now = datetime.now(UTC)
+    factor.last_used_at = now
 
-        access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
-        _persist_refresh_token(
-            session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
-        )
-        _set_refresh_cookie(
-            response,
-            refresh_token,
-            max_age_seconds=int((refresh_expires - now).total_seconds()),
-        )
+    access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
+    await _persist_refresh_token(
+        session, user=user, refresh_token=refresh_token, refresh_expires=refresh_expires
+    )
+    _set_refresh_cookie(
+        response,
+        refresh_token,
+        max_age_seconds=int((refresh_expires - now).total_seconds()),
+    )
 
-        return AuthTokensOut(
-            access_token=access_token,
-            expires_in=expires_in,
-            user_id=user.username,
-            username=user.username,
-            tenant_id=str(user.tenant_id),
-            roles=list_role_names(user),
-        )
+    return AuthTokensOut(
+        access_token=access_token,
+        expires_in=expires_in,
+        user_id=user.username,
+        username=user.username,
+        tenant_id=str(user.tenant_id),
+        roles=list_role_names(user),
+    )
 
 
 @router.post("/auth/logout")
-def logout(request: Request, response: Response) -> dict[str, str]:
+async def logout(request: Request, response: Response, session: DBDep) -> dict[str, str]:
     cfg = get_auth_config()
     secret = _refresh_secret(cfg)
     raw = request.cookies.get(cfg.auth_refresh_cookie_name)
     if raw and secret:
         token_hash = hash_refresh_token(raw, secret=secret)
-        SessionLocal = request.app.state.SessionLocal
-        with session_scope(SessionLocal) as session:
-            token_row = get_refresh_token_by_hash(session, token_hash=token_hash)
-            if token_row is not None and token_row.revoked_at is None:
-                token_row.revoked_at = datetime.now(UTC)
+        token_row = await get_refresh_token_by_hash(session, token_hash=token_hash)
+        if token_row is not None and token_row.revoked_at is None:
+            token_row.revoked_at = datetime.now(UTC)
     _clear_refresh_cookie(response)
     return {"status": "ok"}

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from datetime import datetime
 from uuid import UUID
 
+from deps import DBDep
 from app_services.evaluation_runner import EvaluationRunner
 from app_services.project_runs import (
     cancel_user_run,
@@ -98,32 +98,26 @@ def _event_to_sse(event) -> str:
         "payload": payload,
     }
 
-    # SSE format requires:
-    # id: <event_number>
-    # event: <event_type>
-    # data: <json>
-    # <blank line>
     body = json.dumps(data, separators=(",", ":"))
     return f"id: {event.event_number}\nevent: run_event\ndata: {body}\n\n"
 
 
 @router.get("/{run_id}")
-def get_run_by_id(request: Request, run_id: UUID, identity: Identity = IdentityDep) -> WebRunOut:
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        run = get_user_run_or_404(
-            session=session,
-            tenant_id=get_tenant_id(identity),
-            run_id=run_id,
-            user_id=identity.user_id,
-        )
-        return WebRunOut.model_validate(run_to_web(run))
+async def get_run_by_id(request: Request, run_id: UUID, session: DBDep, identity: Identity = IdentityDep) -> WebRunOut:
+    run = await get_user_run_or_404(
+        session=session,
+        tenant_id=get_tenant_id(identity),
+        run_id=run_id,
+        user_id=identity.user_id,
+    )
+    return WebRunOut.model_validate(run_to_web(run))
 
 
 @router.get("/{run_id}/events")
-def get_run_events(
+async def get_run_events(
     request: Request,
     run_id: UUID,
+    session: DBDep,
     identity: Identity = IdentityDep,
     after_id: int | None = None,
 ):
@@ -155,7 +149,7 @@ def get_run_events(
             pass  # Ignore invalid Last-Event-ID
 
     if "text/event-stream" in accept:
-        # SSE streaming mode
+        # SSE streaming mode — uses its own session scope per poll cycle
         async def _gen():
             last_event_number = after_id or 0
             poll_interval = 0.5  # 500ms polling
@@ -166,10 +160,10 @@ def get_run_events(
             keepalive_counter = 0
 
             while True:
-                with session_scope(SessionLocal) as session:
+                async with session_scope(SessionLocal) as poll_session:
                     try:
-                        run = get_user_run_or_404(
-                            session=session,
+                        run = await get_user_run_or_404(
+                            session=poll_session,
                             tenant_id=tenant_id,
                             run_id=run_id,
                             user_id=identity.user_id,
@@ -179,8 +173,8 @@ def get_run_events(
                         break
 
                     # Get new events
-                    events = list_run_events(
-                        session=session,
+                    events = await list_run_events(
+                        session=poll_session,
                         tenant_id=tenant_id,
                         run_id=run_id,
                         after_event_number=last_event_number,
@@ -219,25 +213,24 @@ def get_run_events(
         return StreamingResponse(_gen(), media_type="text/event-stream")
 
     # JSON mode: return all events (or events after after_id)
-    with session_scope(SessionLocal) as session:
-        get_user_run_or_404(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            user_id=identity.user_id,
-        )
-        rows = list_run_events(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            after_event_number=after_id,
-            limit=1000,
-        )
-        return [RunEventOut.model_validate(r) for r in rows]
+    await get_user_run_or_404(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_id=identity.user_id,
+    )
+    rows = await list_run_events(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        after_event_number=after_id,
+        limit=1000,
+    )
+    return [RunEventOut.model_validate(r) for r in rows]
 
 
 @router.post("/{run_id}/cancel", response_model=OkResponse)
-def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep) -> OkResponse:
+async def cancel_run(request: Request, run_id: UUID, session: DBDep, identity: Identity = IdentityDep) -> OkResponse:
     """Request cancellation of a run.
 
     If the run is queued, it will be canceled immediately.
@@ -252,16 +245,14 @@ def cancel_run(request: Request, run_id: UUID, identity: Identity = IdentityDep)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        cancel_user_run(
-            request=request,
-            session=session,
-            tenant_id=get_tenant_id(identity),
-            run_id=run_id,
-            identity=identity,
-        )
-        return OkResponse()
+    await cancel_user_run(
+        request=request,
+        session=session,
+        tenant_id=get_tenant_id(identity),
+        run_id=run_id,
+        identity=identity,
+    )
+    return OkResponse()
 
 
 class RetryRunBody(BaseModel):
@@ -270,8 +261,8 @@ class RetryRunBody(BaseModel):
 
 
 @router.post("/{run_id}/retry", response_model=WebRunOut)
-def retry_run_endpoint(
-    request: Request, run_id: UUID, body: RetryRunBody = RetryRunBody(), identity: Identity = IdentityDep
+async def retry_run_endpoint(
+    request: Request, run_id: UUID, session: DBDep, body: RetryRunBody = RetryRunBody(), identity: Identity = IdentityDep
 ) -> WebRunOut:
     """Retry a failed or blocked run.
 
@@ -289,209 +280,185 @@ def retry_run_endpoint(
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        run = retry_user_run(
-            request=request,
-            session=session,
-            tenant_id=get_tenant_id(identity),
-            run_id=run_id,
-            identity=identity,
-            llm_model=body.llm_model,
-        )
-        return WebRunOut.model_validate(run_to_web(run))
+    run = await retry_user_run(
+        request=request,
+        session=session,
+        tenant_id=get_tenant_id(identity),
+        run_id=run_id,
+        identity=identity,
+        llm_model=body.llm_model,
+    )
+    return WebRunOut.model_validate(run_to_web(run))
 
 
 @router.get("/{run_id}/artifacts", response_model=list[ArtifactOut], response_model_by_alias=True)
-def get_artifacts_for_run(
-    request: Request, run_id: UUID, identity: Identity = IdentityDep
+async def get_artifacts_for_run(
+    request: Request, run_id: UUID, session: DBDep, identity: Identity = IdentityDep
 ) -> list[ArtifactOut]:
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        return list_user_run_artifacts(
-            session=session,
-            tenant_id=get_tenant_id(identity),
-            run_id=run_id,
-            user_id=identity.user_id,
-        )
+    return await list_user_run_artifacts(
+        session=session,
+        tenant_id=get_tenant_id(identity),
+        run_id=run_id,
+        user_id=identity.user_id,
+    )
 
 
 @router.get("/{run_id}/snippets")
-def get_snippets_for_run(
-    request: Request, run_id: UUID, identity: Identity = IdentityDep
+async def get_snippets_for_run(
+    request: Request, run_id: UUID, session: DBDep, identity: Identity = IdentityDep
 ) -> list[dict]:
-    SessionLocal = request.app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        return list_user_run_snippets(
-            session=session,
-            tenant_id=get_tenant_id(identity),
-            run_id=run_id,
-            user_id=identity.user_id,
-        )
+    return await list_user_run_snippets(
+        session=session,
+        tenant_id=get_tenant_id(identity),
+        run_id=run_id,
+        user_id=identity.user_id,
+    )
 
 
 @router.post("/{run_id}/evaluate")
-def trigger_evaluation(
-    request: Request, run_id: UUID, identity: Identity = IdentityDep
+async def trigger_evaluation(
+    request: Request, run_id: UUID, session: DBDep, identity: Identity = IdentityDep
 ):
     """Trigger on-demand evaluation of a research report. Streams SSE events."""
     SessionLocal = request.app.state.SessionLocal
     tenant_id = get_tenant_id(identity)
 
-    # Verify access
-    with session_scope(SessionLocal) as session:
-        run = get_user_run_or_404(
-            session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
-        )
-        usage = get_run_usage_metrics(run)
-        if usage.get(METRIC_EVAL_STATUS) == "running":
-            raise HTTPException(status_code=409, detail="evaluation_already_running")
+    # Verify access using the injected async session
+    run = await get_user_run_or_404(
+        session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
+    )
+    usage = get_run_usage_metrics(run)
+    if usage.get(METRIC_EVAL_STATUS) == "running":
+        raise HTTPException(status_code=409, detail="evaluation_already_running")
 
     async def _gen():
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue()
-        sentinel = object()
-
-        def _run_sync():
-            try:
-                with session_scope(SessionLocal) as session:
-                    runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
-                    for event in runner.run():
-                        loop.call_soon_threadsafe(queue.put_nowait, event)
-            except ValueError as exc:
-                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "code": str(exc)})
-            except Exception as exc:
-                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "code": "internal_error", "message": str(exc)})
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
-
-        thread = threading.Thread(target=_run_sync, daemon=True)
-        thread.start()
-
-        while True:
-            event = await queue.get()
-            if event is sentinel:
-                break
-            yield f"data: {json.dumps(event)}\n\n"
+        try:
+            async with session_scope(SessionLocal) as eval_session:
+                runner = EvaluationRunner(session=eval_session, tenant_id=tenant_id, run_id=run_id)
+                async for event in runner.run():
+                    yield f"data: {json.dumps(event)}\n\n"
+        except ValueError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'code': str(exc)})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'code': 'internal_error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 @router.get("/{run_id}/evaluation")
-def get_evaluation(
-    request: Request, run_id: UUID, identity: Identity = IdentityDep
+async def get_evaluation(
+    request: Request, run_id: UUID, session: DBDep, identity: Identity = IdentityDep
 ) -> dict:
     """Return stored evaluation results for a run."""
-    SessionLocal = request.app.state.SessionLocal
     tenant_id = get_tenant_id(identity)
 
-    with session_scope(SessionLocal) as session:
-        run = get_user_run_or_404(
-            session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
-        )
-        usage = get_run_usage_metrics(run)
-        status = usage.get(METRIC_EVAL_STATUS, "none")
-        history = list_evaluation_pass_history(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            include_running=status == "running",
-        )
+    run = await get_user_run_or_404(
+        session=session, tenant_id=tenant_id, run_id=run_id, user_id=identity.user_id
+    )
+    usage = get_run_usage_metrics(run)
+    status = usage.get(METRIC_EVAL_STATUS, "none")
+    history = await list_evaluation_pass_history(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        include_running=status == "running",
+    )
 
-        if status not in ("complete", "running") and not history:
-            return {"status": "none"}
-        if status not in ("complete", "running") and history:
-            status = "complete"
+    if status not in ("complete", "running") and not history:
+        return {"status": "none"}
+    if status not in ("complete", "running") and history:
+        status = "complete"
 
-        # Load section titles
-        section_rows = (
-            session.query(RunSectionRow)
-            .filter(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
-            .order_by(RunSectionRow.section_order)
-            .all()
-        )
-        titles = {r.section_id: r.title for r in section_rows}
+    # Load section titles using async execute
+    from sqlalchemy import select as sa_select
+    section_result = await session.execute(
+        sa_select(RunSectionRow)
+        .where(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
+        .order_by(RunSectionRow.section_order)
+    )
+    section_rows = list(section_result.scalars().all())
+    titles = {r.section_id: r.title for r in section_rows}
 
-        reviews = (
-            session.query(SectionReviewRow)
-            .filter(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
-            .all()
-        )
+    reviews_result = await session.execute(
+        sa_select(SectionReviewRow)
+        .where(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
+    )
+    reviews = list(reviews_result.scalars().all())
 
-        issues_by_type: dict[str, int] = {}
-        latest_history = history[0] if history else None
-        sections_out = []
-        latest_history_sections = latest_history["sections"] if latest_history else []
-        latest_scores = {
-            section["section_id"]: section.get("grounding_score")
+    issues_by_type: dict[str, int] = {}
+    latest_history = history[0] if history else None
+    sections_out = []
+    latest_history_sections = latest_history["sections"] if latest_history else []
+    latest_scores = {
+        section["section_id"]: section.get("grounding_score")
+        for section in latest_history_sections
+        if isinstance(section, dict)
+    }
+    if latest_history_sections:
+        sections_out = [
+            {
+                "section_id": section["section_id"],
+                "title": titles.get(section["section_id"], section.get("title") or section["section_id"]),
+                "grounding_score": section.get("grounding_score"),
+                "verdict": section.get("verdict"),
+                "issues": section.get("issues") or [],
+            }
             for section in latest_history_sections
-            if isinstance(section, dict)
-        }
-        if latest_history_sections:
-            sections_out = [
-                {
-                    "section_id": section["section_id"],
-                    "title": titles.get(section["section_id"], section.get("title") or section["section_id"]),
-                    "grounding_score": section.get("grounding_score"),
-                    "verdict": section.get("verdict"),
-                    "issues": section.get("issues") or [],
-                }
-                for section in latest_history_sections
-                if isinstance(section, dict) and isinstance(section.get("section_id"), str)
-            ]
-            issues_by_type = dict(latest_history.get("issues_by_type") or {})
-        elif not (status == "running" and latest_history):
-            for review in reviews:
-                issues = review.issues_json or []
-                for issue in issues:
-                    p = issue.get("problem", "unknown")
-                    issues_by_type[p] = issues_by_type.get(p, 0) + 1
-                sections_out.append({
-                    "section_id": review.section_id,
-                    "title": titles.get(review.section_id, review.section_id),
-                    "grounding_score": latest_scores.get(review.section_id),
-                    "verdict": review.verdict,
-                    "issues": issues,
-                })
+            if isinstance(section, dict) and isinstance(section.get("section_id"), str)
+        ]
+        issues_by_type = dict(latest_history.get("issues_by_type") or {})
+    elif not (status == "running" and latest_history):
+        for review in reviews:
+            issues = review.issues_json or []
+            for issue in issues:
+                p = issue.get("problem", "unknown")
+                issues_by_type[p] = issues_by_type.get(p, 0) + 1
+            sections_out.append({
+                "section_id": review.section_id,
+                "title": titles.get(review.section_id, review.section_id),
+                "grounding_score": latest_scores.get(review.section_id),
+                "verdict": review.verdict,
+                "issues": issues,
+            })
 
-        if status == "running":
-            grounding_pct = latest_history.get("grounding_pct") if latest_history else None
-            faithfulness_pct = latest_history.get("faithfulness_pct") if latest_history else None
-            sections_passed = latest_history.get("sections_passed") if latest_history else None
-            sections_total = latest_history.get("sections_total") if latest_history else None
-            evaluated_at = latest_history.get("evaluated_at") if latest_history else None
-        else:
-            grounding_pct = usage.get(METRIC_EVAL_GROUNDING_PCT)
-            if grounding_pct is None and latest_history:
-                grounding_pct = latest_history.get("grounding_pct")
+    if status == "running":
+        grounding_pct = latest_history.get("grounding_pct") if latest_history else None
+        faithfulness_pct = latest_history.get("faithfulness_pct") if latest_history else None
+        sections_passed = latest_history.get("sections_passed") if latest_history else None
+        sections_total = latest_history.get("sections_total") if latest_history else None
+        evaluated_at = latest_history.get("evaluated_at") if latest_history else None
+    else:
+        grounding_pct = usage.get(METRIC_EVAL_GROUNDING_PCT)
+        if grounding_pct is None and latest_history:
+            grounding_pct = latest_history.get("grounding_pct")
 
-            faithfulness_pct = usage.get("eval_faithfulness_pct")
-            if faithfulness_pct is None and latest_history:
-                faithfulness_pct = latest_history.get("faithfulness_pct")
+        faithfulness_pct = usage.get("eval_faithfulness_pct")
+        if faithfulness_pct is None and latest_history:
+            faithfulness_pct = latest_history.get("faithfulness_pct")
 
-            sections_passed = usage.get("eval_sections_passed")
-            if sections_passed is None and latest_history:
-                sections_passed = latest_history.get("sections_passed")
-            sections_total = usage.get("eval_sections_total")
-            if sections_total is None and latest_history:
-                sections_total = latest_history.get("sections_total")
-            evaluated_at = usage.get("eval_evaluated_at")
-            if evaluated_at is None and latest_history:
-                evaluated_at = latest_history.get("evaluated_at")
+        sections_passed = usage.get("eval_sections_passed")
+        if sections_passed is None and latest_history:
+            sections_passed = latest_history.get("sections_passed")
+        sections_total = usage.get("eval_sections_total")
+        if sections_total is None and latest_history:
+            sections_total = latest_history.get("sections_total")
+        evaluated_at = usage.get("eval_evaluated_at")
+        if evaluated_at is None and latest_history:
+            evaluated_at = latest_history.get("evaluated_at")
 
-        if sections_passed is None and not (status == "running" and latest_history):
-            sections_passed = sum(1 for r in reviews if r.verdict == "pass")
-        if sections_total is None and not (status == "running" and latest_history):
-            sections_total = len(reviews)
+    if sections_passed is None and not (status == "running" and latest_history):
+        sections_passed = sum(1 for r in reviews if r.verdict == "pass")
+    if sections_total is None and not (status == "running" and latest_history):
+        sections_total = len(reviews)
 
-        return {
-            "status": status,
-            "evaluated_at": evaluated_at,
-            "grounding_pct": grounding_pct,
-            "faithfulness_pct": faithfulness_pct,
-            "sections_passed": sections_passed,
-            "sections_total": sections_total,
-            "issues_by_type": issues_by_type,
-            "sections": sections_out,
-            "history": history,
-        }
+    return {
+        "status": status,
+        "evaluated_at": evaluated_at,
+        "grounding_pct": grounding_pct,
+        "faithfulness_pct": faithfulness_pct,
+        "sections_passed": sections_passed,
+        "sections_total": sections_total,
+        "issues_by_type": issues_by_type,
+        "sections": sections_out,
+        "history": history,
+    }

@@ -16,6 +16,7 @@ from db.models.run_events import RunEventLevelDb, RunEventRow
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.project_runs import append_run_event
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 # Run state machine: allowed transitions
@@ -357,4 +358,197 @@ def retry_run(session: Session, tenant_id: UUID, run_id: UUID) -> RunRow:
     )
 
     session.flush()
+    return run
+
+
+# ---------------------------------------------------------------------------
+# Async versions for use with AsyncSession (API service)
+# The sync versions above are preserved for the orchestrator worker.
+# ---------------------------------------------------------------------------
+
+async def emit_run_event_async(
+    session: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+    event_type: str,
+    level: RunEventLevelDb,
+    message: str,
+    stage: str | None = None,
+    payload: dict | None = None,
+) -> RunEventRow:
+    """Async version of emit_run_event for use with AsyncSession."""
+    return await append_run_event(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        level=level,
+        message=message,
+        stage=stage,
+        event_type=event_type,
+        payload_json=payload or {},
+        allow_finished=True,
+    )
+
+
+async def transition_run_status_async(
+    session: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+    to_status: RunStatusDb,
+    *,
+    current_stage: str | None = None,
+    failure_reason: str | None = None,
+    error_code: str | None = None,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+    cancel_requested_at: datetime | None = None,
+    emit_event: bool = True,
+) -> RunRow:
+    """Async version of transition_run_status for use with AsyncSession."""
+    stmt = (
+        select(RunRow)
+        .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        .with_for_update()
+    )
+    run = (await session.execute(stmt)).scalar_one_or_none()
+
+    if run is None:
+        raise RunNotFoundError(f"Run {run_id} not found for tenant {tenant_id}")
+
+    from_status = run.status
+    _validate_transition(from_status, to_status)
+
+    run.status = to_status
+
+    if current_stage is not None:
+        run.current_stage = current_stage
+    if failure_reason is not None:
+        run.failure_reason = failure_reason
+    if error_code is not None:
+        run.error_code = error_code
+    if started_at is not None:
+        run.started_at = started_at
+    if finished_at is not None:
+        run.finished_at = finished_at
+    if cancel_requested_at is not None:
+        run.cancel_requested_at = cancel_requested_at
+
+    run.updated_at = datetime.now(UTC)
+    await session.flush()
+
+    if emit_event:
+        await emit_run_event_async(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_type=EVENT_TYPE_STATE,
+            level=RunEventLevelDb.info,
+            message=f"Run transitioned: {from_status.value} -> {to_status.value}",
+            stage=current_stage,
+            payload={
+                "from_status": from_status.value,
+                "to_status": to_status.value,
+            },
+        )
+
+    return run
+
+
+async def request_cancel_async(
+    session: AsyncSession, tenant_id: UUID, run_id: UUID, force_immediate: bool = False
+) -> RunRow:
+    """Async version of request_cancel for use with AsyncSession."""
+    stmt = (
+        select(RunRow)
+        .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        .with_for_update()
+    )
+    run = (await session.execute(stmt)).scalar_one_or_none()
+
+    if run is None:
+        raise RunNotFoundError(f"Run {run_id} not found for tenant {tenant_id}")
+
+    if run.status in TERMINAL_STATES:
+        return run
+
+    cancel_ts = datetime.now(UTC)
+    run.cancel_requested_at = cancel_ts
+    run.updated_at = cancel_ts
+
+    await emit_run_event_async(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        event_type=EVENT_TYPE_STATE,
+        level=RunEventLevelDb.info,
+        message="Cancel requested",
+        payload={"cancel_requested_at": cancel_ts.isoformat()},
+    )
+
+    if force_immediate or run.status == RunStatusDb.queued:
+        try:
+            await transition_run_status_async(
+                session=session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                to_status=RunStatusDb.canceled,
+                finished_at=cancel_ts,
+                emit_event=True,
+            )
+        except RunTransitionError:
+            pass
+
+    await session.flush()
+    return run
+
+
+async def retry_run_async(session: AsyncSession, tenant_id: UUID, run_id: UUID) -> RunRow:
+    """Async version of retry_run for use with AsyncSession."""
+    stmt = (
+        select(RunRow)
+        .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        .with_for_update()
+    )
+    run = (await session.execute(stmt)).scalar_one_or_none()
+
+    if run is None:
+        raise RunNotFoundError(f"Run {run_id} not found for tenant {tenant_id}")
+
+    if run.status not in {RunStatusDb.failed, RunStatusDb.blocked}:
+        raise RunTransitionError(
+            f"Cannot retry run in status {run.status.value}. "
+            f"Retry is only allowed for failed or blocked runs."
+        )
+
+    run.retry_count += 1
+    run.failure_reason = None
+    run.error_code = None
+    run.finished_at = None
+    run.cancel_requested_at = None
+    run.current_stage = None
+
+    await transition_run_status_async(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        to_status=RunStatusDb.queued,
+        current_stage=None,
+        failure_reason=None,
+        error_code=None,
+        finished_at=None,
+        cancel_requested_at=None,
+        emit_event=False,
+    )
+
+    await emit_run_event_async(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        event_type=EVENT_TYPE_STATE,
+        level=RunEventLevelDb.info,
+        message=f"Retry requested (attempt #{run.retry_count})",
+        payload={"retry_count": run.retry_count},
+    )
+
+    await session.flush()
     return run

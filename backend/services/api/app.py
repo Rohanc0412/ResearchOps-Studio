@@ -51,7 +51,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         _.state.auth_runtime = init_auth_runtime()
-        init_db(engine)
+        await init_db(engine)
         yield
 
     app = FastAPI(title="ResearchOps Studio API", lifespan=lifespan)

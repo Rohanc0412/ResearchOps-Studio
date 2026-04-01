@@ -7,6 +7,7 @@ from db.repositories.project_runs import get_latest_report_title
 from llm import LLMError, get_llm_client
 from routes.chat_intents import _recent_chat_history
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _title_from_message(message: str) -> str:
@@ -14,7 +15,7 @@ def _title_from_message(message: str) -> str:
     return (text[:30] + ("..." if len(text) > 30 else "")).strip()
 
 
-def _count_user_chat_messages(session, tenant_id: UUID, conversation_id: UUID) -> int:
+async def _count_user_chat_messages(session: AsyncSession, tenant_id: UUID, conversation_id: UUID) -> int:
     stmt = (
         select(func.count())
         .select_from(ChatMessageRow)
@@ -25,7 +26,7 @@ def _count_user_chat_messages(session, tenant_id: UUID, conversation_id: UUID) -
             ChatMessageRow.role == "user",
         )
     )
-    return session.execute(stmt).scalar_one() or 0
+    return (await session.execute(stmt)).scalar_one() or 0
 
 
 def _generate_title_with_llm(
@@ -69,9 +70,9 @@ def _generate_title_with_llm(
         return None
 
 
-def _maybe_update_title(
+async def _maybe_update_title(
     *,
-    session,
+    session: AsyncSession,
     tenant_id: UUID,
     convo,
     first_message: str,
@@ -82,12 +83,12 @@ def _maybe_update_title(
     if user_type != "chat":
         return
 
-    count = _count_user_chat_messages(session, tenant_id, convo.id)
+    count = await _count_user_chat_messages(session, tenant_id, convo.id)
 
     if count < 4:
         if convo.title is None:
             report_title = (
-                get_latest_report_title(
+                await get_latest_report_title(
                     session=session, tenant_id=tenant_id, project_id=convo.project_id
                 )
                 if convo.project_id
@@ -96,13 +97,13 @@ def _maybe_update_title(
             convo.title = report_title or _title_from_message(first_message)
     elif count == 4:
         report_title = (
-            get_latest_report_title(
+            await get_latest_report_title(
                 session=session, tenant_id=tenant_id, project_id=convo.project_id
             )
             if convo.project_id
             else None
         )
-        history = _recent_chat_history(
+        history = await _recent_chat_history(
             session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=10
         )
         convo.title = _generate_title_with_llm(history, report_title, llm_provider, llm_model) or (
