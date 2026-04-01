@@ -13,6 +13,7 @@ import importlib
 import os
 import sys
 import unittest.mock as mock
+from types import SimpleNamespace
 from uuid import uuid4
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -504,6 +505,86 @@ async def test_process_research_run_loads_usage_metrics_without_async_lazy_load(
             tenant_id=tenant_id,
             run_id=run_id,
         )
+
+
+def test_pipeline_emit_run_event_reuses_current_session_for_asyncpg_sessions():
+    """emit_run_event must not open a second sync Session from an asyncpg-backed sync_session."""
+    import core.pipeline_events.events as pipeline_events
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+    sentinel = object()
+    fake_bind = SimpleNamespace(
+        dialect=SimpleNamespace(name="postgresql", driver="asyncpg")
+    )
+    fake_session = mock.MagicMock()
+    fake_session.get_bind.return_value = fake_bind
+
+    with (
+        mock.patch.object(
+            pipeline_events,
+            "append_run_event",
+            return_value=sentinel,
+        ) as append_mock,
+        mock.patch.object(
+            pipeline_events,
+            "_event_session",
+            side_effect=AssertionError("should not open a second sync session"),
+        ),
+    ):
+        result = pipeline_events.emit_run_event(
+            session=fake_session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_type="stage_start",
+            stage="retrieve",
+            message="Starting stage: retrieve",
+            data={"iteration": 0},
+        )
+
+    assert result is sentinel
+    append_mock.assert_called_once()
+
+
+def test_orchestrator_cancel_check_uses_sidecar_reader_for_asyncpg_sessions():
+    import services.orchestrator.cancellation as cancellation
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+    fake_bind = SimpleNamespace(
+        dialect=SimpleNamespace(name="postgresql", driver="asyncpg"),
+        url="postgresql+asyncpg://postgres:postgres@localhost:5432/researchops_test",
+    )
+    fake_session = mock.MagicMock()
+    fake_session.get_bind.return_value = fake_bind
+    fake_session.execute.side_effect = AssertionError("should not query through asyncpg sync_session")
+
+    with mock.patch.object(
+        cancellation,
+        "_read_cancel_requested_at_via_sidecar_session",
+        return_value=object(),
+    ) as sidecar_reader:
+        assert cancellation.is_run_cancel_requested(fake_session, tenant_id, run_id) is True
+
+    sidecar_reader.assert_called_once_with(
+        session=fake_session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+
+
+def test_orchestrator_cancel_check_renders_asyncpg_url_with_password():
+    import services.orchestrator.cancellation as cancellation
+
+    rendered = "postgresql+asyncpg://postgres:secret@localhost:5432/researchops_test"
+    fake_url = mock.MagicMock()
+    fake_url.render_as_string.return_value = rendered
+    fake_bind = SimpleNamespace(url=fake_url)
+    fake_session = mock.MagicMock()
+    fake_session.get_bind.return_value = fake_bind
+
+    assert cancellation._bind_url_string(fake_session) == rendered
+    fake_url.render_as_string.assert_called_once_with(hide_password=False)
 
 
 # ── Issue 9: get_last_action timestamps must not swap when created_at is None ──

@@ -19,8 +19,9 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Callable, Protocol
 
+from cancellation import raise_if_run_cancel_requested
 from connectors import ScientificPapersMCPConnector
 from connectors.base import RetrievedSource
 from connectors.dedup import deduplicate_sources
@@ -628,6 +629,7 @@ def _rank_sources(
     query_text: str,
     llm_provider: str | None,
     stats: dict | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> list[RankedCandidate]:
     ranked: list[RankedCandidate] = []
     sources_list = list(sources)
@@ -682,9 +684,13 @@ def _rank_sources(
     stats["topk"] = topk
 
     if topk > 0:
+        if cancel_check is not None:
+            cancel_check()
         if not query_text.strip():
             raise EmbedError("Embeddings require a non-empty query text.")
         embed_client = _get_embed_client(llm_provider)
+        if cancel_check is not None:
+            cancel_check()
         query_embedding = embed_client.embed_texts([query_text.strip()])[0]
 
         sorted_indices = sorted(
@@ -729,6 +735,8 @@ def _rank_sources(
         batch_size = env_int("RETRIEVER_EMBED_BATCH", 32, min_value=1)
         stats["batch_count"] = math.ceil(len(texts_to_embed) / batch_size) if texts_to_embed else 0
         if texts_to_embed:
+            if cancel_check is not None:
+                cancel_check()
             vectors = _embed_texts_batched(embed_client, texts_to_embed, batch_size=batch_size)
             if len(vectors) != len(texts_to_embed):
                 raise EmbedError(
@@ -751,6 +759,8 @@ def _rank_sources(
                 )
                 stats["embedded_now"] += 1
                 embed_norms[idx] = (1.0 + _cosine_similarity(query_embedding, vector)) / 2.0
+            if cancel_check is not None:
+                cancel_check()
 
     weights = {
         "bm25": env_float("RETRIEVER_WEIGHT_BM25", 0.55, min_value=0.0),
@@ -989,6 +999,7 @@ def _ingest_selected_sources(
     llm_provider: str | None,
     connector: ScientificPapersMCPConnector,
     selected: list[RankedCandidate],
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, int]:
     stats = {
         "attempted": 0,
@@ -1000,6 +1011,8 @@ def _ingest_selected_sources(
     if not selected:
         return stats
 
+    if cancel_check is not None:
+        cancel_check()
     embed_client = _get_embed_client(llm_provider)
     embedding_provider = _EmbeddingProviderAdapter(embed_client)
 
@@ -1021,9 +1034,13 @@ def _ingest_selected_sources(
             except Exception as exc:
                 fetched_map[orig_idx] = None
                 logger.warning("Parallel fetch failed for candidate %d: %s", orig_idx, exc)
+            if cancel_check is not None:
+                cancel_check()
 
     # Phase 2: sequential DB ingest (SQLAlchemy sessions are not thread-safe)
     for idx, candidate in enumerate(selected):
+        if cancel_check is not None:
+            cancel_check()
         stats["attempted"] += 1
         source = candidate.source
         content_source = fetched_map.get(idx) or source
@@ -1157,6 +1174,7 @@ def _parallel_mcp_search(
     connector,
     *,
     mcp_max_per_source: int,
+    cancel_check: Callable[[], None] | None = None,
 ) -> list:
     """Search all query-plan entries in parallel using ThreadPoolExecutor."""
     parallel_queries = env_int("RETRIEVER_MCP_PARALLEL_QUERIES", 6, min_value=1)
@@ -1177,6 +1195,8 @@ def _parallel_mcp_search(
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_queries) as executor:
         futures = [executor.submit(_search_one, plan) for plan in query_plan]
         for future in concurrent.futures.as_completed(futures):
+            if cancel_check is not None:
+                cancel_check()
             all_sources.extend(future.result())
     return all_sources
 
@@ -1184,6 +1204,10 @@ def _parallel_mcp_search(
 @observe(name="retriever")
 @instrument_node("retrieve")
 def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorState:
+    def _cancel_check() -> None:
+        raise_if_run_cancel_requested(session, state.tenant_id, state.run_id)
+
+    _cancel_check()
     question = state.user_query
     state.step_labels = _plan_step_labels(
         question=question,
@@ -1221,7 +1245,13 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     mcp_max_per_source = env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
     retrieved_by_source: dict[str, list[RetrievedSource]] = {}
 
-    raw_sources = _parallel_mcp_search(query_plan, mcp_connector, mcp_max_per_source=mcp_max_per_source)
+    raw_sources = _parallel_mcp_search(
+        query_plan,
+        mcp_connector,
+        mcp_max_per_source=mcp_max_per_source,
+        cancel_check=_cancel_check,
+    )
+    _cancel_check()
     for src in raw_sources:
         retrieved_by_source.setdefault(src.connector, []).append(src)
 
@@ -1263,7 +1293,9 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         query_text=question,
         llm_provider=state.llm_provider,
         stats=rerank_stats,
+        cancel_check=_cancel_check,
     )
+    _cancel_check()
     latency_ms = int((time.monotonic() - rerank_start) * 1000)
     emit_run_event(
         session=session,
@@ -1303,7 +1335,9 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         llm_provider=state.llm_provider,
         connector=mcp_connector,
         selected=selected,
+        cancel_check=_cancel_check,
     )
+    _cancel_check()
 
     emit_run_event(
         session=session,
@@ -1316,6 +1350,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
 
     selected_refs: list[SourceRef] = []
     for candidate in selected:
+        _cancel_check()
         source = candidate.source
         origin = source.connector
         row = _upsert_source(session, tenant_id=state.tenant_id, source=source, origin=origin)

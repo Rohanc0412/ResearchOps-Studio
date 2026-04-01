@@ -36,6 +36,7 @@ def truncate_text(text: str, max_chars: int = 2000) -> str:
         return cleaned
     return cleaned[:max_chars].rstrip() + "...(truncated)"
 
+
 def _event_session(session: Session) -> Session:
     return Session(
         bind=session.get_bind(),
@@ -47,7 +48,12 @@ def _event_session(session: Session) -> Session:
 
 def _should_use_current_session(session: Session) -> bool:
     bind = session.get_bind()
-    return bind is not None and bind.dialect.name == "sqlite"
+    if bind is None:
+        return False
+
+    dialect = bind.dialect
+    driver = getattr(dialect, "driver", "")
+    return dialect.name == "sqlite" or driver == "asyncpg"
 
 
 def _state_summary(state: Any) -> dict[str, Any]:

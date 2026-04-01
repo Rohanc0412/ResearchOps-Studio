@@ -145,7 +145,12 @@ async def _resolve_force_pipeline_prompt(
 
 
 async def _recent_chat_history(
-    *, session: AsyncSession, tenant_id: UUID, conversation_id: UUID, limit: int = 6
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    conversation_id: UUID,
+    limit: int = 6,
+    exclude_message_id: UUID | None = None,
 ) -> list[ChatMessageRow]:
     stmt = (
         select(ChatMessageRow)
@@ -158,6 +163,8 @@ async def _recent_chat_history(
         .order_by(ChatMessageRow.created_at.desc())
         .limit(limit)
     )
+    if exclude_message_id is not None:
+        stmt = stmt.where(ChatMessageRow.id != exclude_message_id)
     rows = list((await session.execute(stmt)).scalars().all())
     return list(reversed(rows))
 

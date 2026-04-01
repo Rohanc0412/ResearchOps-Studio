@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import nodes.retriever as retriever_module
 import pytest
+from cancellation import RunCancelledError
 from connectors.base import CanonicalIdentifier, RetrievedSource, SourceType
 from core.orchestrator.state import OrchestratorState
 from db.init_db import init_db_sync as init_db
@@ -315,3 +316,64 @@ def test_retriever_continues_when_selected_ingestion_fails(db_session, monkeypat
     assert len(result.retrieved_sources) == 2
     assert db_session.query(SnapshotRow).count() == 2
     assert db_session.query(SnippetRow).count() > 0
+
+
+def test_retriever_stops_when_cancel_requested_during_search(db_session, monkeypatch):
+    tenant_id, project_id, run_id = _insert_run(db_session)
+    search_source = _make_source(connector="openalex", paper_id="W999", title="Search Result")
+
+    class FakeConnector:
+        def __init__(self, **kwargs):
+            self.sources = ["openalex"]
+
+    monkeypatch.setattr(retriever_module, "ScientificPapersMCPConnector", FakeConnector)
+    monkeypatch.setattr(retriever_module, "_plan_step_labels", lambda **kwargs: None)
+    monkeypatch.setattr(
+        retriever_module,
+        "_build_query_plan",
+        lambda **kwargs: (
+            [
+                retriever_module.QueryPlan(
+                    intent="survey",
+                    query="retrieval augmented generation",
+                )
+            ],
+            False,
+        ),
+    )
+
+    OtherSession = sessionmaker(bind=db_session.get_bind())
+
+    def fake_parallel_search(query_plan, connector, *, mcp_max_per_source, cancel_check=None):
+        other_session = OtherSession()
+        try:
+            run = (
+                other_session.query(RunRow)
+                .filter(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+                .one()
+            )
+            run.cancel_requested_at = datetime.now(UTC)
+            other_session.commit()
+        finally:
+            other_session.close()
+
+        if cancel_check is not None:
+            cancel_check()
+        return [search_source]
+
+    monkeypatch.setattr(retriever_module, "_parallel_mcp_search", fake_parallel_search)
+
+    def fail_if_rerank_reached(*args, **kwargs):
+        raise AssertionError("retriever continued into rerank after cancellation")
+
+    monkeypatch.setattr(retriever_module, "_rank_sources", fail_if_rerank_reached)
+
+    state = OrchestratorState(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        project_id=project_id,
+        user_query="retrieval augmented generation",
+    )
+
+    with pytest.raises(RunCancelledError):
+        retriever_module.retriever_node(state, db_session)

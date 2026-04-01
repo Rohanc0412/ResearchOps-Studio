@@ -22,6 +22,7 @@ from core.orchestrator.state import (
 from db.init_db import init_db_sync as init_db
 from db.models.projects import ProjectRow
 from db.models.runs import RunRow, RunStatusDb
+from cancellation import RunCancelledError, raise_if_run_cancel_requested
 from graph import create_orchestrator_graph
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -622,6 +623,35 @@ def test_graph_execution_completes(db_session, test_run):
 
     assert state.tenant_id == tenant_id
     assert state.run_id == run_id
+
+
+def test_raise_if_run_cancel_requested_bypasses_stale_identity_map(db_session, db_run):
+    tenant_id, run_id = db_run
+
+    # Prime the identity map with a stale row that still shows no cancel request.
+    stale_row = (
+        db_session.query(RunRow)
+        .filter(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        .one()
+    )
+    assert stale_row.cancel_requested_at is None
+
+    OtherSession = sessionmaker(bind=db_session.get_bind())
+    other_session = OtherSession()
+    try:
+        fresh_row = (
+            other_session.query(RunRow)
+            .filter(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+            .one()
+        )
+        fresh_row.cancel_requested_at = datetime.now(UTC)
+        other_session.commit()
+    finally:
+        other_session.close()
+
+    assert stale_row.cancel_requested_at is None
+    with pytest.raises(RunCancelledError):
+        raise_if_run_cancel_requested(db_session, tenant_id, run_id)
 
 
 def test_repair_agent_modifies_draft(db_session, db_run):

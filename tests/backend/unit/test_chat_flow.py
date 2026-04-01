@@ -141,6 +141,44 @@ def test_chat_message_persistence(api_client) -> None:
     assert items[1]["role"] == "assistant"
 
 
+def test_quick_answer_prompt_does_not_duplicate_current_user_message(api_client, monkeypatch) -> None:
+    client, _ = api_client
+    project_id = _create_project(client, "Prompt Dedup Project")
+    conversation_id = _create_conversation(client, project_id)
+    captured_prompts: list[str] = []
+
+    class StubLLM:
+        def generate(self, prompt, **_kwargs):
+            captured_prompts.append(prompt)
+            return "One answer only."
+
+    import routes.chat as chat_route
+
+    monkeypatch.setattr(chat_route, "get_llm_client", lambda *_args, **_kwargs: StubLLM())
+
+    first = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message="Give me a quick overview.",
+        client_message_id="prompt-dedup-0",
+    )
+    assert first.status_code == 200
+
+    resp = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message="Summarize the project status.",
+        client_message_id="prompt-dedup-1",
+    )
+    assert resp.status_code == 200
+    assert _parse_send_response(resp)["assistant_message"]["content_text"] == "One answer only."
+    assert len(captured_prompts) == 2
+    assert captured_prompts[1].count("User: Give me a quick overview.") == 1
+    assert captured_prompts[1].count("User: Summarize the project status.") == 1
+
+
 def test_conversation_title_refreshes_after_four_user_turns(api_client, monkeypatch) -> None:
     client, _ = api_client
     project_id = _create_project(client, "Retitle Project")

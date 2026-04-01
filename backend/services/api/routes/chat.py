@@ -916,7 +916,11 @@ async def post_send_chat(
             clear_pending_action(convo)
             pending_action = None
             _qa_history = await _recent_chat_history(
-                session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
+                session=session,
+                tenant_id=tenant_id,
+                conversation_id=convo.id,
+                limit=6,
+                exclude_message_id=user_message.id,
             )
             qa_ctx = _QuickAnswerContext(
                 session_local=SessionLocal,
@@ -949,7 +953,11 @@ async def post_send_chat(
                 clear_pending_action(convo)
                 pending_action = None
                 _qa_history = await _recent_chat_history(
-                    session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
+                    session=session,
+                    tenant_id=tenant_id,
+                    conversation_id=convo.id,
+                    limit=6,
+                    exclude_message_id=user_message.id,
                 )
                 qa_ctx = _QuickAnswerContext(
                     session_local=SessionLocal,
@@ -1136,7 +1144,11 @@ async def post_send_chat(
                 else:
                     _log_step("start", conversation_id=convo.id, step="quick_answer_default")
                     _qa_history = await _recent_chat_history(
-                        session=session, tenant_id=tenant_id, conversation_id=convo.id, limit=6
+                        session=session,
+                        tenant_id=tenant_id,
+                        conversation_id=convo.id,
+                        limit=6,
+                        exclude_message_id=user_message.id,
                     )
                     qa_ctx = _QuickAnswerContext(
                         session_local=SessionLocal,

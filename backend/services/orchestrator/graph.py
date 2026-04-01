@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cancellation import RunCancelledError, raise_if_run_cancel_requested
 from core.orchestrator.state import EvaluatorDecision, OrchestratorState
-from db.models.runs import RunRow
 from langgraph.graph import END, StateGraph
 from nodes import (
     evaluator_node,
@@ -21,10 +21,6 @@ from nodes import (
     writer_node,
 )
 from sqlalchemy.orm import Session
-
-
-class RunCancelledError(Exception):
-    """Raised when a run cancel is detected between pipeline nodes."""
 
 
 # Node display names for logging
@@ -68,9 +64,7 @@ def create_orchestrator_graph(session: Session) -> StateGraph:
         def wrapped(state: OrchestratorState) -> dict[str, Any]:
             """Wrapped node function."""
             # Check for cooperative cancellation before running each node
-            run_row = session.get(RunRow, state.run_id)
-            if run_row and run_row.cancel_requested_at is not None:
-                raise RunCancelledError(f"Run {state.run_id} cancelled by user")
+            raise_if_run_cancel_requested(session, state.tenant_id, state.run_id)
             result_state = node_func(state, session)
             return result_state.dict()
 
