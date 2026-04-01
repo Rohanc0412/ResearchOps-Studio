@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 import pytest
@@ -16,6 +17,7 @@ from db.session import session_scope
 from fastapi.testclient import TestClient
 from routes import chat_titles
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 _TEST_DATABASE_URL = os.environ.get(
@@ -88,11 +90,21 @@ def _parse_send_response(resp) -> dict:
     raise ValueError("SSE stream contained no 'answer' event")
 
 
-def _latest_run_question(app, project_id: str) -> str:
-    SessionLocal = app.state.SessionLocal
+@asynccontextmanager
+async def _fresh_session_scope():
+    async_url = _TEST_DATABASE_URL.replace("postgresql+psycopg://", "postgresql+asyncpg://")
+    engine = create_async_engine(async_url)
+    session_local = async_sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        async with session_scope(session_local) as session:
+            yield session
+    finally:
+        await engine.dispose()
 
+
+def _latest_run_question(app, project_id: str) -> str:
     async def _run():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             run = (await session.execute(
                 select(RunRow)
                 .where(RunRow.project_id == UUID(project_id))
@@ -130,7 +142,7 @@ def test_chat_message_persistence(api_client) -> None:
 
 
 def test_conversation_title_refreshes_after_four_user_turns(api_client, monkeypatch) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "Retitle Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -156,10 +168,8 @@ def test_conversation_title_refreshes_after_four_user_turns(api_client, monkeypa
         )
         assert resp.status_code == 200
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             convo = (await session.execute(
                 select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
             )).scalar_one()
@@ -169,7 +179,7 @@ def test_conversation_title_refreshes_after_four_user_turns(api_client, monkeypa
 
 
 def test_pipeline_offer_sets_pending(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "Pipeline Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -183,10 +193,8 @@ def test_pipeline_offer_sets_pending(api_client) -> None:
     assert resp.status_code == 200
     assert resp.json()["assistant_message"]["type"] == "pipeline_offer"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             convo = (await session.execute(
                 select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
             )).scalar_one()
@@ -196,7 +204,7 @@ def test_pipeline_offer_sets_pending(api_client) -> None:
 
 
 def test_pipeline_yes_starts_run(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "Yes Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -217,10 +225,8 @@ def test_pipeline_yes_starts_run(api_client) -> None:
     assert resp.status_code == 200
     assert resp.json()["assistant_message"]["type"] == "run_started"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             convo = (await session.execute(
                 select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
             )).scalar_one()
@@ -285,7 +291,7 @@ def test_force_pipeline_generic_trigger_variants_use_prior_prompt(
     api_client, generic_trigger: str
 ) -> None:
     client, app = api_client
-    project_id = _create_project(client, "Generic Variants Project")
+    project_id = _create_project(client, f"Generic Variants Project {generic_trigger}")
     conversation_id = _create_conversation(client, project_id)
     detailed_prompt = (
         "Assess the security, governance, and reliability risks of autonomous coding "
@@ -485,10 +491,8 @@ def test_pipeline_no_returns_quick_answer(api_client) -> None:
     assert resp.status_code == 200
     assert _parse_send_response(resp)["assistant_message"]["type"] == "chat"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             convo = (await session.execute(
                 select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
             )).scalar_one()
@@ -498,7 +502,7 @@ def test_pipeline_no_returns_quick_answer(api_client) -> None:
 
 
 def test_action_tokens_override_ambiguity(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "Action Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -519,10 +523,8 @@ def test_action_tokens_override_ambiguity(api_client) -> None:
     assert resp.status_code == 200
     assert resp.json()["assistant_message"]["type"] == "chat"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             convo = (await session.execute(
                 select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
             )).scalar_one()
@@ -532,7 +534,7 @@ def test_action_tokens_override_ambiguity(api_client) -> None:
 
 
 def test_ambiguous_twice_defaults_quick_answer(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "Ambiguous Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -563,10 +565,8 @@ def test_ambiguous_twice_defaults_quick_answer(api_client) -> None:
     assert second.status_code == 200
     assert _parse_send_response(second)["assistant_message"]["type"] == "chat"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             convo = (await session.execute(
                 select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
             )).scalar_one()
@@ -576,7 +576,7 @@ def test_ambiguous_twice_defaults_quick_answer(api_client) -> None:
 
 
 def test_new_topic_clears_pending(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "New Topic Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -597,10 +597,8 @@ def test_new_topic_clears_pending(api_client) -> None:
     assert resp.status_code == 200
     assert _parse_send_response(resp)["assistant_message"]["type"] == "chat"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             convo = (await session.execute(
                 select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
             )).scalar_one()
@@ -610,7 +608,7 @@ def test_new_topic_clears_pending(api_client) -> None:
 
 
 def test_client_message_id_idempotency(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "Idempotent Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -631,10 +629,8 @@ def test_client_message_id_idempotency(api_client) -> None:
     assert resp.status_code == 200
     assert resp.json()["idempotent_replay"] is True
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             rows = (
                 await session.execute(
                     select(ChatMessageRow).where(ChatMessageRow.client_message_id == "dup-1")
@@ -646,7 +642,7 @@ def test_client_message_id_idempotency(api_client) -> None:
 
 
 def test_run_start_idempotency(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client, "Run Idempotent Project")
     conversation_id = _create_conversation(client, project_id)
 
@@ -677,10 +673,8 @@ def test_run_start_idempotency(api_client) -> None:
     assert second.status_code == 200
     assert second.json()["assistant_message"]["content_json"]["run_id"] == run_id
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             runs = (await session.execute(
                 select(RunRow).where(RunRow.project_id == UUID(project_id))
             )).scalars().all()

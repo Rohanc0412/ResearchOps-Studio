@@ -30,12 +30,12 @@ from db.models.runs import RunStatusDb
 from services.orchestrator.job_queue import enqueue_run_job
 from services.workers.main import (
     ORPHANED_JOB_RECOVERY_ERROR,
-    _claim_next_job,
-    _mark_job_done,
-    _mark_job_failed,
-    _mark_run_failed,
-    recover_orphaned_jobs,
-    run_once,
+    _claim_next_job_sync as _claim_next_job,
+    _mark_job_done_sync as _mark_job_done,
+    _mark_job_failed_sync as _mark_job_failed,
+    _mark_run_failed_sync as _mark_run_failed,
+    recover_orphaned_jobs_sync as recover_orphaned_jobs,
+    run_once_sync as run_once,
 )
 
 RESEARCH_JOB_TYPE = "research.run"

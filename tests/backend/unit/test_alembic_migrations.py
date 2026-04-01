@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import configparser
 
 
 def _migration_dir() -> Path:
@@ -16,6 +17,14 @@ def _load_module(module_name: str, relative_path: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_alembic_ini_uses_os_path_separator():
+    config_path = Path(__file__).resolve().parents[3] / "backend" / "alembic.ini"
+    parser = configparser.ConfigParser()
+    parser.read(config_path, encoding="utf-8")
+
+    assert parser.get("alembic", "path_separator") == "os"
 
 
 def test_alembic_versions_contains_single_latest_schema_script():

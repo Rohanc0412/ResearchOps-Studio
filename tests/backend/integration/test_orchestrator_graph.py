@@ -9,9 +9,10 @@ Tests:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from core.orchestrator.state import (
@@ -24,6 +25,46 @@ from db.models.runs import RunRow, RunStatusDb
 from graph import create_orchestrator_graph
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+
+def _make_snippet(db_session, *, tenant_id: UUID, snippet_id: str) -> None:
+    """Create SourceRow → SnapshotRow → SnippetRow for the given snippet_id.
+
+    Required so that SectionReviewIssueCitationRow FK constraints are satisfied
+    when the evaluator persists issues that cite this snippet.
+    """
+    from db.models.snapshots import SnapshotRow
+    from db.models.snippets import SnippetRow
+    from db.models.sources import SourceRow
+
+    source = SourceRow(
+        tenant_id=tenant_id,
+        canonical_id=f"test-source-{snippet_id}",
+        source_type="paper",
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    snapshot = SnapshotRow(
+        tenant_id=tenant_id,
+        source_id=source.id,
+        snapshot_version=1,
+        blob_ref="test",
+        sha256=hashlib.sha256(snippet_id.encode()).hexdigest(),
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    snippet = SnippetRow(
+        id=UUID(snippet_id),
+        tenant_id=tenant_id,
+        snapshot_id=snapshot.id,
+        snippet_index=0,
+        text="test snippet",
+        sha256=hashlib.sha256(snippet_id.encode()).hexdigest(),
+    )
+    db_session.add(snippet)
+    db_session.flush()
 
 
 @pytest.fixture(autouse=True)
@@ -268,6 +309,8 @@ def test_evaluator_continues_on_errors(db_session, db_run):
 
     tenant_id, run_id = db_run
 
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
+
     class StubLLM:
         def generate(self, _prompt, **_kwargs):
             return json.dumps(
@@ -341,6 +384,9 @@ def test_evaluator_repairs_on_any_failed_section(db_session, db_run):
     from nodes import evaluator_node
 
     tenant_id, run_id = db_run
+
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="22222222-2222-2222-2222-222222222222")
 
     responses = iter(
         [
@@ -482,7 +528,7 @@ def test_exporter_generates_three_artifacts(db_session, test_run):
         output_type="report",
     )
     db_session.add(run_row)
-    db_session.flush()
+    db_session.commit()  # commit so emit_run_event's separate event_session can see the run
 
     # Create minimal state
     outline = OutlineModel(
