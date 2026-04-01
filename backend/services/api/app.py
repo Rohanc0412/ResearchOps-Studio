@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 from core import SERVICE_API, get_settings
 from db.init_db import init_db
-from db.session import create_db_engine, create_sessionmaker
-from fastapi import FastAPI
+from db.session import create_db_engine, create_sessionmaker, session_scope
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
 from middlewares.auth import init_auth_runtime
@@ -19,6 +21,7 @@ from routes.evidence import router as evidence_router
 from routes.health import router as health_router
 from routes.projects import router as projects_router
 from routes.runs import router as runs_router
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _git_sha() -> str | None:
@@ -92,3 +95,11 @@ def create_app() -> FastAPI:
     app.include_router(api)
 
     return app
+
+
+async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
+    async with session_scope(request.app.state.SessionLocal) as session:
+        yield session
+
+
+DBDep = Annotated[AsyncSession, Depends(get_db)]
