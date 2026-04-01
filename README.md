@@ -1,152 +1,99 @@
 # ResearchOps Studio
 
-ResearchOps Studio is a research workflow application that combines a chat-first interface with a multi-stage AI pipeline for retrieval, evidence packaging, report drafting, evaluation, and artifact export.
+AI-powered research pipeline with automated grounding evaluation.
 
-The repository is structured as a Python backend plus a React dashboard:
+## What it does
 
-- `backend/`: FastAPI API, worker/orchestrator services, SQLAlchemy models, migrations, Docker assets
-- `frontend/dashboard/`: React + Vite dashboard for projects, chat, reports, evidence, artifacts, and security flows
-- `tests/`: backend unit/integration coverage plus Playwright end-to-end tests
-
-## Why This Project Matters
-
-This is not a single-model demo. The project includes:
-
-- a staged research pipeline with retrieval, evidence packing, drafting, evaluation, repair, and export
-- multi-tenant data modeling and auth flows including MFA
-- evented run progress updates
-- evidence and artifact handling
-- a dashboard that supports project, conversation, report, and evaluation workflows
+ResearchOps Studio takes a research question, retrieves academic sources from multiple databases (OpenAlex, arXiv, Europe PMC, CORE) via MCP connectors, drafts a structured report with inline citations, then runs an automated grounding evaluation — scoring each section for faithfulness to the source pack and flagging unsupported or contradicted claims.
 
 ## Architecture
 
-### Backend
-
-- `backend/services/api/`: FastAPI application, routes, auth middleware, app services
-- `backend/services/orchestrator/`: research pipeline graph, nodes, checkpointing, embeddings, worker integration
-- `backend/services/workers/`: worker process entrypoint
-- `backend/data/db/`: SQLAlchemy models, repositories, Alembic migrations, DB init
-- `backend/libs/`: shared core/auth/config/observability/connectors/ingestion/retrieval logic
-
-### Frontend
-
-- `frontend/dashboard/src/pages/`: route-level pages
-- `frontend/dashboard/src/features/chat/`: chat/report-specific components and utilities
-- `frontend/dashboard/src/api/`: typed client hooks and request helpers
-- `frontend/dashboard/src/components/`: shared layout and UI components
-
-### Runtime Topology
-
-- `postgres`: primary relational store, plus pgvector support
-- `api`: FastAPI app for auth, projects, chat, runs, evidence, and artifacts
-- `worker`: background research pipeline execution
-- `frontend`: local Vite dev server in development, static build for production
-
-## Local Setup
-
-### Prerequisites
-
-- Python 3.11 or newer
-- Node.js 20 or newer
-- npm
-- PostgreSQL with pgvector for full local runs, or SQLite for some backend tests
-
-### 1. Clone And Install Dependencies
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-
-cd frontend/dashboard
-npm ci
-cd ../..
+```mermaid
+flowchart LR
+    User([User]) --> FE["React Frontend\nVite · TanStack Query\n:5173"]
+    FE -->|REST + SSE| API["FastAPI API\n:8000"]
+    API --> DB[("PostgreSQL\n+ pgvector")]
+    API --> Jobs["Job Queue\n(DB-backed)"]
+    Jobs --> Worker["Worker Process\n(poll loop)"]
+    Worker --> Pipeline["LangGraph Pipeline"]
+    Pipeline --> N1["① Retrieve\nMCP sources"]
+    Pipeline --> N2["② Outline"]
+    Pipeline --> N3["③ Draft\nw/ citations"]
+    Pipeline --> N4["④ Evaluate\ngrounding"]
+    Pipeline --> N5["⑤ Repair"]
+    Pipeline --> N6["⑥ Export"]
+    Pipeline --> DB
+    Pipeline -.->|traces| LF["Langfuse\n(optional)"]
+    API -->|SSE events| FE
 ```
 
-### 2. Configure Environment
+## What it produces
 
-Copy the example files and fill in the values you need:
+After a run completes the evaluation tab shows grounding metrics for every report section:
 
-```powershell
-Copy-Item .env.example .env
-Copy-Item frontend/dashboard/.env.example frontend/dashboard/.env
+```json
+{
+  "grounding_pct": 91,
+  "faithfulness_pct": 88,
+  "sections_passed": 9,
+  "sections_total": 11,
+  "issues_by_type": {
+    "missing_citation": 3,
+    "unsupported": 2
+  }
+}
 ```
 
-### 3. Run The Backend
+`grounding_pct` is the share of sections that pass citation verification. `faithfulness_pct` measures claim-to-source alignment. `issues_by_type` enumerates detected problems by category so you can see at a glance where the draft needs attention.
 
-```powershell
+## Quickstart
+
+**Prerequisites:** Python 3.11, Node 20, PostgreSQL 16 with the `pgvector` extension.
+
+```bash
+# 1. Clone and configure
+cp .env.example .env   # fill in required vars below
+
+# 2. Python dependencies
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+
+# 3. Database
+alembic upgrade head          # run from backend/
+
+# 4. Start API (new terminal)
 cd backend
-python -m pytest ..\tests\backend\unit\test_api_health.py -q
-python -m main
-```
+PYTHONPATH=./services/api:./services/orchestrator:./libs:./data \
+  python -m main
 
-### 4. Run The Frontend
-
-```powershell
-cd frontend/dashboard
-npm run dev
-```
-
-## Docker Setup
-
-The backend includes a compose stack for Postgres, API, and worker:
-
-```powershell
+# 5. Start worker (new terminal)
 cd backend
-docker compose -f deployment/compose.yaml up --build
-```
+PYTHONPATH=./services/workers:./services/orchestrator:./libs:./data \
+  python -m main
 
-This is the fastest path if you want the API, worker, and database wired together with the documented service topology.
-
-## Demo Flow
-
-To evaluate the project end to end:
-
-1. Register or sign in.
-2. Create a project.
-3. Start a conversation and request a research report.
-4. Track pipeline progress in chat and report views.
-5. Review generated report sections, artifacts, and evidence.
-6. Run evaluation and inspect grounding/faithfulness outputs.
-
-## Validation Commands
-
-Use the same interpreter you used for installation for Python commands.
-
-### Frontend
-
-```powershell
+# 6. Start frontend (new terminal)
 cd frontend/dashboard
-npm run build
-npm run lint
+npm ci && npm run dev
 ```
 
-### Backend
+Open [http://localhost:5173](http://localhost:5173).
 
-```powershell
-cd backend
-python -m pytest ..\tests\backend\unit\test_api_health.py -q
-python -m pytest ..\tests\backend\unit\test_chat_flow.py -q
-```
+**Required `.env` vars:**
 
-### Playwright Discovery
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `HOSTED_LLM_BASE_URL` | OpenAI-compatible endpoint (e.g. Gemini) |
+| `HOSTED_LLM_API_KEY` | API key for the LLM endpoint |
+| `HOSTED_LLM_MODEL` | Model name (e.g. `gemini-2.5-flash`) |
+| `TAVILY_API_KEY` | Tavily search API key (web search in chat) |
 
-```powershell
-cd frontend/dashboard
-npx playwright test --list
-```
+## Tech stack
 
-## Notable Engineering Areas
-
-- staged orchestration graph for research execution
-- retrieval and ingestion of external academic sources
-- grounding and faithfulness evaluation flows
-- multi-tenant persistence and audit-aware auth flows
-- SSE-driven progress updates and artifact hydration in the UI
-
-## Repository Notes
-
-- `requirements.txt` is the root install path used by Docker and the documented local setup
-- backend tests are safest to run with `python -m pytest` so the active interpreter matches the installed dependencies
-- `frontend/dashboard/README.md` contains frontend-specific notes; this root README is the primary onboarding document
+| Layer | Technology |
+|---|---|
+| API | FastAPI, SQLAlchemy (async), asyncpg |
+| Pipeline | LangGraph, httpx |
+| Storage | PostgreSQL, pgvector |
+| Frontend | React 18, Vite, TanStack Query |
+| Observability | Structured JSON logs, Langfuse (optional) |
