@@ -1,38 +1,46 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from core.settings import Settings
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 
-def create_db_engine(settings: Settings) -> Engine:
-    connect_args: dict[str, object] = {}
-    if settings.database_url.startswith("sqlite"):
-        connect_args["timeout"] = 30
-    return create_engine(
-        settings.database_url,
-        pool_pre_ping=True,
-        future=True,
-        connect_args=connect_args,
-    )
+def _async_url(url: str) -> str:
+    """Rewrite a sync postgres driver URL to use asyncpg."""
+    for sync_driver in (
+        "postgresql+psycopg2://",
+        "postgresql+psycopg://",
+        "postgresql://",
+    ):
+        if url.startswith(sync_driver):
+            return "postgresql+asyncpg://" + url[len(sync_driver):]
+    return url
 
 
-def create_sessionmaker(engine: Engine) -> sessionmaker[Session]:
-    return sessionmaker(bind=engine, expire_on_commit=False, autoflush=False, future=True)
+def create_db_engine(settings: Settings) -> AsyncEngine:
+    url = _async_url(settings.database_url)
+    return create_async_engine(url, pool_pre_ping=True, future=True)
 
 
-@contextmanager
-def session_scope(SessionLocal: sessionmaker[Session]) -> Iterator[Session]:
-    session = SessionLocal()
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+
+
+@asynccontextmanager
+async def session_scope(
+    SessionLocal: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    async with SessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
