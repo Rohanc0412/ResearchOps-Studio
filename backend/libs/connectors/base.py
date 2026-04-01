@@ -16,13 +16,13 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Protocol
 
 import httpx
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     """Type of academic source."""
 
     PAPER = "paper"

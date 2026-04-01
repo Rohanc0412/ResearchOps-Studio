@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from db.models.runs import RunRow
 
 
-class ClaimVerdictDb(str, enum.Enum):
+class ClaimVerdictDb(enum.StrEnum):
     supported = "supported"
     unsupported = "unsupported"
     partially_supported = "partially_supported"

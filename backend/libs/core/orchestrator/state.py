@@ -8,7 +8,7 @@ All data structures are Pydantic models for validation and serialization.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -75,7 +75,7 @@ class Claim(BaseModel):
     requires_evidence: bool = True
 
 
-class FactCheckStatus(str, Enum):
+class FactCheckStatus(StrEnum):
     """Status of fact checking."""
 
     SUPPORTED = "supported"
@@ -95,7 +95,7 @@ class FactCheckResult(BaseModel):
     explanation: str = ""
 
 
-class ValidationErrorType(str, Enum):
+class ValidationErrorType(StrEnum):
     """Type of validation error."""
 
     MISSING_CITATION = "missing_citation"
@@ -124,7 +124,7 @@ class RepairPlan(BaseModel):
     additional_evidence_needed: bool = False
 
 
-class EvaluatorDecision(str, Enum):
+class EvaluatorDecision(StrEnum):
     """Evaluator decision on whether to continue."""
 
     STOP_SUCCESS = "stop_success"  # All good, export

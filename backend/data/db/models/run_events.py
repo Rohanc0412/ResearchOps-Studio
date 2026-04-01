@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from db.models.runs import RunRow
 
 
-class RunEventLevelDb(str, enum.Enum):
+class RunEventLevelDb(enum.StrEnum):
     debug = "debug"
     info = "info"
     warn = "warn"

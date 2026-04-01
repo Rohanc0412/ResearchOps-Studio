@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from db.models.run_usage_metrics import RunUsageMetricRow
 
 
-class RunStatusDb(str, enum.Enum):
+class RunStatusDb(enum.StrEnum):
     created = "created"
     queued = "queued"
     running = "running"

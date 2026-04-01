@@ -20,7 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from db.models.base import Base
 
 
-class JobStatusDb(str, enum.Enum):
+class JobStatusDb(enum.StrEnum):
     queued = "queued"
     running = "running"
     failed = "failed"
