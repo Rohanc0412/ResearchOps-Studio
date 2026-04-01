@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -16,7 +16,6 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.models.base import Base
@@ -78,7 +77,9 @@ class RunRow(Base):
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     retry_count: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True

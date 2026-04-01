@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-from datetime import UTC, datetime
 
 from core.env import now_utc
 from core.orchestrator.state import (
@@ -25,7 +23,13 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
-from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
+from llm import (
+    LLMError,
+    extract_json_payload,
+    get_llm_client_for_stage,
+    json_response_format,
+    log_llm_exchange,
+)
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)

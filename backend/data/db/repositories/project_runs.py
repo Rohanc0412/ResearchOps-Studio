@@ -6,7 +6,6 @@ from uuid import UUID
 from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import set_committed_value
 
 from db.models import ProjectRow, RunEventRow, RunRow
 from db.models.run_budget_limits import RunBudgetLimitRow

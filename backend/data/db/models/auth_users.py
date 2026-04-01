@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from typing import TYPE_CHECKING
-
-from sqlalchemy import Boolean, DateTime, Index, String, UniqueConstraint, Uuid, func
+from sqlalchemy import Boolean, DateTime, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.models.base import Base

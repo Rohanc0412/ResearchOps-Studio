@@ -15,16 +15,14 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql.sqltypes import JSON
 
 from db.models.base import Base
 
 if TYPE_CHECKING:
-    from db.models.snippet_flags import SnippetFlagRow
     from db.models.snapshots import SnapshotRow
     from db.models.snippet_embeddings import SnippetEmbeddingRow
+    from db.models.snippet_flags import SnippetFlagRow
 
 
 class SnippetRow(Base):

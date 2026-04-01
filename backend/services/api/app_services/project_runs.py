@@ -10,11 +10,10 @@ from core.runs.lifecycle import emit_run_event, transition_run_status
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunRow, RunStatusDb
 from db.models.section_evidence import SectionEvidenceRow
-from db.models.snippets import SnippetRow
 from db.models.snapshots import SnapshotRow
+from db.models.snippets import SnippetRow
 from db.models.sources import SourceRow
 from db.repositories.artifacts import list_artifacts
-from db.repositories.corpus import get_source
 from db.repositories.project_runs import (
     create_project,
     create_run,
@@ -34,7 +33,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-ACTIVE_RESEARCH_RUN_MESSAGE = "Another research run is already in progress. Retry after it finishes."
+ACTIVE_RESEARCH_RUN_MESSAGE = (
+    "Another research run is already in progress. Retry after it finishes."
+)
 ACTIVE_RESEARCH_RUN_ERROR_CODE = "research_run_active"
 
 

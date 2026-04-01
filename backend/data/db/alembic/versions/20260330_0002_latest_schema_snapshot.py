@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from alembic import op
-import sqlalchemy as sa
-
 import db.models  # noqa: F401
+import sqlalchemy as sa
+from alembic import op
 from db.models.base import Base
 
 revision = "20260330_0002_evaluation_history"

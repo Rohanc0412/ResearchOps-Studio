@@ -10,8 +10,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.models.base import Base
 
 if TYPE_CHECKING:
-    from db.models.conversation_actions import ConversationActionRow
     from db.models.chat_messages import ChatMessageRow
+    from db.models.conversation_actions import ConversationActionRow
 
 
 class ChatConversationRow(Base):

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import sqlalchemy as sa
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from db.models.base import Base
 from db.models.roles import RoleRow
@@ -79,4 +79,6 @@ def _seed_reference_data(conn: sa.engine.Connection) -> None:
     for role_name in ("owner", "admin", "researcher", "viewer"):
         if role_name in existing:
             continue
-        conn.execute(sa.insert(RoleRow).values(name=role_name, description=f"Built-in {role_name} role"))
+        conn.execute(
+            sa.insert(RoleRow).values(name=role_name, description=f"Built-in {role_name} role")
+        )

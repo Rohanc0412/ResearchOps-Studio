@@ -14,11 +14,9 @@ from app_services.project_runs import ACTIVE_RESEARCH_RUN_MESSAGE, create_resear
 from core.audit.logger import write_audit_log
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
-from core.runs.lifecycle import emit_run_event
 from core.env import now_utc
 from core.tenancy import get_tenant_id
 from db.models.chat_messages import ChatMessageRow
-from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunStatusDb
 from db.repositories.chat import (
     clear_pending_action,
@@ -57,7 +55,6 @@ from routes.chat_schemas import (
     ConversationOut,
 )
 from routes.chat_titles import _maybe_update_title
-from sqlalchemy import select
 from search.tavily import search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -94,7 +91,7 @@ class _QuickAnswerContext:
     conversation_id: UUID
     user_id: str
     user_message_id: UUID
-    user_message_out: "ChatMessageOut"
+    user_message_out: ChatMessageOut
     history: list
     message: str
     llm_provider: str | None

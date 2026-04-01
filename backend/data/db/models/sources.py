@@ -12,9 +12,9 @@ from sqlalchemy.sql.sqltypes import JSON
 from db.models.base import Base
 
 if TYPE_CHECKING:
+    from db.models.snapshots import SnapshotRow
     from db.models.source_authors import SourceAuthorRow
     from db.models.source_identifiers import SourceIdentifierRow
-    from db.models.snapshots import SnapshotRow
 
 
 class SourceRow(Base):

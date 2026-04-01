@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from db.models.evaluation_pass_sections import EvaluationPassSectionRow
-from db.models.evaluation_passes import EvaluationPassRow
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
+
+from db.models.evaluation_pass_sections import EvaluationPassSectionRow
+from db.models.evaluation_passes import EvaluationPassRow
 
 
 def _utcnow() -> datetime:

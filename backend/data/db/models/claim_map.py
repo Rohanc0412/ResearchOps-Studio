@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -15,8 +16,6 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from typing import TYPE_CHECKING
-
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.sqltypes import JSON
@@ -25,6 +24,8 @@ from db.models.base import Base
 
 if TYPE_CHECKING:
     from db.models.claim_evidence import ClaimEvidenceRow
+    from db.models.projects import ProjectRow
+    from db.models.runs import RunRow
 
 
 class ClaimVerdictDb(str, enum.Enum):
@@ -60,10 +61,10 @@ class ClaimMapRow(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
 
-    project: Mapped["ProjectRow"] = relationship(  # type: ignore[name-defined]
+    project: Mapped[ProjectRow] = relationship(  # type: ignore[name-defined]
         "ProjectRow", back_populates="claim_map_entries", overlaps="run"
     )
-    run: Mapped["RunRow"] = relationship(  # type: ignore[name-defined]
+    run: Mapped[RunRow] = relationship(  # type: ignore[name-defined]
         "RunRow", back_populates="claim_map_entries", overlaps="project"
     )
     evidence_links: Mapped[list[ClaimEvidenceRow]] = relationship(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import logging
 import os
 from collections.abc import Iterable
 from typing import Protocol
@@ -37,8 +38,6 @@ from embeddings import (
     resolve_embed_workers,
 )
 from retrieval.search import search_snippets
-import logging
-
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 

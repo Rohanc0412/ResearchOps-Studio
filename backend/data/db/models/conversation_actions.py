@@ -16,7 +16,10 @@ if TYPE_CHECKING:
 class ConversationActionRow(Base):
     __tablename__ = "conversation_actions"
     __table_args__ = (
-        Index("ix_conversation_actions_tenant_conversation", "tenant_id", "conversation_id", "created_at"),
+        Index(
+            "ix_conversation_actions_tenant_conversation",
+            "tenant_id", "conversation_id", "created_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

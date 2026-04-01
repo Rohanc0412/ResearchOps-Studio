@@ -11,11 +11,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Generator
 from datetime import UTC, datetime
-from typing import Generator
 from uuid import UUID
 
-from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA, METRIC_EVAL_GROUNDING_PCT, METRIC_EVAL_STATUS
+from core.evaluation import (
+    ALLOWED_PROBLEMS,
+    GROUNDING_SCHEMA,
+    METRIC_EVAL_GROUNDING_PCT,
+    METRIC_EVAL_STATUS,
+)
 from db.models.artifacts import ArtifactRow
 from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow

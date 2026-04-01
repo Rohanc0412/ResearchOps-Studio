@@ -39,6 +39,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]  # E501: line length enforced by black; B008: FastAPI uses default calls for Depends
 
 [tool.coverage.run]
 source = ["."]

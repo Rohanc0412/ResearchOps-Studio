@@ -62,7 +62,7 @@ def resolve_model_for_stage(
     if tier == "capable":
         tier_model = os.getenv("LLM_MODEL_CAPABLE") or os.getenv("LLM_MODEL_CHEAP")
     elif tier == "cheap":
-        # cheap stages do not fall back to LLM_MODEL_CAPABLE — avoid silently upgrading to a more expensive model
+        # cheap stages do not fall back to LLM_MODEL_CAPABLE — avoid silently upgrading to a pricier model
         tier_model = os.getenv("LLM_MODEL_CHEAP")
     else:
         tier_model = None

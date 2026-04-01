@@ -12,7 +12,6 @@ from typing import Any
 
 from core.env import env_optional_int
 
-
 # ---------------------------------------------------------------------------
 # Shared embedding configuration resolvers
 # Reads EMBED_* env vars; falls back to legacy RETRIEVER_EMBED_* for compat.

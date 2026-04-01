@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import os
 
-from alembic import context
-from sqlalchemy import engine_from_config, pool
-
 import db.models  # noqa: F401  # ensure models register with Base.metadata
+from alembic import context
 from db.models.base import Base
-
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 

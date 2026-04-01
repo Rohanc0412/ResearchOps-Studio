@@ -8,18 +8,23 @@ the app's `RetrievedSource` model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import io
 import os
 import re
 import shlex
 import shutil
 import subprocess
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Final
 
-from connectors.base import BaseConnector, CanonicalIdentifier, ConnectorError, RetrievedSource, SourceType
-
+from connectors.base import (
+    BaseConnector,
+    CanonicalIdentifier,
+    ConnectorError,
+    RetrievedSource,
+    SourceType,
+)
 
 SEARCHABLE_SOURCES: Final[tuple[str, ...]] = ("openalex", "arxiv", "europepmc", "core")
 DEFAULT_COMMAND: Final[str] = "npx -y @futurelab-studio/latest-science-mcp@latest"
@@ -49,8 +54,12 @@ class ScientificPapersMCPConnector(BaseConnector):
         max_requests_per_second: float = 0.5,
         timeout_seconds: float = 60.0,
     ) -> None:
-        super().__init__(max_requests_per_second=max_requests_per_second, timeout_seconds=timeout_seconds)
-        self._command = (command or os.getenv("SCIENTIFIC_PAPERS_MCP_COMMAND") or DEFAULT_COMMAND).strip()
+        super().__init__(
+            max_requests_per_second=max_requests_per_second, timeout_seconds=timeout_seconds
+        )
+        self._command = (
+            command or os.getenv("SCIENTIFIC_PAPERS_MCP_COMMAND") or DEFAULT_COMMAND
+        ).strip()
         configured_sources = sources or self._load_sources_from_env()
         self.sources = [source for source in configured_sources if source in SEARCHABLE_SOURCES]
         if not self.sources:

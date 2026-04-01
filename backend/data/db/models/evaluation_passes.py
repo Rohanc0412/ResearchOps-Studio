@@ -4,7 +4,16 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKeyConstraint, Index, Integer, String, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.sqltypes import JSON
@@ -36,7 +45,9 @@ class EvaluationPassRow(Base):
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
     scope: Mapped[str] = mapped_column(String(20), nullable=False)
     pass_index: Mapped[int] = mapped_column(Integer(), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running", server_default="running")
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="running", server_default="running"
+    )
     grounding_pct: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     faithfulness_pct: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     sections_passed: Mapped[int | None] = mapped_column(Integer(), nullable=True)

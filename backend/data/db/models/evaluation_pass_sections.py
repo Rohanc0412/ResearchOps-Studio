@@ -4,7 +4,17 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql.sqltypes import JSON
@@ -56,7 +66,9 @@ class EvaluationPassSectionRow(Base):
         index=True,
     )
 
-    evaluation_pass: Mapped[EvaluationPassRow] = relationship("EvaluationPassRow", back_populates="sections")
+    evaluation_pass: Mapped[EvaluationPassRow] = relationship(
+        "EvaluationPassRow", back_populates="sections"
+    )
 
 
 EvaluationPassSectionRow.__table__.append_constraint(

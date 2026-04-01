@@ -12,7 +12,6 @@ from db.models.auth_refresh_tokens import AuthRefreshTokenRow
 from db.models.auth_users import AuthUserRow
 from db.models.roles import RoleRow, UserRoleRow
 
-
 DEFAULT_ROLE_NAMES = ("owner", "admin", "researcher", "viewer")
 
 

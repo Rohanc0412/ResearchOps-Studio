@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
-import json
 import logging
 import math
 import os
@@ -25,6 +24,7 @@ from typing import Protocol
 from connectors import ScientificPapersMCPConnector
 from connectors.base import RetrievedSource
 from connectors.dedup import deduplicate_sources
+from core.env import env_float, env_int
 from core.orchestrator.state import OrchestratorState, SourceRef
 from core.pipeline_events import emit_run_event, instrument_node
 from db.models.run_checkpoints import RunCheckpointRow
@@ -55,8 +55,13 @@ from embeddings import (
     resolve_embed_workers,
 )
 from ingestion import ingest_source
-from core.env import env_float, env_int
-from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
+from llm import (
+    LLMError,
+    extract_json_payload,
+    get_llm_client_for_stage,
+    json_response_format,
+    log_llm_exchange,
+)
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)

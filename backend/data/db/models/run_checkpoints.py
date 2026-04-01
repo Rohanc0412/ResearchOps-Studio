@@ -12,7 +12,7 @@ from sqlalchemy.sql.sqltypes import JSON
 from db.models.base import Base
 
 if TYPE_CHECKING:
-    from db.models.runs import RunRow
+    pass
 
 
 class RunCheckpointRow(Base):

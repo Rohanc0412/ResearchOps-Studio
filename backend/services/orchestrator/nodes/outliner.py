@@ -18,7 +18,13 @@ from core.orchestrator.state import (
 from core.pipeline_events import emit_run_event, instrument_node
 from db.models.outline_notes import OutlineNoteRow
 from db.models.run_sections import RunSectionRow
-from llm import LLMError, extract_json_payload, get_llm_client_for_stage, json_response_format, log_llm_exchange
+from llm import (
+    LLMError,
+    extract_json_payload,
+    get_llm_client_for_stage,
+    json_response_format,
+    log_llm_exchange,
+)
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -69,7 +75,9 @@ def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     vetted_sources = state.vetted_sources
 
     try:
-        llm_client = get_llm_client_for_stage("outline", state.llm_provider, state.llm_model, stage_models=state.stage_models)
+        llm_client = get_llm_client_for_stage(
+            "outline", state.llm_provider, state.llm_model, stage_models=state.stage_models
+        )
     except LLMError as exc:
         raise ValueError("LLM outline generation is required but unavailable.") from exc
 

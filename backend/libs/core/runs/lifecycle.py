@@ -29,7 +29,9 @@ ALLOWED_TRANSITIONS: dict[RunStatusDb, set[RunStatusDb]] = {
         RunStatusDb.succeeded,
         RunStatusDb.canceled,
     },
-    RunStatusDb.blocked: {RunStatusDb.queued, RunStatusDb.running, RunStatusDb.failed, RunStatusDb.canceled},
+    RunStatusDb.blocked: {
+        RunStatusDb.queued, RunStatusDb.running, RunStatusDb.failed, RunStatusDb.canceled
+    },
     RunStatusDb.failed: {RunStatusDb.queued, RunStatusDb.blocked},  # only via explicit retry
     RunStatusDb.succeeded: set(),  # terminal
     RunStatusDb.canceled: set(),  # terminal

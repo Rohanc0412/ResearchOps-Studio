@@ -4,7 +4,17 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.models.base import Base
@@ -17,7 +27,9 @@ class SectionReviewIssueRow(Base):
     __tablename__ = "section_review_issues"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_section_review_issues_tenant_id_id"),
-        UniqueConstraint("tenant_id", "review_id", "issue_order", name="uq_section_review_issues_order"),
+        UniqueConstraint(
+            "tenant_id", "review_id", "issue_order", name="uq_section_review_issues_order"
+        ),
         Index("ix_section_review_issues_tenant_review", "tenant_id", "review_id"),
     )
 
@@ -41,7 +53,9 @@ class SectionReviewIssueRow(Base):
 class SectionReviewIssueCitationRow(Base):
     __tablename__ = "section_review_issue_citations"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "issue_id", "snippet_id", name="uq_section_review_issue_citation"),
+        UniqueConstraint(
+            "tenant_id", "issue_id", "snippet_id", name="uq_section_review_issue_citation"
+        ),
         Index("ix_section_review_issue_citations_tenant_issue", "tenant_id", "issue_id"),
     )
 
