@@ -70,7 +70,7 @@ def db_run(db_session):
     run_id = uuid4()
     project = ProjectRow(tenant_id=tenant_id, name="Test Project", created_by="test")
     db_session.add(project)
-    db_session.flush()
+    db_session.flush()  # populate project.id for the FK
     run = RunRow(
         id=run_id,
         tenant_id=tenant_id,
@@ -79,7 +79,7 @@ def db_run(db_session):
         question="test query",
     )
     db_session.add(run)
-    db_session.flush()
+    db_session.commit()  # commit so emit_run_event's separate session can see the run
     return tenant_id, run_id
 
 

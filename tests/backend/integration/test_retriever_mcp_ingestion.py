@@ -40,13 +40,18 @@ def db_session():
 
 class StubEmbedClient:
     model_name = "stub-embed"
-    dimensions = 4
+    dimensions = 1024
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
         for text in texts:
             size = float(max(len(text), 1))
-            vectors.append([size, size / 2.0, size / 3.0, 1.0])
+            vec = [0.0] * 1024
+            vec[0] = size
+            vec[1] = size / 2.0
+            vec[2] = size / 3.0
+            vec[3] = 1.0
+            vectors.append(vec)
         return vectors
 
 
