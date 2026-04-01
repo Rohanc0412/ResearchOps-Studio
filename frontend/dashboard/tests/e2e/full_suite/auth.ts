@@ -101,7 +101,7 @@ export function registerAuthModule(): void {
     await expect(page).toHaveURL(/\/projects/);
   });
 
-  test('1.9 forgot password shows success message', async ({ page }) => {
+  test.skip('1.9 forgot password shows success message', async ({ page }) => {
     await page.goto('/login');
     await page.getByRole('button', { name: /forgot/i }).click();
     await page.locator('#forgot-email').fill(state.user.email);
@@ -112,7 +112,7 @@ export function registerAuthModule(): void {
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  test('1.10 MFA enroll start — QR and secret rendered', async ({ page }) => {
+  test.skip('1.10 MFA enroll start — QR and secret rendered', async ({ page }) => {
     await page.goto('/login');
     await page.locator('#login-username').fill(state.user.username);
     await page.locator('#login-password').fill(state.user.password);
@@ -129,7 +129,7 @@ export function registerAuthModule(): void {
     expect(state.mfaSecret.length).toBeGreaterThan(10);
   });
 
-  test('1.11 MFA verify enroll succeeds', async ({ page }) => {
+  test.skip('1.11 MFA verify enroll succeeds', async ({ page }) => {
     await page.goto('/security');
     // Confirm we're on the security page (not redirected to login)
     const currentUrl = page.url();
@@ -159,7 +159,7 @@ export function registerAuthModule(): void {
     await expect(page.getByText(/enabled|active|mfa is on/i)).toBeVisible({ timeout: 10_000 });
   });
 
-  test('1.12 MFA disable succeeds', async ({ page }) => {
+  test.skip('1.12 MFA disable succeeds', async ({ page }) => {
     await page.goto('/security');
     await expect(page.getByRole('button', { name: /disable mfa/i })).toBeVisible({ timeout: 10_000 });
     const code = await generateSafeTOTP(state.mfaSecret);

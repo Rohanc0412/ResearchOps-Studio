@@ -6,7 +6,7 @@ export default defineConfig({
   timeout: 600_000, // 10 min — research runs can take several minutes
   expect: { timeout: 30_000 },
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     trace: 'retain-on-failure',
