@@ -13,6 +13,7 @@ dependencies = [
   "alembic>=1.13",
   "pgvector>=0.3.6",
   "langgraph>=0.2,<0.3",
+  "langfuse>=2.0,<3",
   "PyJWT[crypto]>=2.8",
   "bcrypt>=4.1",
 ]
