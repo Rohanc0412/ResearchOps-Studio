@@ -11,12 +11,12 @@ from datetime import UTC, datetime
 
 from core.orchestrator.state import OrchestratorState
 from core.pipeline_events import emit_run_event, instrument_node
-from langfuse.decorators import observe
 from db.models.artifacts import ArtifactRow
 from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.project_runs import get_run_usage_metrics, replace_run_usage_metrics
+from langfuse.decorators import observe
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 

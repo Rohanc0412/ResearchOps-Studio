@@ -527,6 +527,60 @@ def test_run_once_marks_job_failed_on_exception(engine):
         assert run.status == RunStatusDb.failed
 
 
+def test_run_once_processes_awaitable_result(engine):
+    """run_once also handles processors that return a coroutine."""
+    SessionLocal = sessionmaker(bind=engine)
+
+    with SessionLocal() as seed:
+        tenant_id, _, run_id = _make_tenant_project_run(seed, run_status=RunStatusDb.created)
+        enqueue_run_job(
+            session=seed, tenant_id=tenant_id, run_id=run_id, job_type=RESEARCH_JOB_TYPE
+        )
+        seed.commit()
+
+    calls: list[tuple[Any, ...]] = []
+
+    async def fake_async_process(*, session, run_id, tenant_id):
+        calls.append((run_id, tenant_id, session is not None))
+
+    def fake_process(**kwargs):
+        return fake_async_process(**kwargs)
+
+    with patch("services.workers.main.process_research_run", fake_process), \
+         patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
+         patch("embeddings.release_gpu_memory"):
+        ran = run_once(SessionLocal=SessionLocal)
+
+    assert ran is True
+    assert calls == [(run_id, tenant_id, True)]
+
+
+def test_run_once_marks_unknown_job_type_as_failed(engine):
+    """Unexpected job types should fail the claimed job and run."""
+    SessionLocal = sessionmaker(bind=engine)
+
+    with SessionLocal() as seed:
+        tenant_id, _, run_id = _make_tenant_project_run(seed, run_status=RunStatusDb.created)
+        enqueue_run_job(
+            session=seed, tenant_id=tenant_id, run_id=run_id, job_type="unexpected.job"
+        )
+        seed.commit()
+
+    with patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
+         patch("embeddings.release_gpu_memory"):
+        ran = run_once(SessionLocal=SessionLocal)
+
+    assert ran is True
+
+    with SessionLocal() as verify:
+        job = verify.execute(select(JobRow)).scalars().first()
+        run = verify.execute(select(RunRow)).scalars().first()
+        assert job.status == JobStatusDb.failed
+        assert "Unknown job_type" in (job.last_error or "")
+        assert run.status == RunStatusDb.failed
+        assert "Unknown job_type" in (run.failure_reason or "")
+
+
 def test_run_once_throughput_n_sequential_jobs(engine):
     """N jobs inserted sequentially are all processed successfully."""
     N = 15

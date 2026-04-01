@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 
@@ -48,6 +49,42 @@ os.environ.setdefault("TEST_DATABASE_URL", TEST_DATABASE_URL)
 @pytest.fixture()
 def repo_root() -> Path:
     return REPO_ROOT
+
+
+@pytest.fixture(scope="session")
+def pg_sync_engine():
+    """Sync PostgreSQL engine for one-time schema init and per-test cleanup."""
+    from db.init_db import init_db_sync
+
+    engine = create_engine(TEST_DATABASE_URL, future=True)
+    init_db_sync(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def reset_postgres_db(pg_sync_engine) -> None:
+    """Keep PostgreSQL-backed tests isolated from each other."""
+    if pg_sync_engine.dialect.name != "postgresql":
+        yield
+        return
+
+    with pg_sync_engine.begin() as conn:
+        table_names = conn.execute(
+            text(
+                """
+                SELECT tablename
+                FROM pg_tables
+                WHERE schemaname = 'public'
+                  AND tablename NOT IN ('alembic_version', 'roles')
+                """
+            )
+        ).scalars().all()
+        if table_names:
+            quoted_tables = ", ".join(f'"{table_name}"' for table_name in table_names)
+            conn.execute(text(f"TRUNCATE TABLE {quoted_tables} RESTART IDENTITY CASCADE"))
+
+    yield
 
 
 @pytest_asyncio.fixture()

@@ -8,9 +8,9 @@ from core.auth.identity import Identity
 from core.runs import RunNotFoundError, RunTransitionError
 from core.runs.lifecycle import (
     emit_run_event_async,
-    transition_run_status_async,
     request_cancel_async,
     retry_run_async,
+    transition_run_status_async,
 )
 from db.models.run_events import RunEventLevelDb
 from db.models.runs import RunRow, RunStatusDb

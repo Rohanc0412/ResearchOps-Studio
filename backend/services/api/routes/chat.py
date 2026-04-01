@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from deps import DBDep
 from app_services.chat_router import classify_chat_intent, parse_consent_reply
 from app_services.project_runs import ACTIVE_RESEARCH_RUN_MESSAGE, create_research_run
 from core.audit.logger import write_audit_log
@@ -35,6 +34,7 @@ from db.repositories.chat import (
 )
 from db.repositories.project_runs import get_project_for_user
 from db.session import session_scope
+from deps import DBDep
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse as _StreamingResponse
 from llm import LLMError, get_llm_client
@@ -57,7 +57,6 @@ from routes.chat_schemas import (
 )
 from routes.chat_titles import _maybe_update_title
 from search.tavily import search
-from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 

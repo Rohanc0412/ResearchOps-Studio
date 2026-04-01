@@ -18,12 +18,12 @@ from core.orchestrator.state import (
     OutlineSection,
 )
 from core.pipeline_events import instrument_node
-from langfuse.decorators import observe
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
+from langfuse.decorators import observe
 from llm import (
     LLMError,
     extract_json_payload,

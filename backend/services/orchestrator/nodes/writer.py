@@ -14,10 +14,10 @@ import os
 from core.env import env_int, now_utc
 from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
 from core.pipeline_events import emit_run_event, instrument_node
-from langfuse.decorators import observe
 from core.pipeline_events.events import truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
+from langfuse.decorators import observe
 from llm import (
     LLMError,
     extract_json_payload,

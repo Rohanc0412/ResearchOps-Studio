@@ -16,7 +16,6 @@ from typing import Protocol
 
 from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
 from core.pipeline_events import emit_run_event, instrument_node
-from langfuse.decorators import observe
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
@@ -38,6 +37,7 @@ from embeddings import (
     resolve_embed_trust_remote_code,
     resolve_embed_workers,
 )
+from langfuse.decorators import observe
 from retrieval.search import search_snippets
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session

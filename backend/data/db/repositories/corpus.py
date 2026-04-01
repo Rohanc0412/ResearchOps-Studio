@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from db.models.source_authors import SourceAuthorRow
 from db.models.source_identifiers import SourceIdentifierRow
@@ -200,7 +200,7 @@ async def create_or_get_source(
 # ---------------------------------------------------------------------------
 
 def _get_source_by_canonical_id_sync(
-    session: "Session",
+    session: Session,
     *,
     tenant_id: UUID,
     canonical_id: str,
@@ -216,7 +216,7 @@ def _get_source_by_canonical_id_sync(
 
 def create_or_get_source_sync(
     *,
-    session: "Session",
+    session: Session,
     tenant_id: UUID,
     canonical_id: str,
     source_type: str,

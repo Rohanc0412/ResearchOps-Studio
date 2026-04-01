@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from db.models.evaluation_pass_sections import EvaluationPassSectionRow
 from db.models.evaluation_passes import EvaluationPassRow
@@ -115,11 +115,11 @@ async def finalize_evaluation_pass(
 
 def create_evaluation_pass_sync(
     *,
-    session: "Session",
+    session: Session,
     tenant_id: UUID,
     run_id: UUID,
     scope: str,
-) -> "EvaluationPassRow":
+) -> EvaluationPassRow:
     from sqlalchemy import func, select
     from sqlalchemy.orm import Session  # noqa: F401 – used in type hint
     max_index = session.execute(
@@ -143,7 +143,7 @@ def create_evaluation_pass_sync(
 
 def record_evaluation_section_result_sync(
     *,
-    session: "Session",
+    session: Session,
     tenant_id: UUID,
     evaluation_pass_id: UUID,
     section_id: str,
@@ -152,7 +152,7 @@ def record_evaluation_section_result_sync(
     verdict: str,
     grounding_score: int | None,
     issues: list[dict[str, Any]],
-) -> "EvaluationPassSectionRow":
+) -> EvaluationPassSectionRow:
     from sqlalchemy import select
     row = session.execute(
         select(EvaluationPassSectionRow).where(
@@ -180,7 +180,7 @@ def record_evaluation_section_result_sync(
 
 def finalize_evaluation_pass_sync(
     *,
-    session: "Session",
+    session: Session,
     tenant_id: UUID,
     evaluation_pass_id: UUID,
     grounding_pct: int | None = None,
@@ -189,7 +189,7 @@ def finalize_evaluation_pass_sync(
     sections_total: int | None = None,
     issues_by_type: dict[str, int] | None = None,
     status: str = "complete",
-) -> "EvaluationPassRow":
+) -> EvaluationPassRow:
     from sqlalchemy import select
     row = session.execute(
         select(EvaluationPassRow).where(
@@ -277,7 +277,7 @@ async def list_evaluation_pass_history(
 
 def list_evaluation_pass_history_sync(
     *,
-    session: "Session",
+    session: Session,
     tenant_id: UUID,
     run_id: UUID,
     include_running: bool = False,

@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import types
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 import pytest
@@ -36,6 +37,17 @@ _TEST_DATABASE_URL = os.environ.get(
 _TEST_ASYNC_DATABASE_URL = _TEST_DATABASE_URL.replace(
     "postgresql+psycopg://", "postgresql+asyncpg://"
 )
+
+
+@asynccontextmanager
+async def _fresh_session_scope():
+    engine = create_async_engine(_TEST_ASYNC_DATABASE_URL, future=True)
+    session_local = async_sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        async with session_scope(session_local) as session:
+            yield session
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -160,10 +172,14 @@ async def test_evaluation_history_is_append_only_across_passes() -> None:
 @pytest.fixture()
 def api_client(tmp_path):
     from app import create_app
+    from core.auth.config import get_auth_config
+    from core.settings import get_settings
 
     os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
     os.environ["AUTH_REQUIRED"] = "false"
     os.environ["DEV_BYPASS_AUTH"] = "true"
+    get_auth_config.cache_clear()
+    get_settings.cache_clear()
     app = create_app()
     with TestClient(app) as client:
         yield client, app
@@ -172,12 +188,11 @@ def api_client(tmp_path):
 def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_client) -> None:
     from db.models.runs import RunStatusDb
 
-    client, app = api_client
+    client, _ = api_client
     tenant_id = UUID("00000000-0000-0000-0000-000000000001")
-    SessionLocal = app.state.SessionLocal
 
     async def _setup():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             project = await create_project(
                 session=session,
                 tenant_id=tenant_id,
@@ -329,12 +344,11 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
 def test_get_evaluation_includes_running_pass_history(api_client) -> None:
     from db.models.runs import RunStatusDb
 
-    client, app = api_client
+    client, _ = api_client
     tenant_id = UUID("00000000-0000-0000-0000-000000000001")
-    SessionLocal = app.state.SessionLocal
 
     async def _setup():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             project = await create_project(
                 session=session,
                 tenant_id=tenant_id,

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from deps import DBDep
 from app_services.evidence import get_snippet_payload, get_source_out
 from core.auth.identity import Identity
 from core.tenancy import get_tenant_id
+from deps import DBDep
 from fastapi import APIRouter, Request
 from middlewares.auth import IdentityDep
 from schemas.truth import SourceOut

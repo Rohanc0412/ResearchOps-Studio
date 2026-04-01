@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import attributes, selectinload
+from sqlalchemy.orm import Session, attributes, selectinload
 
 from db.models import ProjectRow, RunEventRow, RunRow
 from db.models.run_budget_limits import RunBudgetLimitRow
@@ -358,7 +358,7 @@ async def append_run_event(
 
 def append_run_event_sync(
     *,
-    session: "Session",
+    session: Session,
     tenant_id: UUID,
     run_id: UUID,
     level: RunEventLevelDb,

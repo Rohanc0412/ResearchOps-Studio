@@ -27,7 +27,6 @@ from connectors.dedup import deduplicate_sources
 from core.env import env_float, env_int
 from core.orchestrator.state import OrchestratorState, SourceRef
 from core.pipeline_events import emit_run_event, instrument_node
-from langfuse.decorators import observe
 from db.models.run_checkpoints import RunCheckpointRow
 from db.models.run_sources import RunSourceRow
 from db.models.snapshots import SnapshotRow
@@ -35,6 +34,8 @@ from db.models.source_embeddings import SourceEmbeddingRow
 from db.models.sources import SourceRow
 from db.repositories.corpus import (
     create_or_get_source_sync as create_or_get_source,
+)
+from db.repositories.corpus import (
     get_source_identifier,
     list_source_author_names,
 )
@@ -56,6 +57,7 @@ from embeddings import (
     resolve_embed_workers,
 )
 from ingestion import ingest_source
+from langfuse.decorators import observe
 from llm import (
     LLMError,
     extract_json_payload,

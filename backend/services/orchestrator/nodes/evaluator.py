@@ -19,7 +19,6 @@ from core.orchestrator.state import (
     OutlineSection,
 )
 from core.pipeline_events import emit_run_event, instrument_node
-from langfuse.decorators import observe
 from core.pipeline_events.events import truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
@@ -28,9 +27,14 @@ from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
 from db.repositories.evaluation_history import (
     create_evaluation_pass_sync as create_evaluation_pass,
+)
+from db.repositories.evaluation_history import (
     finalize_evaluation_pass_sync as finalize_evaluation_pass,
+)
+from db.repositories.evaluation_history import (
     record_evaluation_section_result_sync as record_evaluation_section_result,
 )
+from langfuse.decorators import observe
 from llm import (
     LLMError,
     extract_json_payload,

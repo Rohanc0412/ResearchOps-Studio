@@ -7,7 +7,6 @@ import json
 from datetime import datetime
 from uuid import UUID
 
-from deps import DBDep
 from app_services.evaluation_runner import EvaluationRunner
 from app_services.project_runs import (
     cancel_user_run,
@@ -27,6 +26,7 @@ from db.models.section_reviews import SectionReviewRow
 from db.repositories.evaluation_history import list_evaluation_pass_history
 from db.repositories.project_runs import get_run_usage_metrics, list_run_events
 from db.session import session_scope
+from deps import DBDep
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from middlewares.auth import IdentityDep

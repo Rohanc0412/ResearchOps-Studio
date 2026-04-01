@@ -3,26 +3,25 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from typing import Union
 
 import sqlalchemy as sa
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from db.models.base import Base
 from db.models.roles import RoleRow
 
 
-def _get_sync_engine(engine: Union[AsyncEngine, Engine]) -> Engine:
+def _get_sync_engine(engine: AsyncEngine | Engine) -> Engine:
     """Return the underlying sync Engine for either an AsyncEngine or a plain Engine."""
     if isinstance(engine, AsyncEngine):
         return engine.sync_engine
     return engine
 
 
-async def init_db(engine: Union[AsyncEngine, Engine], *, retries: int = 30, sleep_seconds: float = 1.0) -> None:
+async def init_db(engine: AsyncEngine | Engine, *, retries: int = 30, sleep_seconds: float = 1.0) -> None:
     sync_engine = _get_sync_engine(engine)
     if sync_engine.dialect.name == "sqlite":
         if isinstance(engine, AsyncEngine):
@@ -65,10 +64,16 @@ async def init_db(engine: Union[AsyncEngine, Engine], *, retries: int = 30, slee
                         await conn.execute(text("SELECT pg_advisory_lock(42424242)"))
                         await conn.commit()
                         try:
-                            def _run_alembic(sync_conn: sa.engine.Connection) -> None:
-                                cfg = Config(str(alembic_ini))
-                                cfg.set_main_option("script_location", str(alembic_dir))
-                                cfg.set_main_option("prepend_sys_path", str(backend_root))
+                            def _run_alembic(
+                                sync_conn: sa.engine.Connection,
+                                *,
+                                alembic_ini_path: Path = alembic_ini,
+                                alembic_dir_path: Path = alembic_dir,
+                                backend_root_path: Path = backend_root,
+                            ) -> None:
+                                cfg = Config(str(alembic_ini_path))
+                                cfg.set_main_option("script_location", str(alembic_dir_path))
+                                cfg.set_main_option("prepend_sys_path", str(backend_root_path))
                                 cfg.attributes["connection"] = sync_conn
                                 command.upgrade(cfg, "head")
                                 _seed_reference_data(sync_conn)
@@ -116,7 +121,7 @@ async def init_db(engine: Union[AsyncEngine, Engine], *, retries: int = 30, slee
     raise last_error
 
 
-def init_db_sync(engine: Union[AsyncEngine, Engine], *, retries: int = 30, sleep_seconds: float = 1.0) -> None:
+def init_db_sync(engine: AsyncEngine | Engine, *, retries: int = 30, sleep_seconds: float = 1.0) -> None:
     """Synchronous wrapper for init_db — use in non-async contexts (e.g., orchestrator worker)."""
     try:
         loop = asyncio.get_running_loop()

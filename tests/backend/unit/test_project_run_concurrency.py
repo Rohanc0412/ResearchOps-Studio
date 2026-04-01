@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import types
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 import pytest
@@ -16,12 +17,27 @@ from db.repositories.project_runs import create_run
 from db.session import session_scope
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 _TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
 )
+_TEST_ASYNC_DATABASE_URL = _TEST_DATABASE_URL.replace(
+    "postgresql+psycopg://", "postgresql+asyncpg://"
+)
+
+
+@asynccontextmanager
+async def _fresh_session_scope():
+    engine = create_async_engine(_TEST_ASYNC_DATABASE_URL, future=True)
+    session_local = async_sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        async with session_scope(session_local) as session:
+            yield session
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture()
@@ -53,11 +69,9 @@ def _create_project(client: TestClient, name: str = "Concurrency Project") -> st
     return resp.json()["id"]
 
 
-def _seed_running_run(app, project_id: str) -> None:
-    SessionLocal = app.state.SessionLocal
-
+def _seed_running_run(project_id: str) -> None:
     async def _run():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             await create_run(
                 session=session,
                 tenant_id=UUID("00000000-0000-0000-0000-000000000001"),
@@ -72,9 +86,9 @@ def _seed_running_run(app, project_id: str) -> None:
 
 
 def test_project_run_is_blocked_when_another_research_run_is_active(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client)
-    _seed_running_run(app, project_id)
+    _seed_running_run(project_id)
 
     resp = client.post(
         f"/projects/{project_id}/runs",
@@ -85,10 +99,8 @@ def test_project_run_is_blocked_when_another_research_run_is_active(api_client) 
     body = resp.json()
     assert body["status"] == "blocked"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             run = (await session.execute(
                 select(RunRow)
                 .where(RunRow.project_id == UUID(project_id), RunRow.question == "Start a new research run")
@@ -103,9 +115,9 @@ def test_project_run_is_blocked_when_another_research_run_is_active(api_client) 
 
 
 def test_retry_blocked_run_stays_blocked_while_active_run_exists(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client)
-    _seed_running_run(app, project_id)
+    _seed_running_run(project_id)
 
     blocked_resp = client.post(
         f"/projects/{project_id}/runs",
@@ -118,10 +130,8 @@ def test_retry_blocked_run_stays_blocked_while_active_run_exists(api_client) -> 
     assert retry_resp.status_code == 200
     assert retry_resp.json()["status"] == "blocked"
 
-    SessionLocal = app.state.SessionLocal
-
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             run = (await session.execute(select(RunRow).where(RunRow.id == UUID(blocked_run_id)))).scalar_one()
             assert run.status == RunStatusDb.blocked
             assert run.retry_count == 0
@@ -132,9 +142,9 @@ def test_retry_blocked_run_stays_blocked_while_active_run_exists(api_client) -> 
 
 
 def test_retry_blocked_run_queues_once_active_run_has_finished(api_client) -> None:
-    client, app = api_client
+    client, _ = api_client
     project_id = _create_project(client)
-    _seed_running_run(app, project_id)
+    _seed_running_run(project_id)
 
     blocked_resp = client.post(
         f"/projects/{project_id}/runs",
@@ -142,10 +152,8 @@ def test_retry_blocked_run_queues_once_active_run_has_finished(api_client) -> No
     )
     blocked_run_id = blocked_resp.json()["run_id"]
 
-    SessionLocal = app.state.SessionLocal
-
     async def _finish_active():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             active = (await session.execute(
                 select(RunRow).where(RunRow.project_id == UUID(project_id), RunRow.status == RunStatusDb.running)
             )).scalar_one()
@@ -162,7 +170,7 @@ def test_retry_blocked_run_queues_once_active_run_has_finished(api_client) -> No
     assert retry_resp.json()["status"] == "queued"
 
     async def _check():
-        async with session_scope(SessionLocal) as session:
+        async with _fresh_session_scope() as session:
             run = (await session.execute(select(RunRow).where(RunRow.id == UUID(blocked_run_id)))).scalar_one()
             assert run.status == RunStatusDb.queued
             assert run.retry_count == 1

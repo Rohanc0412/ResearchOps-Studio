@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from core.orchestrator.state import EvidenceSnippetRef, EvaluatorDecision, OrchestratorState, OutlineModel, OutlineSection
 from db.repositories.evaluation_history import list_evaluation_pass_history_sync as list_evaluation_pass_history
 from db.init_db import init_db_sync as init_db
 from db.models.draft_sections import DraftSectionRow
+from db.models.projects import ProjectRow
+from db.models.runs import RunRow, RunStatusDb
 from db.models.section_reviews import SectionReviewRow
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -30,12 +33,69 @@ def db_session():
     engine.dispose()
 
 
+def _make_snippet(db_session, *, tenant_id: UUID, snippet_id: str) -> None:
+    from db.models.snapshots import SnapshotRow
+    from db.models.snippets import SnippetRow
+    from db.models.sources import SourceRow
+
+    source = SourceRow(
+        tenant_id=tenant_id,
+        canonical_id=f"test-source-{snippet_id}",
+        source_type="paper",
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    snapshot = SnapshotRow(
+        tenant_id=tenant_id,
+        source_id=source.id,
+        snapshot_version=1,
+        blob_ref="test",
+        sha256=hashlib.sha256(snippet_id.encode()).hexdigest(),
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+
+    db_session.add(
+        SnippetRow(
+            id=UUID(snippet_id),
+            tenant_id=tenant_id,
+            snapshot_id=snapshot.id,
+            snippet_index=0,
+            text="test snippet",
+            sha256=hashlib.sha256(snippet_id.encode()).hexdigest(),
+        )
+    )
+    db_session.flush()
+
+
+def _make_run(db_session, *, tenant_id: UUID, run_id: UUID) -> None:
+    project = ProjectRow(
+        tenant_id=tenant_id,
+        name=f"proj-{run_id}",
+        created_by="tester",
+    )
+    db_session.add(project)
+    db_session.flush()
+    db_session.add(
+        RunRow(
+            id=run_id,
+            tenant_id=tenant_id,
+            project_id=project.id,
+            status=RunStatusDb.running,
+            question="test",
+        )
+    )
+    db_session.commit()
+
+
 def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):
     from nodes.evaluator import evaluator_node
     import nodes.evaluator as evaluator_module
 
     tenant_id = uuid4()
     run_id = uuid4()
+    _make_run(db_session, tenant_id=tenant_id, run_id=run_id)
 
     responses = iter(
         [
@@ -71,6 +131,8 @@ def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):
 
     monkeypatch.setattr(evaluator_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
     monkeypatch.setattr(evaluator_module, "emit_run_event", lambda **_kwargs: None)
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="22222222-2222-2222-2222-222222222222")
 
     outline = OutlineModel(
         sections=[
@@ -149,6 +211,7 @@ def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatc
     tenant_id = uuid4()
     run_id = uuid4()
     snippet_id = "11111111-1111-1111-1111-111111111111"
+    _make_run(db_session, tenant_id=tenant_id, run_id=run_id)
 
     class StubLLM:
         def generate(self, prompt, **_kwargs):
@@ -167,6 +230,7 @@ def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatc
 
     monkeypatch.setattr(evaluator_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
     monkeypatch.setattr(evaluator_module, "emit_run_event", lambda **_kwargs: None)
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id=snippet_id)
 
     outline = OutlineModel(
         sections=[
@@ -226,6 +290,7 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, monk
 
     tenant_id = uuid4()
     run_id = uuid4()
+    _make_run(db_session, tenant_id=tenant_id, run_id=run_id)
 
     class StubLLM:
         def generate(self, _prompt, **_kwargs):
@@ -252,6 +317,7 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, monk
             )
 
     monkeypatch.setattr(repair_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
 
     outline = OutlineModel(
         sections=[
@@ -333,6 +399,7 @@ def test_repair_agent_requires_next_section_patch_for_non_final_section(db_sessi
 
     tenant_id = uuid4()
     run_id = uuid4()
+    _make_run(db_session, tenant_id=tenant_id, run_id=run_id)
 
     class StubLLM:
         def generate(self, _prompt, **_kwargs):
@@ -359,6 +426,8 @@ def test_repair_agent_requires_next_section_patch_for_non_final_section(db_sessi
             )
 
     monkeypatch.setattr(repair_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="22222222-2222-2222-2222-222222222222")
 
     outline = OutlineModel(
         sections=[

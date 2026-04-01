@@ -4,7 +4,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from deps import DBDep
 from core.auth.config import get_auth_config
 from core.auth.identity import Identity
 from core.auth.mfa import build_otpauth_uri, generate_totp_secret, verify_totp
@@ -38,6 +37,7 @@ from db.repositories.identity import (
     revoke_refresh_tokens_for_user,
     upsert_mfa_factor,
 )
+from deps import DBDep
 from fastapi import APIRouter, HTTPException, Request, Response
 from middlewares.auth import IdentityDep
 from pydantic import BaseModel, ConfigDict, Field

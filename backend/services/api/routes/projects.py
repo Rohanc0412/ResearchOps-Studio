@@ -4,7 +4,6 @@ import logging
 from typing import Literal
 from uuid import UUID
 
-from deps import DBDep
 from app_services.project_runs import (
     create_project_run,
     create_user_project,
@@ -15,6 +14,7 @@ from app_services.project_runs import (
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
 from core.tenancy import get_tenant_id
+from deps import DBDep
 from fastapi import APIRouter, HTTPException, Request
 from middlewares.auth import IdentityDep
 from pydantic import BaseModel, ConfigDict, Field
