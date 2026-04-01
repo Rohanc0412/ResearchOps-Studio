@@ -363,14 +363,21 @@ def test_async_run_once_handles_empty_queue_success_and_failure(monkeypatch):
 def test_run_forever_and_main_delegate_runtime_setup(monkeypatch):
     stop_event = Event()
     calls: list[str] = []
-    fake_engine = object()
+    class FakeEngine:
+        async def dispose(self):
+            calls.append("dispose")
+
+    fake_engine = FakeEngine()
     fake_session_local = object()
     settings = SimpleNamespace(worker_poll_seconds=0.25)
     original_run_forever = worker_main.run_forever
 
     monkeypatch.setattr(worker_main, "get_settings", lambda: settings)
     monkeypatch.setattr(worker_main, "create_db_engine", lambda _settings: fake_engine)
-    monkeypatch.setattr(worker_main, "init_db", lambda engine: calls.append(f"init:{engine is fake_engine}"))
+    async def fake_init_db(engine):
+        calls.append(f"init:{engine is fake_engine}")
+
+    monkeypatch.setattr(worker_main, "init_db", fake_init_db)
     monkeypatch.setattr(
         worker_main,
         "create_sessionmaker",
@@ -381,13 +388,16 @@ def test_run_forever_and_main_delegate_runtime_setup(monkeypatch):
 
     monkeypatch.setattr(worker_main, "recover_orphaned_jobs", fake_recover)
 
-    def fake_run_once(*, SessionLocal):
+    async def fake_run_once_async(*, SessionLocal):
         calls.append(f"run_once:{SessionLocal is fake_session_local}")
         stop_event.set()
         return False
 
-    monkeypatch.setattr(worker_main, "run_once", fake_run_once)
-    monkeypatch.setattr(worker_main.time, "sleep", lambda seconds: calls.append(f"sleep:{seconds}"))
+    monkeypatch.setattr(worker_main, "run_once_async", fake_run_once_async)
+    async def fake_sleep(seconds):
+        calls.append(f"sleep:{seconds}")
+
+    monkeypatch.setattr(worker_main.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(worker_main, "resolve_env_files", lambda: ["a.env", "b.env"])
     monkeypatch.setattr(worker_main, "load_dotenv", lambda path, override=False: calls.append(f"dotenv:{path}:{override}"))
     monkeypatch.setattr(worker_main, "setup_logging", lambda service: calls.append(f"logging:{service}"))
@@ -400,6 +410,7 @@ def test_run_forever_and_main_delegate_runtime_setup(monkeypatch):
     assert "recover:True" in calls
     assert "run_once:True" in calls
     assert "sleep:0.25" in calls
+    assert "dispose" in calls
     assert "dotenv:a.env:False" in calls
     assert "dotenv:b.env:False" in calls
     assert f"logging:{worker_main.SERVICE_WORKER}" in calls

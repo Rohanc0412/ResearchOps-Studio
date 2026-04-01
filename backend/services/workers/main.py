@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import inspect
 from datetime import UTC, datetime
 from threading import Event
 from uuid import UUID
@@ -232,8 +232,6 @@ def recover_orphaned_jobs_sync(session: Session) -> int:
 
 
 def run_once_sync(*, SessionLocal) -> bool:
-    import inspect
-
     with SessionLocal() as session:
         job = _claim_next_job_sync(session)
         if job is None:
@@ -272,38 +270,40 @@ def run_once_sync(*, SessionLocal) -> bool:
     return True
 
 
-def run_once(*, SessionLocal: async_sessionmaker[AsyncSession]) -> bool:
-    async def _inner():
-        async with session_scope(SessionLocal) as session:
-            job = await _claim_next_job(session)
-            if job is None:
-                return False, None, None, None, None
-            return True, job.id, job.run_id, job.tenant_id, job.job_type
-
-    found, job_id, run_id, tenant_id, job_type = asyncio.run(_inner())
-    if not found:
-        return False
+async def run_once_async(*, SessionLocal: async_sessionmaker[AsyncSession]) -> bool:
+    async with session_scope(SessionLocal) as session:
+        job = await _claim_next_job(session)
+        if job is None:
+            return False
+        job_id = job.id
+        run_id = job.run_id
+        tenant_id = job.tenant_id
+        job_type = job.job_type
 
     try:
-        async def _process() -> None:
-            async with session_scope(SessionLocal) as session:
-                if job_type == RESEARCH_JOB_TYPE:
-                    await process_research_run(
-                        session=session, run_id=run_id, tenant_id=tenant_id
-                    )
-                else:
-                    raise RuntimeError(f"Unknown job_type: {job_type}")
+        async with session_scope(SessionLocal) as session:
+            if job_type == RESEARCH_JOB_TYPE:
+                result = process_research_run(
+                    session=session, run_id=run_id, tenant_id=tenant_id
+                )
+                if inspect.isawaitable(result):
+                    await result
+            else:
+                raise RuntimeError(f"Unknown job_type: {job_type}")
 
-        asyncio.run(_process())
-        asyncio.run(_finish(SessionLocal, job_id))
+        await _finish(SessionLocal, job_id)
     except Exception as e:
         err = str(e)
-        asyncio.run(_fail(SessionLocal, job_id, run_id, tenant_id, err))
+        await _fail(SessionLocal, job_id, run_id, tenant_id, err)
     finally:
         from embeddings import release_gpu_memory
         release_gpu_memory()
 
     return True
+
+
+def run_once(*, SessionLocal: async_sessionmaker[AsyncSession]) -> bool:
+    return asyncio.run(run_once_async(SessionLocal=SessionLocal))
 
 
 async def _finish(SessionLocal, job_id):
@@ -317,18 +317,25 @@ async def _fail(SessionLocal, job_id, run_id, tenant_id, err):
         await _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
 
 
-def run_forever(*, poll_seconds: float, stop_event: Event | None = None) -> None:
+async def _run_forever_async(*, poll_seconds: float, stop_event: Event | None = None) -> None:
     settings = get_settings()
     engine = create_db_engine(settings)
-    init_db(engine)
-    SessionLocal = create_sessionmaker(engine)
+    try:
+        await init_db(engine)
+        SessionLocal = create_sessionmaker(engine)
 
-    asyncio.run(recover_orphaned_jobs(SessionLocal))
+        await recover_orphaned_jobs(SessionLocal)
 
-    while stop_event is None or not stop_event.is_set():
-        ran = run_once(SessionLocal=SessionLocal)
-        if not ran:
-            time.sleep(poll_seconds)
+        while stop_event is None or not stop_event.is_set():
+            ran = await run_once_async(SessionLocal=SessionLocal)
+            if not ran:
+                await asyncio.sleep(poll_seconds)
+    finally:
+        await engine.dispose()
+
+
+def run_forever(*, poll_seconds: float, stop_event: Event | None = None) -> None:
+    asyncio.run(_run_forever_async(poll_seconds=poll_seconds, stop_event=stop_event))
 
 
 def main() -> None:

@@ -18,6 +18,22 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
 
+  postgres_test_db_init:
+    image: pgvector/pgvector:pg16
+    environment:
+      PGPASSWORD: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - >
+        psql -h postgres -U postgres -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'researchops_test'" |
+        grep -q 1 ||
+        psql -h postgres -U postgres -d postgres -c "CREATE DATABASE researchops_test"
+    restart: "no"
+
   api:
     build:
       context: ../..

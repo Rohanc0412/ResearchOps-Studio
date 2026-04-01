@@ -87,6 +87,19 @@ class OpenAICompatibleClient:
     last_prompt_tokens: int = 0
     last_completion_tokens: int = 0
 
+    def _chat_completions_url(self) -> str:
+        base = self.base_url.rstrip("/")
+        if re.search(r"/v\d+(?:beta\d*)?/openai$", base):
+            return f"{base}/chat/completions"
+        return f"{base}/v1/chat/completions"
+
+    def _request_model_name(self) -> str:
+        base = self.base_url.rstrip("/").lower()
+        model = self.model_name.strip()
+        if "generativelanguage.googleapis.com" in base and model.startswith("google/"):
+            return model.split("/", 1)[1]
+        return model
+
     def generate(
         self,
         prompt: str,
@@ -96,7 +109,7 @@ class OpenAICompatibleClient:
         temperature: float = 0.2,
         response_format: str | dict | None = None,
     ) -> str:
-        url = f"{self.base_url.rstrip('/')}/v1/chat/completions"
+        url = self._chat_completions_url()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -106,7 +119,7 @@ class OpenAICompatibleClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         payload = {
-            "model": self.model_name,
+            "model": self._request_model_name(),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -185,13 +198,13 @@ class OpenAICompatibleClient:
         - "content": str | None — text response (None when tool_calls is set)
         - "tool_calls": list | None — tool call requests from the model
         """
-        url = f"{self.base_url.rstrip('/')}/v1/chat/completions"
+        url = self._chat_completions_url()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         payload: dict = {
-            "model": self.model_name,
+            "model": self._request_model_name(),
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
