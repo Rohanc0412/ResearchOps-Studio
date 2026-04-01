@@ -57,24 +57,49 @@ async def init_db(engine: Union[AsyncEngine, Engine], *, retries: int = 30, slee
                 alembic_ini = backend_root / "alembic.ini"
                 alembic_dir = backend_root / "data" / "db" / "alembic"
 
-                with sync_engine.connect() as conn:
-                    conn.execute(text("SELECT pg_advisory_lock(42424242)"))
-                    conn.commit()
-                    try:
-                        cfg = Config(str(alembic_ini))
-                        cfg.set_main_option("script_location", str(alembic_dir))
-                        cfg.set_main_option("prepend_sys_path", str(backend_root))
-                        cfg.attributes["connection"] = conn
-                        command.upgrade(cfg, "head")
-                        _seed_reference_data(conn)
-                        if conn.in_transaction():
-                            conn.commit()
-                    finally:
-                        if conn.in_transaction():
-                            conn.rollback()
-                        conn.execute(text("SELECT pg_advisory_unlock(42424242)"))
-                        if conn.in_transaction():
-                            conn.commit()
+                if isinstance(engine, AsyncEngine):
+                    # asyncpg-backed engine: must use async connection interface.
+                    # Passing sync_engine.connect() directly would raise MissingGreenlet
+                    # because asyncpg cannot open connections outside a greenlet context.
+                    async with engine.connect() as conn:
+                        await conn.execute(text("SELECT pg_advisory_lock(42424242)"))
+                        await conn.commit()
+                        try:
+                            def _run_alembic(sync_conn: sa.engine.Connection) -> None:
+                                cfg = Config(str(alembic_ini))
+                                cfg.set_main_option("script_location", str(alembic_dir))
+                                cfg.set_main_option("prepend_sys_path", str(backend_root))
+                                cfg.attributes["connection"] = sync_conn
+                                command.upgrade(cfg, "head")
+                                _seed_reference_data(sync_conn)
+                                if sync_conn.in_transaction():
+                                    sync_conn.commit()
+                            await conn.run_sync(_run_alembic)
+                        finally:
+                            try:
+                                await conn.execute(text("SELECT pg_advisory_unlock(42424242)"))
+                                await conn.commit()
+                            except Exception:
+                                pass
+                else:
+                    with sync_engine.connect() as conn:
+                        conn.execute(text("SELECT pg_advisory_lock(42424242)"))
+                        conn.commit()
+                        try:
+                            cfg = Config(str(alembic_ini))
+                            cfg.set_main_option("script_location", str(alembic_dir))
+                            cfg.set_main_option("prepend_sys_path", str(backend_root))
+                            cfg.attributes["connection"] = conn
+                            command.upgrade(cfg, "head")
+                            _seed_reference_data(conn)
+                            if conn.in_transaction():
+                                conn.commit()
+                        finally:
+                            if conn.in_transaction():
+                                conn.rollback()
+                            conn.execute(text("SELECT pg_advisory_unlock(42424242)"))
+                            if conn.in_transaction():
+                                conn.commit()
             else:
                 import db.models  # noqa: F401
                 Base.metadata.create_all(sync_engine)
