@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from core.orchestrator.state import EvidenceSnippetRef, EvaluatorDecision, OrchestratorState, OutlineModel, OutlineSection
-from db.repositories.evaluation_history import list_evaluation_pass_history
+from db.repositories.evaluation_history import list_evaluation_pass_history_sync as list_evaluation_pass_history
 from db.init_db import init_db_sync as init_db
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_reviews import SectionReviewRow
@@ -16,12 +16,18 @@ from sqlalchemy.orm import sessionmaker
 
 @pytest.fixture()
 def db_session():
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    import os
+    test_db_url = os.environ.get(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
+    )
+    engine = create_engine(test_db_url, echo=False)
     init_db(engine=engine)
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()
     yield session
     session.close()
+    engine.dispose()
 
 
 def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):

@@ -21,52 +21,53 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "data"))
 
 import pytest
 
+_TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
+)
+_TEST_ASYNC_DATABASE_URL = _TEST_DATABASE_URL.replace(
+    "postgresql+psycopg://", "postgresql+asyncpg://"
+)
+
 # ── shared helpers ─────────────────────────────────────────────────────────────
 
 
 def _make_session():
-    """In-memory SQLite session with all tables created (sync, for non-repo tests)."""
+    """PostgreSQL session with all tables created via Alembic."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
+    from db.init_db import init_db_sync as _init_db_sync
 
     import db.models  # noqa: F401 — registers all models with Base.metadata
-    from db.models.base import Base
 
-    engine = create_engine("sqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
+    engine = create_engine(_TEST_DATABASE_URL, future=True)
+    _init_db_sync(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False, future=True)
     return Session()
 
 
 async def _make_async_session():
-    """In-memory aiosqlite AsyncSession with all tables created."""
+    """PostgreSQL AsyncSession with all tables created via Alembic."""
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
+    from db.init_db import init_db as _init_db
 
     import db.models  # noqa: F401 — registers all models with Base.metadata
-    from db.models.base import Base
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    engine = create_async_engine(_TEST_ASYNC_DATABASE_URL, future=True)
+    await _init_db(engine)
     Session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     return Session(), engine
 
 
 def _seed_roles(session) -> None:
-    from db.models.roles import RoleRow
-
-    for name in ("owner", "admin", "researcher", "viewer"):
-        session.add(RoleRow(name=name, description=f"Built-in {name}"))
-    session.flush()
+    # Roles are already seeded by init_db (idempotent). No-op to avoid IntegrityError.
+    pass
 
 
 async def _seed_roles_async(session) -> None:
-    from db.models.roles import RoleRow
-
-    for name in ("owner", "admin", "researcher", "viewer"):
-        session.add(RoleRow(name=name, description=f"Built-in {name}"))
-    await session.flush()
+    # Roles are already seeded by init_db (idempotent). No-op to avoid IntegrityError.
+    pass
 
 
 def _make_project(session, tenant_id):
@@ -303,12 +304,13 @@ async def test_get_user_by_id_returns_none_for_wrong_tenant():
     tenant_a = uuid4()
     tenant_b = uuid4()
 
-    # Create a user in tenant A
+    # Create a user in tenant A — use unique names to avoid cross-run conflicts.
+    uid = uuid4().hex[:8]
     user_a = await create_user(
         session=session,
         tenant_id=tenant_a,
-        username="alice",
-        email="alice@example.com",
+        username=f"alice-{uid}",
+        email=f"alice-{uid}@example.com",
         password_hash="hash",
         role_names=["viewer"],
     )
@@ -333,11 +335,12 @@ async def test_get_user_by_id_returns_user_for_correct_tenant():
     await _seed_roles_async(session)
 
     tenant_id = uuid4()
+    uid = uuid4().hex[:8]
     user = await create_user(
         session=session,
         tenant_id=tenant_id,
-        username="bob",
-        email="bob@example.com",
+        username=f"bob-{uid}",
+        email=f"bob-{uid}@example.com",
         password_hash="hash",
         role_names=["viewer"],
     )

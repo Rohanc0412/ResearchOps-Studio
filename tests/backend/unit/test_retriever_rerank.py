@@ -13,7 +13,12 @@ from sqlalchemy.orm import sessionmaker
 
 @pytest.fixture
 def session():
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    import os
+    test_db_url = os.environ.get(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
+    )
+    engine = create_engine(test_db_url, echo=False)
     init_db(engine=engine)
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()
@@ -22,6 +27,7 @@ def session():
     finally:
         session.rollback()
         session.close()
+        engine.dispose()
 
 
 def _make_source(*, doi: str, title: str, abstract: str | None) -> RetrievedSource:

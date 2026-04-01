@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from llm import LLMError
+
+_TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
+)
+_TEST_ASYNC_DATABASE_URL = _TEST_DATABASE_URL.replace(
+    "postgresql+psycopg://", "postgresql+asyncpg://"
+)
 
 
 def _make_execute_result(rows=None, scalar_result=None):
@@ -499,7 +508,7 @@ async def test_finalize_step_yields_complete_event_with_issue_counts():
 async def test_runner_persists_running_status_before_completion(tmp_path):
     from app_services.evaluation_runner import EvaluationRunner
     import db.models  # noqa: F401
-    from db.models.base import Base
+    from db.init_db import init_db as _init_db
     from db.models.evaluation_passes import EvaluationPassRow
     from db.models.run_usage_metrics import RunUsageMetricRow
     from db.models.runs import RunStatusDb
@@ -508,9 +517,8 @@ async def test_runner_persists_running_status_before_completion(tmp_path):
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'evaluation_runner_visibility.db'}", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    engine = create_async_engine(_TEST_ASYNC_DATABASE_URL, future=True)
+    await _init_db(engine)
     AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     tenant_id = uuid4()

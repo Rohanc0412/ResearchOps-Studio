@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from db.models import SnapshotRow, SnippetEmbeddingRow, SnippetRow, SourceRow
-from db.repositories.corpus import create_or_get_source as repo_create_or_get_source
+from db.repositories.corpus import create_or_get_source_sync as repo_create_or_get_source
 from sqlalchemy.orm import Session
 
 from ingestion.chunking import chunk_text

@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from db.models.chat_conversations import ChatConversationRow
 from db.models.chat_messages import ChatMessageRow
@@ -53,9 +54,13 @@ async def get_conversation(
     conversation_id: UUID,
     for_update: bool = False,
 ) -> ChatConversationRow | None:
-    stmt = select(ChatConversationRow).where(
-        ChatConversationRow.tenant_id == tenant_id,
-        ChatConversationRow.id == conversation_id,
+    stmt = (
+        select(ChatConversationRow)
+        .where(
+            ChatConversationRow.tenant_id == tenant_id,
+            ChatConversationRow.id == conversation_id,
+        )
+        .options(selectinload(ChatConversationRow.actions))
     )
     if for_update:
         stmt = stmt.with_for_update()
@@ -70,10 +75,14 @@ async def get_conversation_for_user(
     created_by_user_id: str,
     for_update: bool = False,
 ) -> ChatConversationRow | None:
-    stmt = select(ChatConversationRow).where(
-        ChatConversationRow.tenant_id == tenant_id,
-        ChatConversationRow.id == conversation_id,
-        ChatConversationRow.created_by_user_id == created_by_user_id,
+    stmt = (
+        select(ChatConversationRow)
+        .where(
+            ChatConversationRow.tenant_id == tenant_id,
+            ChatConversationRow.id == conversation_id,
+            ChatConversationRow.created_by_user_id == created_by_user_id,
+        )
+        .options(selectinload(ChatConversationRow.actions))
     )
     if for_update:
         stmt = stmt.with_for_update()

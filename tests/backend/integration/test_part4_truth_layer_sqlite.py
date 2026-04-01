@@ -9,18 +9,9 @@ from db.repositories.project_runs import append_run_event, create_project, creat
 from db.session import create_sessionmaker, session_scope
 
 
-async def _init_sqlite(engine) -> None:
-    """Initialize SQLite schema for tests using async engine."""
-    import db.models  # noqa: F401 - registers all models
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
 @pytest.mark.asyncio
-async def test_part4_truth_layer_updates_project_last_activity(sqlite_engine) -> None:
-    await _init_sqlite(sqlite_engine)
-    SessionLocal = create_sessionmaker(sqlite_engine)
+async def test_part4_truth_layer_updates_project_last_activity(pg_engine) -> None:
+    SessionLocal = create_sessionmaker(pg_engine)
 
     tenant_id = UUID("00000000-0000-0000-0000-00000000abcd")
 
@@ -44,7 +35,9 @@ async def test_part4_truth_layer_updates_project_last_activity(sqlite_engine) ->
 
     async with session_scope(SessionLocal) as session:
         projects = await list_projects(session=session, tenant_id=tenant_id)
-        assert len(projects) == 1
-        assert projects[0].last_run_id is not None
-        assert projects[0].last_activity_at is not None
-        assert projects[0].last_activity_at >= projects[0].created_at
+        assert len(projects) >= 1
+        matching = [p for p in projects if p.id == project.id]
+        assert len(matching) == 1
+        assert matching[0].last_run_id is not None
+        assert matching[0].last_activity_at is not None
+        assert matching[0].last_activity_at >= matching[0].created_at

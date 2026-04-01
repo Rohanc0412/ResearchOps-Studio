@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import os
+from uuid import uuid4
 
 from app import create_app
 from core.auth.config import get_auth_config
 from core.settings import get_settings
 from fastapi.testclient import TestClient
 
+_TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
+)
+
 
 def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
-    db_path = tmp_path / "e2e.db"
-    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
+    os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
     os.environ["WORKER_POLL_SECONDS"] = "0.01"
 
     os.environ["AUTH_REQUIRED"] = "true"
@@ -23,6 +28,13 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
 
     app = create_app()
 
+    # Use uuid-based usernames/emails to avoid unique-constraint conflicts across runs.
+    run_id_suffix = uuid4().hex[:8]
+    username_a = f"alice-{run_id_suffix}"
+    email_a = f"alice-{run_id_suffix}@example.com"
+    username_b = f"bob-{run_id_suffix}"
+    email_b = f"bob-{run_id_suffix}@example.com"
+
     with TestClient(app) as client:
         # Public endpoint works without token
         assert client.get("/health").status_code == 200
@@ -33,7 +45,8 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
         reg_a = client.post(
             "/auth/register",
             json={
-                "username": "alice",
+                "username": username_a,
+                "email": email_a,
                 "password": "password123",
                 "tenant_id": "00000000-0000-0000-0000-0000000000aa",
             },
@@ -61,7 +74,8 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
         reg_b = client.post(
             "/auth/register",
             json={
-                "username": "bob",
+                "username": username_b,
+                "email": email_b,
                 "password": "password123",
                 "tenant_id": "00000000-0000-0000-0000-0000000000bb",
             },

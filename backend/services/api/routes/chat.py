@@ -1203,6 +1203,11 @@ async def post_send_chat(
             step="request",
             extra={"mode": "stream"},
         )
+        # Commit the main session before starting the SSE stream so that the write
+        # lock is released. The streaming generator opens its own session for the
+        # assistant message, and SQLite requires the first writer to have committed
+        # before a second writer can proceed.
+        await session.commit()
         return _StreamingResponse(
             _stream_quick_answer_body(qa_ctx),
             media_type="text/event-stream",

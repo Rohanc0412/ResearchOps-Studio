@@ -37,8 +37,13 @@ def _disable_llm_env(monkeypatch) -> None:
 
 @pytest.fixture
 def db_session():
-    """Create in-memory database for testing."""
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    """Create PostgreSQL database session for testing."""
+    import os
+    test_db_url = os.environ.get(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
+    )
+    engine = create_engine(test_db_url, echo=False)
     init_db(engine=engine)
 
     SessionLocal = sessionmaker(bind=engine)
@@ -47,6 +52,7 @@ def db_session():
     yield session
 
     session.close()
+    engine.dispose()
 
 
 @pytest.fixture

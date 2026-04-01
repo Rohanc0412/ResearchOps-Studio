@@ -46,7 +46,10 @@ class ChatConversationRow(Base):
         "ChatMessageRow", back_populates="conversation", cascade="all, delete-orphan"
     )
     actions: Mapped[list[ConversationActionRow]] = relationship(
-        "ConversationActionRow", back_populates="conversation", cascade="all, delete-orphan"
+        "ConversationActionRow",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        lazy="selectin",
     )
 
     @staticmethod

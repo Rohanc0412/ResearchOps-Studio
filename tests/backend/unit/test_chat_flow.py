@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from uuid import UUID
@@ -17,10 +18,15 @@ from routes import chat_titles
 from sqlalchemy import select
 
 
+_TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
+)
+
+
 @pytest.fixture()
 def api_client(tmp_path):
-    db_path = tmp_path / "chat.db"
-    os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db_path}"
+    os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
     os.environ["AUTH_REQUIRED"] = "false"
     os.environ["DEV_BYPASS_AUTH"] = "true"
     os.environ["LLM_PROVIDER"] = "none"
@@ -84,14 +90,18 @@ def _parse_send_response(resp) -> dict:
 
 def _latest_run_question(app, project_id: str) -> str:
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        run = session.execute(
-            select(RunRow)
-            .where(RunRow.project_id == UUID(project_id))
-            .order_by(RunRow.created_at.desc())
-        ).scalars().first()
-        assert run is not None
-        return run.question
+
+    async def _run():
+        async with session_scope(SessionLocal) as session:
+            run = (await session.execute(
+                select(RunRow)
+                .where(RunRow.project_id == UUID(project_id))
+                .order_by(RunRow.created_at.desc())
+            )).scalars().first()
+            assert run is not None
+            return run.question
+
+    return asyncio.run(_run())
 
 
 def test_chat_message_persistence(api_client) -> None:
@@ -147,11 +157,15 @@ def test_conversation_title_refreshes_after_four_user_turns(api_client, monkeypa
         assert resp.status_code == 200
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        convo = session.execute(
-            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
-        ).scalar_one()
-        assert convo.title == "Retitled After Four Turns"
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            convo = (await session.execute(
+                select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+            )).scalar_one()
+            assert convo.title == "Retitled After Four Turns"
+
+    asyncio.run(_check())
 
 
 def test_pipeline_offer_sets_pending(api_client) -> None:
@@ -170,11 +184,15 @@ def test_pipeline_offer_sets_pending(api_client) -> None:
     assert resp.json()["assistant_message"]["type"] == "pipeline_offer"
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        convo = session.execute(
-            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
-        ).scalar_one()
-        assert convo.pending_action_json is not None
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            convo = (await session.execute(
+                select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+            )).scalar_one()
+            assert convo.pending_action_json is not None
+
+    asyncio.run(_check())
 
 
 def test_pipeline_yes_starts_run(api_client) -> None:
@@ -200,15 +218,19 @@ def test_pipeline_yes_starts_run(api_client) -> None:
     assert resp.json()["assistant_message"]["type"] == "run_started"
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        convo = session.execute(
-            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
-        ).scalar_one()
-        assert convo.pending_action_json is None
-        run = session.execute(
-            select(RunRow).where(RunRow.project_id == UUID(project_id))
-        ).scalar_one()
-        assert run is not None
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            convo = (await session.execute(
+                select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+            )).scalar_one()
+            assert convo.pending_action_json is None
+            run = (await session.execute(
+                select(RunRow).where(RunRow.project_id == UUID(project_id))
+            )).scalar_one()
+            assert run is not None
+
+    asyncio.run(_check())
 
 
 def test_force_pipeline_uses_prior_substantive_prompt_for_generic_trigger(api_client) -> None:
@@ -464,11 +486,15 @@ def test_pipeline_no_returns_quick_answer(api_client) -> None:
     assert _parse_send_response(resp)["assistant_message"]["type"] == "chat"
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        convo = session.execute(
-            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
-        ).scalar_one()
-        assert convo.pending_action_json is None
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            convo = (await session.execute(
+                select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+            )).scalar_one()
+            assert convo.pending_action_json is None
+
+    asyncio.run(_check())
 
 
 def test_action_tokens_override_ambiguity(api_client) -> None:
@@ -494,11 +520,15 @@ def test_action_tokens_override_ambiguity(api_client) -> None:
     assert resp.json()["assistant_message"]["type"] == "chat"
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        convo = session.execute(
-            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
-        ).scalar_one()
-        assert convo.pending_action_json is None
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            convo = (await session.execute(
+                select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+            )).scalar_one()
+            assert convo.pending_action_json is None
+
+    asyncio.run(_check())
 
 
 def test_ambiguous_twice_defaults_quick_answer(api_client) -> None:
@@ -534,11 +564,15 @@ def test_ambiguous_twice_defaults_quick_answer(api_client) -> None:
     assert _parse_send_response(second)["assistant_message"]["type"] == "chat"
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        convo = session.execute(
-            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
-        ).scalar_one()
-        assert convo.pending_action_json is None
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            convo = (await session.execute(
+                select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+            )).scalar_one()
+            assert convo.pending_action_json is None
+
+    asyncio.run(_check())
 
 
 def test_new_topic_clears_pending(api_client) -> None:
@@ -564,11 +598,15 @@ def test_new_topic_clears_pending(api_client) -> None:
     assert _parse_send_response(resp)["assistant_message"]["type"] == "chat"
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        convo = session.execute(
-            select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
-        ).scalar_one()
-        assert convo.pending_action_json is None
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            convo = (await session.execute(
+                select(ChatConversationRow).where(ChatConversationRow.id == UUID(conversation_id))
+            )).scalar_one()
+            assert convo.pending_action_json is None
+
+    asyncio.run(_check())
 
 
 def test_client_message_id_idempotency(api_client) -> None:
@@ -594,15 +632,17 @@ def test_client_message_id_idempotency(api_client) -> None:
     assert resp.json()["idempotent_replay"] is True
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        rows = (
-            session.execute(
-                select(ChatMessageRow).where(ChatMessageRow.client_message_id == "dup-1")
-            )
-            .scalars()
-            .all()
-        )
-        assert len(rows) == 1
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            rows = (
+                await session.execute(
+                    select(ChatMessageRow).where(ChatMessageRow.client_message_id == "dup-1")
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+
+    asyncio.run(_check())
 
 
 def test_run_start_idempotency(api_client) -> None:
@@ -638,8 +678,12 @@ def test_run_start_idempotency(api_client) -> None:
     assert second.json()["assistant_message"]["content_json"]["run_id"] == run_id
 
     SessionLocal = app.state.SessionLocal
-    with session_scope(SessionLocal) as session:
-        runs = session.execute(
-            select(RunRow).where(RunRow.project_id == UUID(project_id))
-        ).scalars().all()
-        assert len(runs) == 1
+
+    async def _check():
+        async with session_scope(SessionLocal) as session:
+            runs = (await session.execute(
+                select(RunRow).where(RunRow.project_id == UUID(project_id))
+            )).scalars().all()
+            assert len(runs) == 1
+
+    asyncio.run(_check())
