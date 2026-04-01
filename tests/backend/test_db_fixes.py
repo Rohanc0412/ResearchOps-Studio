@@ -19,11 +19,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "data"))
 
 
+import pytest
+
 # ── shared helpers ─────────────────────────────────────────────────────────────
 
 
 def _make_session():
-    """In-memory SQLite session with all tables created."""
+    """In-memory SQLite session with all tables created (sync, for non-repo tests)."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -36,12 +38,35 @@ def _make_session():
     return Session()
 
 
+async def _make_async_session():
+    """In-memory aiosqlite AsyncSession with all tables created."""
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    import db.models  # noqa: F401 — registers all models with Base.metadata
+    from db.models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    Session = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    return Session(), engine
+
+
 def _seed_roles(session) -> None:
     from db.models.roles import RoleRow
 
     for name in ("owner", "admin", "researcher", "viewer"):
         session.add(RoleRow(name=name, description=f"Built-in {name}"))
     session.flush()
+
+
+async def _seed_roles_async(session) -> None:
+    from db.models.roles import RoleRow
+
+    for name in ("owner", "admin", "researcher", "viewer"):
+        session.add(RoleRow(name=name, description=f"Built-in {name}"))
+    await session.flush()
 
 
 def _make_project(session, tenant_id):
@@ -53,12 +78,30 @@ def _make_project(session, tenant_id):
     return p
 
 
+async def _make_project_async(session, tenant_id):
+    from db.models.projects import ProjectRow
+
+    p = ProjectRow(tenant_id=tenant_id, name=f"proj-{uuid4()}", created_by="tester")
+    session.add(p)
+    await session.flush()
+    return p
+
+
 def _make_run(session, tenant_id, project_id):
     from db.models.runs import RunRow, RunStatusDb
 
     r = RunRow(tenant_id=tenant_id, project_id=project_id, status=RunStatusDb.running)
     session.add(r)
     session.flush()
+    return r
+
+
+async def _make_run_async(session, tenant_id, project_id):
+    from db.models.runs import RunRow, RunStatusDb
+
+    r = RunRow(tenant_id=tenant_id, project_id=project_id, status=RunStatusDb.running)
+    session.add(r)
+    await session.flush()
     return r
 
 
@@ -137,7 +180,8 @@ def test_usage_json_matches_get_run_usage_metrics_for_bools():
 # ── Issue 2: create_or_get_source must handle concurrent-insert IntegrityError ─
 
 
-def test_create_or_get_source_returns_existing_on_integrity_error():
+@pytest.mark.asyncio
+async def test_create_or_get_source_returns_existing_on_integrity_error():
     """When a concurrent insert races and causes IntegrityError, returns the existing row."""
     from sqlalchemy.exc import IntegrityError as SAIntegrityError
 
@@ -154,7 +198,7 @@ def test_create_or_get_source_returns_existing_on_integrity_error():
     existing.metadata_json = {}
     existing.updated_at = None
 
-    mock_session = mock.MagicMock()
+    mock_session = mock.AsyncMock()
     # flush raises IntegrityError (concurrent insert from another worker)
     mock_session.flush.side_effect = SAIntegrityError(
         "UNIQUE constraint failed", orig=Exception("unique"), params={}
@@ -165,7 +209,7 @@ def test_create_or_get_source_returns_existing_on_integrity_error():
         # Second call (after we catch IntegrityError): the other worker's row is there
         mock_get.side_effect = [None, existing]
 
-        result = corpus.create_or_get_source(
+        result = await corpus.create_or_get_source(
             session=mock_session,
             tenant_id=tenant_id,
             canonical_id=canonical_id,
@@ -178,30 +222,31 @@ def test_create_or_get_source_returns_existing_on_integrity_error():
 # ── Issue 3: append_run_event must use FOR UPDATE to serialize event_number ─────
 
 
-def test_append_run_event_run_fetch_uses_with_for_update():
+@pytest.mark.asyncio
+async def test_append_run_event_run_fetch_uses_with_for_update():
     """The run SELECT inside append_run_event must carry WITH FOR UPDATE."""
     from sqlalchemy import select
     from db.models.runs import RunRow
     import db.repositories.project_runs as pr
 
-    session = _make_session()
-    _seed_roles(session)
+    session, engine = await _make_async_session()
+    await _seed_roles_async(session)
     tenant_id = uuid4()
-    project = _make_project(session, tenant_id)
-    run = _make_run(session, tenant_id, project.id)
-    session.commit()
+    project = await _make_project_async(session, tenant_id)
+    run = await _make_run_async(session, tenant_id, project.id)
+    await session.commit()
 
     captured_stmts: list = []
     real_execute = session.__class__.execute
 
-    def spy(self, stmt, *args, **kwargs):
+    async def spy(self, stmt, *args, **kwargs):
         captured_stmts.append(stmt)
-        return real_execute(self, stmt, *args, **kwargs)
+        return await real_execute(self, stmt, *args, **kwargs)
 
     from db.models.run_events import RunEventLevelDb
 
     with mock.patch.object(session.__class__, "execute", spy):
-        pr.append_run_event(
+        await pr.append_run_event(
             session=session,
             tenant_id=tenant_id,
             run_id=run.id,
@@ -219,7 +264,8 @@ def test_append_run_event_run_fetch_uses_with_for_update():
         "The run fetch in append_run_event does not use WITH FOR UPDATE — "
         "concurrent appends can produce duplicate event_numbers"
     )
-    session.close()
+    await session.close()
+    await engine.dispose()
 
 
 # ── Issue 4: SnippetEmbeddingRow must be importable without pgvector installed ──
@@ -246,18 +292,19 @@ def test_snippet_embeddings_has_pgvector_import_guard():
 # ── Issue 5: get_user_by_id must filter by tenant_id ──────────────────────────
 
 
-def test_get_user_by_id_returns_none_for_wrong_tenant():
+@pytest.mark.asyncio
+async def test_get_user_by_id_returns_none_for_wrong_tenant():
     """get_user_by_id(tenant_id=X) must return None when user belongs to tenant Y."""
     from db.repositories.identity import create_user, get_user_by_id
 
-    session = _make_session()
-    _seed_roles(session)
+    session, engine = await _make_async_session()
+    await _seed_roles_async(session)
 
     tenant_a = uuid4()
     tenant_b = uuid4()
 
     # Create a user in tenant A
-    user_a = create_user(
+    user_a = await create_user(
         session=session,
         tenant_id=tenant_a,
         username="alice",
@@ -265,26 +312,28 @@ def test_get_user_by_id_returns_none_for_wrong_tenant():
         password_hash="hash",
         role_names=["viewer"],
     )
-    session.flush()
+    await session.flush()
 
     # Looking up with tenant B's ID should return None
-    result = get_user_by_id(session, tenant_id=tenant_b, user_id=user_a.id)
+    result = await get_user_by_id(session, tenant_id=tenant_b, user_id=user_a.id)
 
     assert result is None, (
         f"get_user_by_id should return None for a different tenant, got {result!r}"
     )
-    session.close()
+    await session.close()
+    await engine.dispose()
 
 
-def test_get_user_by_id_returns_user_for_correct_tenant():
+@pytest.mark.asyncio
+async def test_get_user_by_id_returns_user_for_correct_tenant():
     """get_user_by_id(tenant_id=X) returns the user when tenant matches."""
     from db.repositories.identity import create_user, get_user_by_id
 
-    session = _make_session()
-    _seed_roles(session)
+    session, engine = await _make_async_session()
+    await _seed_roles_async(session)
 
     tenant_id = uuid4()
-    user = create_user(
+    user = await create_user(
         session=session,
         tenant_id=tenant_id,
         username="bob",
@@ -292,13 +341,14 @@ def test_get_user_by_id_returns_user_for_correct_tenant():
         password_hash="hash",
         role_names=["viewer"],
     )
-    session.flush()
+    await session.flush()
 
-    result = get_user_by_id(session, tenant_id=tenant_id, user_id=user.id)
+    result = await get_user_by_id(session, tenant_id=tenant_id, user_id=user.id)
 
     assert result is not None
     assert result.id == user.id
-    session.close()
+    await session.close()
+    await engine.dispose()
 
 
 # ── Issue 7: _touch_project_from_run must not accept a `run` parameter ─────────
@@ -318,15 +368,16 @@ def test_touch_project_from_run_has_no_run_parameter():
 # ── Issue 8: _table_exists must not query the DB on every create_run ───────────
 
 
-def test_table_exists_only_called_once_across_multiple_create_runs():
+@pytest.mark.asyncio
+async def test_table_exists_only_called_once_across_multiple_create_runs():
     """_table_exists result is cached; the DB introspection fires at most once."""
     import db.repositories.project_runs as pr
 
-    session = _make_session()
-    _seed_roles(session)
+    session, engine = await _make_async_session()
+    await _seed_roles_async(session)
     tenant_id = uuid4()
-    project = _make_project(session, tenant_id)
-    session.flush()
+    project = await _make_project_async(session, tenant_id)
+    await session.flush()
 
     # Clear any stale cache from earlier tests
     if hasattr(pr, "_table_existence_cache"):
@@ -335,35 +386,37 @@ def test_table_exists_only_called_once_across_multiple_create_runs():
     call_count = [0]
     real_table_exists = pr._table_exists
 
-    def counting_table_exists(sess, table_name):
+    async def counting_table_exists(sess, table_name):
         call_count[0] += 1
-        return real_table_exists(sess, table_name)
+        return await real_table_exists(sess, table_name)
 
     with mock.patch.object(pr, "_table_exists", side_effect=counting_table_exists):
-        pr.create_run(session=session, tenant_id=tenant_id, project_id=project.id)
-        pr.create_run(session=session, tenant_id=tenant_id, project_id=project.id)
+        await pr.create_run(session=session, tenant_id=tenant_id, project_id=project.id)
+        await pr.create_run(session=session, tenant_id=tenant_id, project_id=project.id)
 
     assert call_count[0] <= 1, (
         f"_table_exists was called {call_count[0]} times across 2 create_run calls; "
         "expected ≤1 (result should be cached)"
     )
-    session.close()
+    await session.close()
+    await engine.dispose()
 
 
 # ── Issue 8b: replace_run_usage_metrics must update existing rows in place ───────
 
 
-def test_replace_run_usage_metrics_updates_existing_rows_without_unique_conflict():
+@pytest.mark.asyncio
+async def test_replace_run_usage_metrics_updates_existing_rows_without_unique_conflict():
     """Replacing usage metrics on an existing run must not create duplicate metric_name rows."""
     import db.repositories.project_runs as pr
     from db.models.runs import RunStatusDb
 
-    session = _make_session()
-    _seed_roles(session)
+    session, engine = await _make_async_session()
+    await _seed_roles_async(session)
     tenant_id = uuid4()
-    project = _make_project(session, tenant_id)
+    project = await _make_project_async(session, tenant_id)
 
-    run = pr.create_run(
+    run = await pr.create_run(
         session=session,
         tenant_id=tenant_id,
         project_id=project.id,
@@ -375,21 +428,22 @@ def test_replace_run_usage_metrics_updates_existing_rows_without_unique_conflict
             "output_type": "report",
         },
     )
-    session.flush()
+    # Do not flush here — create_run already flushed; an extra flush would expire
+    # the in-memory collections and require a lazy reload (not supported in async context).
 
     updated_usage = dict(pr.get_run_usage_metrics(run))
     updated_usage["evidence_snippets"] = 20
     updated_usage["job_type"] = "research.run"
 
     pr.replace_run_usage_metrics(run, updated_usage)
-    session.flush()
 
     refreshed = pr.get_run_usage_metrics(run)
     assert refreshed["job_type"] == "research.run"
     assert refreshed["evidence_snippets"] == 20
     metric_names = sorted(row.metric_name for row in run.usage_metrics)
     assert metric_names.count("job_type") == 1
-    session.close()
+    await session.close()
+    await engine.dispose()
 
 
 # ── Issue 9: get_last_action timestamps must not swap when created_at is None ──

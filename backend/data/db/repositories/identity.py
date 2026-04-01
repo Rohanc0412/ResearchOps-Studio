@@ -4,7 +4,8 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import attributes, selectinload
 
 from db.models.auth_mfa_factors import AuthMfaFactorRow
 from db.models.auth_password_resets import AuthPasswordResetRow
@@ -15,16 +16,16 @@ from db.models.roles import RoleRow, UserRoleRow
 DEFAULT_ROLE_NAMES = ("owner", "admin", "researcher", "viewer")
 
 
-def ensure_default_roles(session: Session) -> None:
-    existing = {row[0] for row in session.execute(select(RoleRow.name)).all()}
+async def ensure_default_roles(session: AsyncSession) -> None:
+    existing = {row[0] for row in (await session.execute(select(RoleRow.name))).all()}
     for role_name in DEFAULT_ROLE_NAMES:
         if role_name in existing:
             continue
         session.add(RoleRow(name=role_name, description=f"Built-in {role_name} role"))
 
 
-def assign_roles(session: Session, user: AuthUserRow, role_names: list[str]) -> None:
-    ensure_default_roles(session)
+async def assign_roles(session: AsyncSession, user: AuthUserRow, role_names: list[str]) -> None:
+    await ensure_default_roles(session)
     unique = []
     seen: set[str] = set()
     for value in role_names:
@@ -33,19 +34,24 @@ def assign_roles(session: Session, user: AuthUserRow, role_names: list[str]) -> 
             continue
         seen.add(role_name)
         unique.append(role_name)
-    user.user_roles = [
+    new_roles = [
         UserRoleRow(tenant_id=user.tenant_id, role_name=role_name)
         for role_name in unique
     ]
+    # Use set_committed_value to bypass lazy-load in async context: the collection
+    # is being replaced wholesale (not merged), so we can safely mark it as "loaded"
+    # with an empty list first, then assign the new rows without triggering a SELECT.
+    attributes.set_committed_value(user, "user_roles", [])
+    user.user_roles = new_roles
 
 
 def list_role_names(user: AuthUserRow) -> list[str]:
     return [link.role_name for link in sorted(user.user_roles, key=lambda row: row.role_name)]
 
 
-def create_user(
+async def create_user(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     username: str,
     email: str,
@@ -61,58 +67,58 @@ def create_user(
         is_active=is_active,
     )
     session.add(user)
-    session.flush()
-    assign_roles(session, user, role_names)
-    session.flush()
+    await session.flush()
+    await assign_roles(session, user, role_names)
+    await session.flush()
     return user
 
 
-def get_user_by_id(session: Session, *, tenant_id: UUID, user_id: UUID) -> AuthUserRow | None:
+async def get_user_by_id(session: AsyncSession, *, tenant_id: UUID, user_id: UUID) -> AuthUserRow | None:
     stmt = (
         select(AuthUserRow)
         .where(AuthUserRow.tenant_id == tenant_id, AuthUserRow.id == user_id)
         .options(selectinload(AuthUserRow.user_roles))
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_user_by_username(session: Session, *, username: str) -> AuthUserRow | None:
+async def get_user_by_username(session: AsyncSession, *, username: str) -> AuthUserRow | None:
     stmt = (
         select(AuthUserRow)
         .where(AuthUserRow.username == username)
         .options(selectinload(AuthUserRow.user_roles))
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_user_by_email(session: Session, *, email: str) -> AuthUserRow | None:
+async def get_user_by_email(session: AsyncSession, *, email: str) -> AuthUserRow | None:
     stmt = (
         select(AuthUserRow)
         .where(AuthUserRow.email == email)
         .options(selectinload(AuthUserRow.user_roles))
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_user_by_username_or_email(session: Session, *, value: str) -> AuthUserRow | None:
+async def get_user_by_username_or_email(session: AsyncSession, *, value: str) -> AuthUserRow | None:
     if "@" in value:
-        return get_user_by_email(session, email=value)
-    return get_user_by_username(session, username=value)
+        return await get_user_by_email(session, email=value)
+    return await get_user_by_username(session, username=value)
 
 
-def get_user_by_identity(
-    session: Session, *, tenant_id: UUID, username: str
+async def get_user_by_identity(
+    session: AsyncSession, *, tenant_id: UUID, username: str
 ) -> AuthUserRow | None:
     stmt = (
         select(AuthUserRow)
         .where(AuthUserRow.username == username, AuthUserRow.tenant_id == tenant_id)
         .options(selectinload(AuthUserRow.user_roles))
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def create_refresh_token(
-    session: Session,
+async def create_refresh_token(
+    session: AsyncSession,
     *,
     tenant_id: UUID,
     user_id: UUID,
@@ -126,13 +132,13 @@ def create_refresh_token(
         expires_at=expires_at,
     )
     session.add(row)
-    session.flush()
+    await session.flush()
     return row
 
 
-def get_refresh_token_by_hash(session: Session, *, token_hash: str) -> AuthRefreshTokenRow | None:
+async def get_refresh_token_by_hash(session: AsyncSession, *, token_hash: str) -> AuthRefreshTokenRow | None:
     stmt = select(AuthRefreshTokenRow).where(AuthRefreshTokenRow.token_hash == token_hash)
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 def revoke_refresh_token(row: AuthRefreshTokenRow, *, now: datetime) -> None:
@@ -140,8 +146,8 @@ def revoke_refresh_token(row: AuthRefreshTokenRow, *, now: datetime) -> None:
     row.last_used_at = now
 
 
-def revoke_refresh_tokens_for_user(session: Session, *, user_id: UUID, now: datetime) -> None:
-    session.execute(
+async def revoke_refresh_tokens_for_user(session: AsyncSession, *, user_id: UUID, now: datetime) -> None:
+    await session.execute(
         update(AuthRefreshTokenRow)
         .where(
             AuthRefreshTokenRow.user_id == user_id,
@@ -151,8 +157,8 @@ def revoke_refresh_tokens_for_user(session: Session, *, user_id: UUID, now: date
     )
 
 
-def create_password_reset(
-    session: Session,
+async def create_password_reset(
+    session: AsyncSession,
     *,
     tenant_id: UUID,
     user_id: UUID,
@@ -166,19 +172,19 @@ def create_password_reset(
         expires_at=expires_at,
     )
     session.add(row)
-    session.flush()
+    await session.flush()
     return row
 
 
-def get_password_reset_by_hash(
-    session: Session, *, token_hash: str
+async def get_password_reset_by_hash(
+    session: AsyncSession, *, token_hash: str
 ) -> AuthPasswordResetRow | None:
     stmt = select(AuthPasswordResetRow).where(AuthPasswordResetRow.token_hash == token_hash)
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_mfa_factor(
-    session: Session, *, user_id: UUID, enabled_only: bool = False
+async def get_mfa_factor(
+    session: AsyncSession, *, user_id: UUID, enabled_only: bool = False
 ) -> AuthMfaFactorRow | None:
     stmt = select(AuthMfaFactorRow).where(
         AuthMfaFactorRow.user_id == user_id,
@@ -186,11 +192,11 @@ def get_mfa_factor(
     )
     if enabled_only:
         stmt = stmt.where(AuthMfaFactorRow.enabled_at.is_not(None))
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def upsert_mfa_factor(session: Session, *, user: AuthUserRow, secret: str) -> AuthMfaFactorRow:
-    factor = get_mfa_factor(session, user_id=user.id, enabled_only=False)
+async def upsert_mfa_factor(session: AsyncSession, *, user: AuthUserRow, secret: str) -> AuthMfaFactorRow:
+    factor = await get_mfa_factor(session, user_id=user.id, enabled_only=False)
     if factor is None:
         factor = AuthMfaFactorRow(
             tenant_id=user.tenant_id,
@@ -203,12 +209,12 @@ def upsert_mfa_factor(session: Session, *, user: AuthUserRow, secret: str) -> Au
         factor.secret = secret
         factor.enabled_at = None
         factor.last_used_at = None
-    session.flush()
+    await session.flush()
     return factor
 
 
-def delete_mfa_factor(session: Session, factor: AuthMfaFactorRow) -> None:
-    session.delete(factor)
+async def delete_mfa_factor(session: AsyncSession, factor: AuthMfaFactorRow) -> None:
+    await session.delete(factor)
 
 
 __all__ = [

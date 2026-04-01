@@ -28,6 +28,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["../tests/backend"]
 addopts = "-q"
+asyncio_mode = "auto"
 
 [tool.black]
 line-length = 100

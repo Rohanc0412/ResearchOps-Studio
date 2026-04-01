@@ -18,6 +18,7 @@ from db.repositories.project_runs import create_project, create_run, patch_run_u
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 sys.modules.setdefault(
     "bcrypt",
@@ -29,25 +30,28 @@ sys.modules.setdefault(
 )
 
 
-def test_evaluation_history_is_append_only_across_passes() -> None:
+@pytest.mark.asyncio
+async def test_evaluation_history_is_append_only_across_passes() -> None:
     import db.models  # noqa: F401
     from db.models.base import Base
     from db.models.runs import RunStatusDb
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     tenant_id = UUID("00000000-0000-0000-0000-000000000001")
 
-    with SessionLocal() as session:  # type: Session
-        project = create_project(
+    async with AsyncSessionLocal() as session:
+        project = await create_project(
             session=session,
             tenant_id=tenant_id,
             name="Eval History",
             description=None,
             created_by="user-1",
         )
-        run = create_run(
+        run = await create_run(
             session=session,
             tenant_id=tenant_id,
             project_id=project.id,
@@ -55,13 +59,13 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
             question="Why did evaluation change?",
         )
 
-        pass_one = create_evaluation_pass(
+        pass_one = await create_evaluation_pass(
             session=session,
             tenant_id=tenant_id,
             run_id=run.id,
             scope="pipeline",
         )
-        record_evaluation_section_result(
+        await record_evaluation_section_result(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_one.id,
@@ -72,7 +76,7 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
             grounding_score=45,
             issues=[{"sentence_index": 0, "problem": "unsupported", "notes": "Missing evidence", "citations": []}],
         )
-        record_evaluation_section_result(
+        await record_evaluation_section_result(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_one.id,
@@ -83,7 +87,7 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
             grounding_score=88,
             issues=[],
         )
-        finalize_evaluation_pass(
+        await finalize_evaluation_pass(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_one.id,
@@ -93,13 +97,13 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
             issues_by_type={"unsupported": 1},
         )
 
-        pass_two = create_evaluation_pass(
+        pass_two = await create_evaluation_pass(
             session=session,
             tenant_id=tenant_id,
             run_id=run.id,
             scope="pipeline",
         )
-        record_evaluation_section_result(
+        await record_evaluation_section_result(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_two.id,
@@ -110,7 +114,7 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
             grounding_score=85,
             issues=[],
         )
-        record_evaluation_section_result(
+        await record_evaluation_section_result(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_two.id,
@@ -121,7 +125,7 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
             grounding_score=92,
             issues=[],
         )
-        finalize_evaluation_pass(
+        await finalize_evaluation_pass(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_two.id,
@@ -130,9 +134,9 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
             sections_total=2,
             issues_by_type={},
         )
-        session.commit()
+        await session.commit()
 
-        history = list_evaluation_pass_history(
+        history = await list_evaluation_pass_history(
             session=session,
             tenant_id=tenant_id,
             run_id=run.id,
@@ -144,6 +148,8 @@ def test_evaluation_history_is_append_only_across_passes() -> None:
         assert history[1]["pass_index"] == 1
         assert history[1]["sections_passed"] == 1
         assert history[1]["sections"][0]["verdict"] == "fail"
+
+    await engine.dispose()
 
 
 @pytest.fixture()

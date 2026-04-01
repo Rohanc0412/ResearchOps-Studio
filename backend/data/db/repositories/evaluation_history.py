@@ -6,7 +6,8 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from db.models.evaluation_pass_sections import EvaluationPassSectionRow
 from db.models.evaluation_passes import EvaluationPassRow
@@ -16,20 +17,20 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def create_evaluation_pass(
+async def create_evaluation_pass(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     scope: str,
 ) -> EvaluationPassRow:
-    max_index = session.execute(
+    max_index = (await session.execute(
         select(func.max(EvaluationPassRow.pass_index)).where(
             EvaluationPassRow.tenant_id == tenant_id,
             EvaluationPassRow.run_id == run_id,
             EvaluationPassRow.scope == scope,
         )
-    ).scalar_one()
+    )).scalar_one()
     row = EvaluationPassRow(
         tenant_id=tenant_id,
         run_id=run_id,
@@ -38,13 +39,13 @@ def create_evaluation_pass(
         status="running",
     )
     session.add(row)
-    session.flush()
+    await session.flush()
     return row
 
 
-def record_evaluation_section_result(
+async def record_evaluation_section_result(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     evaluation_pass_id: UUID,
     section_id: str,
@@ -54,15 +55,13 @@ def record_evaluation_section_result(
     grounding_score: int | None,
     issues: list[dict[str, Any]],
 ) -> EvaluationPassSectionRow:
-    row = (
-        session.query(EvaluationPassSectionRow)
-        .filter(
+    row = (await session.execute(
+        select(EvaluationPassSectionRow).where(
             EvaluationPassSectionRow.tenant_id == tenant_id,
             EvaluationPassSectionRow.evaluation_pass_id == evaluation_pass_id,
             EvaluationPassSectionRow.section_id == section_id,
         )
-        .one_or_none()
-    )
+    )).scalar_one_or_none()
     if row is None:
         row = EvaluationPassSectionRow(
             tenant_id=tenant_id,
@@ -76,13 +75,13 @@ def record_evaluation_section_result(
     row.verdict = verdict
     row.grounding_score = grounding_score
     row.issues_json = list(issues or [])
-    session.flush()
+    await session.flush()
     return row
 
 
-def finalize_evaluation_pass(
+async def finalize_evaluation_pass(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     evaluation_pass_id: UUID,
     grounding_pct: int | None = None,
@@ -92,14 +91,12 @@ def finalize_evaluation_pass(
     issues_by_type: dict[str, int] | None = None,
     status: str = "complete",
 ) -> EvaluationPassRow:
-    row = (
-        session.query(EvaluationPassRow)
-        .filter(
+    row = (await session.execute(
+        select(EvaluationPassRow).where(
             EvaluationPassRow.tenant_id == tenant_id,
             EvaluationPassRow.id == evaluation_pass_id,
         )
-        .one()
-    )
+    )).scalar_one()
     row.status = status
     row.grounding_pct = grounding_pct
     row.faithfulness_pct = faithfulness_pct
@@ -108,13 +105,13 @@ def finalize_evaluation_pass(
     row.issues_by_type_json = dict(issues_by_type or {})
     row.completed_at = _utcnow()
     row.updated_at = _utcnow()
-    session.flush()
+    await session.flush()
     return row
 
 
-def list_evaluation_pass_history(
+async def list_evaluation_pass_history(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     include_running: bool = False,
@@ -131,7 +128,7 @@ def list_evaluation_pass_history(
     if not include_running:
         stmt = stmt.where(EvaluationPassRow.status == "complete")
 
-    passes = session.execute(stmt).scalars().all()
+    passes = (await session.execute(stmt)).scalars().all()
     history: list[dict[str, Any]] = []
     for evaluation_pass in passes:
         sections = sorted(

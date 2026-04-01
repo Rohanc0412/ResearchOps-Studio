@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.chat_conversations import ChatConversationRow
 from db.models.chat_messages import ChatMessageRow
@@ -23,9 +23,9 @@ def _coerce_utc(value: datetime | None) -> datetime:
     return value.astimezone(UTC)
 
 
-def create_conversation(
+async def create_conversation(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID | None,
     created_by_user_id: str,
@@ -42,13 +42,13 @@ def create_conversation(
         last_message_at=None,
     )
     session.add(row)
-    session.flush()
+    await session.flush()
     return row
 
 
-def get_conversation(
+async def get_conversation(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     conversation_id: UUID,
     for_update: bool = False,
@@ -59,12 +59,12 @@ def get_conversation(
     )
     if for_update:
         stmt = stmt.with_for_update()
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_conversation_for_user(
+async def get_conversation_for_user(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     conversation_id: UUID,
     created_by_user_id: str,
@@ -77,12 +77,12 @@ def get_conversation_for_user(
     )
     if for_update:
         stmt = stmt.with_for_update()
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def list_conversations(
+async def list_conversations(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID | None,
     limit: int,
@@ -101,12 +101,12 @@ def list_conversations(
             | ((sort_ts == cursor_ts) & (ChatConversationRow.id < cursor_id))
         )
     stmt = stmt.order_by(sort_ts.desc(), ChatConversationRow.id.desc()).limit(limit)
-    return list(session.execute(stmt).scalars().all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
-def list_conversations_for_user(
+async def list_conversations_for_user(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     created_by_user_id: str,
     project_id: UUID | None,
@@ -127,12 +127,12 @@ def list_conversations_for_user(
             | ((sort_ts == cursor_ts) & (ChatConversationRow.id < cursor_id))
         )
     stmt = stmt.order_by(sort_ts.desc(), ChatConversationRow.id.desc()).limit(limit)
-    return list(session.execute(stmt).scalars().all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
-def list_messages(
+async def list_messages(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     conversation_id: UUID,
     limit: int,
@@ -149,19 +149,19 @@ def list_messages(
             | ((ChatMessageRow.created_at == cursor_ts) & (ChatMessageRow.id > cursor_id))
         )
     stmt = stmt.order_by(ChatMessageRow.created_at.asc(), ChatMessageRow.role.desc(), ChatMessageRow.id.asc()).limit(limit)
-    return list(session.execute(stmt).scalars().all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
-def get_message_by_id(*, session: Session, tenant_id: UUID, message_id: UUID) -> ChatMessageRow | None:
+async def get_message_by_id(*, session: AsyncSession, tenant_id: UUID, message_id: UUID) -> ChatMessageRow | None:
     stmt = select(ChatMessageRow).where(
         ChatMessageRow.tenant_id == tenant_id, ChatMessageRow.id == message_id
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_message_by_client_id(
+async def get_message_by_client_id(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     conversation_id: UUID,
     client_message_id: str,
@@ -171,12 +171,12 @@ def get_message_by_client_id(
         ChatMessageRow.conversation_id == conversation_id,
         ChatMessageRow.client_message_id == client_message_id,
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def create_message(
+async def create_message(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     conversation_id: UUID,
     role: str,
@@ -199,7 +199,7 @@ def create_message(
         created_at=created_at or _now_utc(),
     )
     session.add(row)
-    session.flush()
+    await session.flush()
     return row
 
 

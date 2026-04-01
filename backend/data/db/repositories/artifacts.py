@@ -3,15 +3,15 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import Select, and_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import ArtifactRow, ProjectRow
 from db.repositories.project_runs import get_project, get_run
 
 
-def create_artifact(
+async def create_artifact(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID,
     run_id: UUID | None,
@@ -21,12 +21,12 @@ def create_artifact(
     size_bytes: int | None = None,
     metadata_json: dict | None = None,
 ) -> ArtifactRow:
-    project = get_project(session=session, tenant_id=tenant_id, project_id=project_id)
+    project = await get_project(session=session, tenant_id=tenant_id, project_id=project_id)
     if project is None:
         raise ValueError("project not found")
 
     if run_id is not None:
-        run = get_run(session=session, tenant_id=tenant_id, run_id=run_id)
+        run = await get_run(session=session, tenant_id=tenant_id, run_id=run_id)
         if run is None:
             raise ValueError("run not found")
         if run.project_id != project_id:
@@ -43,13 +43,13 @@ def create_artifact(
         metadata_json=metadata_json or {},
     )
     session.add(row)
-    session.flush()
+    await session.flush()
     return row
 
 
-def list_artifacts(
+async def list_artifacts(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID | None = None,
     run_id: UUID | None = None,
@@ -61,12 +61,12 @@ def list_artifacts(
     if run_id is not None:
         stmt = stmt.where(ArtifactRow.run_id == run_id)
     stmt = stmt.order_by(ArtifactRow.created_at.desc()).limit(limit)
-    return list(session.execute(stmt).scalars().all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
-def get_artifact_for_user(
+async def get_artifact_for_user(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     artifact_id: UUID,
     created_by: str,
@@ -86,7 +86,7 @@ def get_artifact_for_user(
             ProjectRow.created_by == created_by,
         )
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 __all__ = ["create_artifact", "get_artifact_for_user", "list_artifacts"]

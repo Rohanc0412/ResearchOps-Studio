@@ -4,6 +4,7 @@ import json
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
 from llm import LLMError
 
 
@@ -502,7 +503,8 @@ def test_finalize_step_yields_complete_event_with_issue_counts():
     session.flush.assert_called_once()
 
 
-def test_runner_persists_running_status_before_completion(tmp_path):
+@pytest.mark.asyncio
+async def test_runner_persists_running_status_before_completion(tmp_path):
     from app_services.evaluation_runner import EvaluationRunner
     import db.models  # noqa: F401
     from db.models.base import Base
@@ -510,34 +512,36 @@ def test_runner_persists_running_status_before_completion(tmp_path):
     from db.models.run_usage_metrics import RunUsageMetricRow
     from db.models.runs import RunStatusDb
     from db.repositories.project_runs import create_project, create_run
-    from sqlalchemy import create_engine
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
-    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'evaluation_runner_visibility.db'}", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'evaluation_runner_visibility.db'}", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     tenant_id = uuid4()
 
-    with SessionLocal() as session:
-        project = create_project(
+    async with AsyncSessionLocal() as session:
+        project = await create_project(
             session=session,
             tenant_id=tenant_id,
             name="Evaluation Progress Visibility",
             description=None,
             created_by="user-1",
         )
-        run = create_run(
+        run = await create_run(
             session=session,
             tenant_id=tenant_id,
             project_id=project.id,
             status=RunStatusDb.succeeded,
             question="Why is evaluation progress stale?",
         )
-        session.commit()
+        await session.commit()
         run_id = run.id
 
-    with SessionLocal() as writer_session:
+    async with AsyncSessionLocal() as writer_session:
         runner = EvaluationRunner(session=writer_session, tenant_id=tenant_id, run_id=run_id)
         event_stream = runner.run()
 
@@ -548,26 +552,24 @@ def test_runner_persists_running_status_before_completion(tmp_path):
         assert step_event["type"] == "evaluation.step"
         assert step_event["step"] == 1
 
-        with SessionLocal() as reader_session:
-            evaluation_pass = (
-                reader_session.query(EvaluationPassRow)
-                .filter(
+        async with AsyncSessionLocal() as reader_session:
+            evaluation_pass = (await reader_session.execute(
+                select(EvaluationPassRow).where(
                     EvaluationPassRow.tenant_id == tenant_id,
                     EvaluationPassRow.run_id == run_id,
                 )
-                .one_or_none()
-            )
-            status_metric = (
-                reader_session.query(RunUsageMetricRow)
-                .filter(
+            )).scalar_one_or_none()
+            status_metric = (await reader_session.execute(
+                select(RunUsageMetricRow).where(
                     RunUsageMetricRow.tenant_id == tenant_id,
                     RunUsageMetricRow.run_id == run_id,
                     RunUsageMetricRow.metric_name == "eval_status",
                 )
-                .one_or_none()
-            )
+            )).scalar_one_or_none()
 
             assert evaluation_pass is not None
             assert evaluation_pass.status == "running"
             assert status_metric is not None
             assert status_metric.metric_text == "running"
+
+    await engine.dispose()

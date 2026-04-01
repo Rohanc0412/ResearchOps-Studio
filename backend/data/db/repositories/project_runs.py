@@ -5,7 +5,8 @@ from uuid import UUID
 
 from sqlalchemy import Select, and_, func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import attributes
 
 from db.models import ProjectRow, RunEventRow, RunRow
 from db.models.run_budget_limits import RunBudgetLimitRow
@@ -19,9 +20,9 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def create_project(
+async def create_project(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     name: str,
     description: str | None,
@@ -35,24 +36,24 @@ def create_project(
     )
     session.add(row)
     try:
-        session.flush()
+        await session.flush()
     except IntegrityError as exc:
         raise ValueError("project name already exists for tenant") from exc
     return row
 
 
-def list_projects(*, session: Session, tenant_id: UUID, limit: int = 200) -> list[ProjectRow]:
+async def list_projects(*, session: AsyncSession, tenant_id: UUID, limit: int = 200) -> list[ProjectRow]:
     stmt = (
         select(ProjectRow)
         .where(ProjectRow.tenant_id == tenant_id)
         .order_by(ProjectRow.updated_at.desc(), ProjectRow.created_at.desc())
         .limit(limit)
     )
-    return list(session.execute(stmt).scalars().all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
-def list_projects_for_user(
-    *, session: Session, tenant_id: UUID, created_by: str, limit: int = 200
+async def list_projects_for_user(
+    *, session: AsyncSession, tenant_id: UUID, created_by: str, limit: int = 200
 ) -> list[ProjectRow]:
     stmt = (
         select(ProjectRow)
@@ -60,23 +61,23 @@ def list_projects_for_user(
         .order_by(ProjectRow.updated_at.desc(), ProjectRow.created_at.desc())
         .limit(limit)
     )
-    return list(session.execute(stmt).scalars().all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
-def get_project(*, session: Session, tenant_id: UUID, project_id: UUID) -> ProjectRow | None:
+async def get_project(*, session: AsyncSession, tenant_id: UUID, project_id: UUID) -> ProjectRow | None:
     stmt = select(ProjectRow).where(ProjectRow.tenant_id == tenant_id, ProjectRow.id == project_id)
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_project_for_user(
-    *, session: Session, tenant_id: UUID, project_id: UUID, created_by: str
+async def get_project_for_user(
+    *, session: AsyncSession, tenant_id: UUID, project_id: UUID, created_by: str
 ) -> ProjectRow | None:
     stmt = select(ProjectRow).where(
         ProjectRow.tenant_id == tenant_id,
         ProjectRow.id == project_id,
         ProjectRow.created_by == created_by,
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 def replace_run_budget_limits(run: RunRow, budgets: dict | None) -> None:
@@ -90,6 +91,8 @@ def replace_run_budget_limits(run: RunRow, budgets: dict | None) -> None:
         for key, value in (budgets or {}).items()
         if value is not None
     ]
+    # Use set_committed_value to avoid lazy-loading the existing collection in async context.
+    attributes.set_committed_value(run, "budget_limits", [])
     run.budget_limits = rows
 
 
@@ -144,9 +147,9 @@ def get_run_usage_metrics(run: RunRow) -> dict[str, object]:
     return payload
 
 
-def create_run(
+async def create_run(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     project_id: UUID,
     status: RunStatusDb = RunStatusDb.queued,
@@ -157,7 +160,7 @@ def create_run(
     budgets: dict | None = None,
     usage: dict | None = None,
 ) -> RunRow:
-    project = get_project(session=session, tenant_id=tenant_id, project_id=project_id)
+    project = await get_project(session=session, tenant_id=tenant_id, project_id=project_id)
     if project is None:
         raise ValueError("project not found")
 
@@ -174,15 +177,20 @@ def create_run(
         updated_at=now,
     )
     session.add(run)
-    session.flush()
+    await session.flush()
+    # Pre-initialize relationship collections as empty so that replace_* helpers
+    # can assign to them without triggering lazy-load SELECTs in async context.
+    attributes.set_committed_value(run, "budget_limits", [])
+    attributes.set_committed_value(run, "usage_metrics", [])
     replace_run_budget_limits(run, budgets or {})
     replace_run_usage_metrics(run, usage or {})
     # Consult the module-level cache first so the DB introspection only fires once per
     # engine lifetime, not on every create_run call.
-    _engine_id = id(session.connection().engine)
+    conn = await session.connection()
+    _engine_id = id(conn.engine)
     _has_transitions = (
         _table_existence_cache.get(_engine_id, {}).get("run_status_transitions")
-        or _table_exists(session, "run_status_transitions")
+        or await _table_exists(session, "run_status_transitions")
     )
     if _has_transitions:
         _record_status_transition(
@@ -193,19 +201,19 @@ def create_run(
             to_status=run.status.value,
             stage=current_stage,
         )
-    _touch_project_from_run(
+    await _touch_project_from_run(
         session=session, project_id=project_id, tenant_id=tenant_id, now=now
     )
     return run
 
 
-def get_run(*, session: Session, tenant_id: UUID, run_id: UUID) -> RunRow | None:
+async def get_run(*, session: AsyncSession, tenant_id: UUID, run_id: UUID) -> RunRow | None:
     stmt = select(RunRow).where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_run_for_user(
-    *, session: Session, tenant_id: UUID, run_id: UUID, created_by: str
+async def get_run_for_user(
+    *, session: AsyncSession, tenant_id: UUID, run_id: UUID, created_by: str
 ) -> RunRow | None:
     stmt = (
         select(RunRow)
@@ -222,11 +230,11 @@ def get_run_for_user(
             ProjectRow.created_by == created_by,
         )
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_latest_report_title(
-    *, session: Session, tenant_id: UUID, project_id: UUID
+async def get_latest_report_title(
+    *, session: AsyncSession, tenant_id: UUID, project_id: UUID
 ) -> str | None:
     stmt = (
         select(RunRow.report_title)
@@ -239,23 +247,23 @@ def get_latest_report_title(
         .order_by(RunRow.finished_at.desc())
         .limit(1)
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_run_by_client_request_id(
-    *, session: Session, tenant_id: UUID, project_id: UUID, client_request_id: str
+async def get_run_by_client_request_id(
+    *, session: AsyncSession, tenant_id: UUID, project_id: UUID, client_request_id: str
 ) -> RunRow | None:
     stmt = select(RunRow).where(
         RunRow.tenant_id == tenant_id,
         RunRow.project_id == project_id,
         RunRow.client_request_id == client_request_id,
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def append_run_event(
+async def append_run_event(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     level: RunEventLevelDb,
@@ -272,7 +280,7 @@ def append_run_event(
         .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
         .with_for_update()
     )
-    run = session.execute(_lock_stmt).scalar_one_or_none()
+    run = (await session.execute(_lock_stmt)).scalar_one_or_none()
     if run is None:
         raise ValueError("run not found")
     if not allow_finished and run.status in {
@@ -284,10 +292,12 @@ def append_run_event(
 
     now = _now_utc()
     next_event_number = (
-        session.execute(
-            select(func.coalesce(func.max(RunEventRow.event_number), 0) + 1).where(
-                RunEventRow.tenant_id == tenant_id,
-                RunEventRow.run_id == run_id,
+        (
+            await session.execute(
+                select(func.coalesce(func.max(RunEventRow.event_number), 0) + 1).where(
+                    RunEventRow.tenant_id == tenant_id,
+                    RunEventRow.run_id == run_id,
+                )
             )
         ).scalar_one()
         or 1
@@ -309,16 +319,16 @@ def append_run_event(
         run.current_stage = stage
         run.updated_at = now
 
-    _touch_project_from_run(
+    await _touch_project_from_run(
         session=session, project_id=run.project_id, tenant_id=tenant_id, now=now
     )
-    session.flush()
+    await session.flush()
     return row
 
 
-def list_run_events(
+async def list_run_events(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
     limit: int = 1000,
@@ -330,13 +340,13 @@ def list_run_events(
     if after_event_number is not None:
         stmt = stmt.where(RunEventRow.event_number > after_event_number)
     stmt = stmt.order_by(RunEventRow.event_number.asc()).limit(limit)
-    return list(session.execute(stmt).scalars().all())
+    return list((await session.execute(stmt)).scalars().all())
 
 
-def _touch_project_from_run(
-    *, session: Session, tenant_id: UUID, project_id: UUID, now: datetime
+async def _touch_project_from_run(
+    *, session: AsyncSession, tenant_id: UUID, project_id: UUID, now: datetime
 ) -> None:
-    session.execute(
+    await session.execute(
         update(ProjectRow)
         .where(ProjectRow.tenant_id == tenant_id, ProjectRow.id == project_id)
         .values(updated_at=now)
@@ -345,7 +355,7 @@ def _touch_project_from_run(
 
 def _record_status_transition(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     run: RunRow,
     from_status: str | None,
@@ -370,15 +380,17 @@ def _record_status_transition(
 _table_existence_cache: dict[int, dict[str, bool]] = {}
 
 
-def _table_exists(session: Session, table_name: str) -> bool:
-    conn = session.connection()
+async def _table_exists(session: AsyncSession, table_name: str) -> bool:
+    conn = await session.connection()
     if conn is None:
         return False
     engine_id = id(conn.engine)
     engine_cache = _table_existence_cache.setdefault(engine_id, {})
     if table_name in engine_cache:
         return engine_cache[table_name]
-    result = conn.dialect.has_table(conn, table_name)
+    result = await conn.run_sync(
+        lambda sync_conn: sync_conn.dialect.has_table(sync_conn, table_name)
+    )
     if result:
         engine_cache[table_name] = True
     return result

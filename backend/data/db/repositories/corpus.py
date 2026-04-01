@@ -5,7 +5,8 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from db.models.source_authors import SourceAuthorRow
 from db.models.source_identifiers import SourceIdentifierRow
@@ -73,29 +74,29 @@ def set_source_identifier(
     source.identifiers = rows
 
 
-def get_source(session: Session, *, tenant_id: UUID, source_id: UUID) -> SourceRow | None:
+async def get_source(session: AsyncSession, *, tenant_id: UUID, source_id: UUID) -> SourceRow | None:
     stmt = (
         select(SourceRow)
         .where(SourceRow.tenant_id == tenant_id, SourceRow.id == source_id)
         .options(selectinload(SourceRow.authors), selectinload(SourceRow.identifiers))
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def get_source_by_canonical_id(
-    session: Session, *, tenant_id: UUID, canonical_id: str
+async def get_source_by_canonical_id(
+    session: AsyncSession, *, tenant_id: UUID, canonical_id: str
 ) -> SourceRow | None:
     stmt = (
         select(SourceRow)
         .where(SourceRow.tenant_id == tenant_id, SourceRow.canonical_id == canonical_id)
         .options(selectinload(SourceRow.authors), selectinload(SourceRow.identifiers))
     )
-    return session.execute(stmt).scalar_one_or_none()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def create_or_get_source(
+async def create_or_get_source(
     *,
-    session: Session,
+    session: AsyncSession,
     tenant_id: UUID,
     canonical_id: str,
     source_type: str,
@@ -110,7 +111,7 @@ def create_or_get_source(
     arxiv_id: str | None = None,
     metadata: dict | None = None,
 ) -> SourceRow:
-    existing = get_source_by_canonical_id(session, tenant_id=tenant_id, canonical_id=canonical_id)
+    existing = await get_source_by_canonical_id(session, tenant_id=tenant_id, canonical_id=canonical_id)
     now = _now_utc()
     metadata_json = dict(metadata or {})
 
@@ -159,7 +160,7 @@ def create_or_get_source(
                 updated = True
         if updated:
             existing.updated_at = now
-            session.flush()
+            await session.flush()
         return existing
 
     source = SourceRow(
@@ -178,19 +179,19 @@ def create_or_get_source(
     )
     try:
         session.add(source)
-        session.flush()
+        await session.flush()
     except IntegrityError:
         # Another worker inserted the same canonical_id concurrently.
         # Roll back to the savepoint and return the row they inserted.
-        session.rollback()
-        race_winner = get_source_by_canonical_id(session, tenant_id=tenant_id, canonical_id=canonical_id)
+        await session.rollback()
+        race_winner = await get_source_by_canonical_id(session, tenant_id=tenant_id, canonical_id=canonical_id)
         if race_winner is None:
             raise  # genuine integrity error unrelated to this insert
         return race_winner
     replace_source_authors(source, authors)
     set_source_identifier(source, "doi", doi)
     set_source_identifier(source, "arxiv_id", arxiv_id)
-    session.flush()
+    await session.flush()
     return source
 
 

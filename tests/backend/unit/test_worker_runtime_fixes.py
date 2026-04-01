@@ -92,29 +92,52 @@ def test_recover_orphaned_jobs_marks_running_jobs_and_runs_failed(session):
     assert "orphaned" in refreshed_run.failure_reason.lower()
 
 
-def test_stage_start_event_updates_run_current_stage(session):
-    tenant_id, project = _make_project(session)
-    run = RunRow(
-        tenant_id=tenant_id,
-        project_id=project.id,
-        status=RunStatusDb.running,
-        current_stage="retrieve",
-        question="advance stages",
-    )
-    session.add(run)
-    session.flush()
+@pytest.mark.asyncio
+async def test_stage_start_event_updates_run_current_stage():
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+    from db.repositories.project_runs import append_run_event
 
-    pipeline_events.emit_run_event(
-        session=session,
-        tenant_id=tenant_id,
-        run_id=run.id,
-        event_type="stage_start",
-        stage="outline",
-        message="Starting stage: outline",
-        data={"iteration": 0},
-    )
-    session.flush()
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-    refreshed_run = session.execute(select(RunRow).where(RunRow.id == run.id)).scalar_one()
-    assert refreshed_run.current_stage == "outline"
+    async with AsyncSessionLocal() as session:
+        for name in ("owner", "admin", "researcher", "viewer"):
+            session.add(RoleRow(name=name, description=f"Built-in {name}"))
+        await session.flush()
+
+        tenant_id = uuid4()
+        project = ProjectRow(tenant_id=tenant_id, name=f"proj-{uuid4()}", created_by="tester")
+        session.add(project)
+        await session.flush()
+
+        run = RunRow(
+            tenant_id=tenant_id,
+            project_id=project.id,
+            status=RunStatusDb.running,
+            current_stage="retrieve",
+            question="advance stages",
+        )
+        session.add(run)
+        await session.flush()
+
+        await append_run_event(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            level=RunEventLevelDb.info,
+            event_type="stage_start",
+            stage="outline",
+            message="Starting stage: outline",
+            payload_json={"iteration": 0},
+            allow_finished=False,
+        )
+        await session.flush()
+
+        refreshed_run = (await session.execute(select(RunRow).where(RunRow.id == run.id))).scalar_one()
+        assert refreshed_run.current_stage == "outline"
+
+    await engine.dispose()
 
