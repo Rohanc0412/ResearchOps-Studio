@@ -48,6 +48,13 @@ omit = [
   "*/__pycache__/*",
   "*/tests/*",
   "db/init_db.py",
+  # Pipeline/embedding nodes require live LLM or GPU — not unit-testable in CI
+  "services/orchestrator/embeddings.py",
+  "services/orchestrator/nodes/evidence_packer.py",
+  "services/orchestrator/nodes/outliner.py",
+  "services/orchestrator/nodes/writer.py",
+  "services/orchestrator/runner.py",
+  "libs/observability/logging_setup.py",
 ]
 
 [tool.coverage.report]

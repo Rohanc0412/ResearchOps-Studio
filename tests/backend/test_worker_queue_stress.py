@@ -87,6 +87,15 @@ def engine():
     eng.dispose()
 
 
+@pytest.fixture(autouse=True)
+def clean_tables(engine):
+    """Truncate all queue-related tables before every test so committed data
+    from one test never leaks into the next."""
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE jobs, runs, projects RESTART IDENTITY CASCADE"))
+    yield
+
+
 @pytest.fixture()
 def SessionLocal(engine):
     return sessionmaker(bind=engine)
