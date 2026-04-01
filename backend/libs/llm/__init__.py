@@ -83,6 +83,9 @@ class OpenAICompatibleClient:
     api_key: str
     model_name: str
     timeout_seconds: float = 60.0
+    # Populated after each generate() call — used by Langfuse instrumentation
+    last_prompt_tokens: int = 0
+    last_completion_tokens: int = 0
 
     def generate(
         self,
@@ -132,6 +135,9 @@ class OpenAICompatibleClient:
             raise LLMError(f"Hosted LLM request failed: {exc}") from exc
 
         data = response.json()
+        usage = data.get("usage") or {}
+        self.last_prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        self.last_completion_tokens = int(usage.get("completion_tokens") or 0)
         choices = data.get("choices", [])
         if not choices:
             raise LLMError("Hosted LLM response missing choices")
@@ -195,6 +201,9 @@ class OpenAICompatibleClient:
             raise LLMError(f"Hosted LLM request failed: {exc}") from exc
 
         data = response.json()
+        usage = data.get("usage") or {}
+        self.last_prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        self.last_completion_tokens = int(usage.get("completion_tokens") or 0)
         choices = data.get("choices", [])
         if not choices:
             raise LLMError("Hosted LLM response missing choices")
