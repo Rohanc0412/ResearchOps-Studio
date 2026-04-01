@@ -4,8 +4,7 @@ import json as _json
 import logging
 from uuid import UUID
 
-from db.models.runs import RunRow
-from db.repositories.project_runs import get_run_usage_metrics
+from db.repositories.project_runs import get_run, get_run_usage_metrics
 from embeddings import (
     get_embed_worker_pool,
     resolve_embed_device,
@@ -19,7 +18,6 @@ from embeddings import (
 )
 from observability.context import bind
 from runner import run_orchestrator
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 RESEARCH_JOB_TYPE = "research.run"
@@ -62,9 +60,7 @@ def _warm_local_embed_pool(*, llm_provider: str | None) -> None:
 
 async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id: UUID) -> None:
     """Process a full research run using the LangGraph pipeline."""
-    run = (await session.execute(
-        select(RunRow).where(RunRow.id == run_id, RunRow.tenant_id == tenant_id)
-    )).scalar_one_or_none()
+    run = await get_run(session=session, tenant_id=tenant_id, run_id=run_id)
     if run is None:
         raise ValueError("run not found")
 

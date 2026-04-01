@@ -449,6 +449,63 @@ async def test_replace_run_usage_metrics_updates_existing_rows_without_unique_co
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_process_research_run_loads_usage_metrics_without_async_lazy_load():
+    """process_research_run must not trigger a lazy-load on run.usage_metrics."""
+    import research
+    from sqlalchemy.exc import MissingGreenlet
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    class LazyRun:
+        @property
+        def usage_metrics(self):
+            raise MissingGreenlet(
+                "greenlet_spawn has not been called; can't call await_only() here."
+            )
+
+    class Metric:
+        def __init__(self, name: str, text: str | None = None, number: int | None = None):
+            self.metric_name = name
+            self.metric_text = text
+            self.metric_number = number
+
+    class EagerRun:
+        usage_metrics = [
+            Metric("user_query", "What are the latest advancements in LLM?"),
+            Metric("research_goal", "report"),
+            Metric("llm_provider", "hosted"),
+            Metric("llm_model", "gpt-5.4"),
+        ]
+
+    class ExecuteResult:
+        def scalar_one_or_none(self):
+            return LazyRun()
+
+    session = mock.MagicMock()
+
+    async def fake_execute(*args, **kwargs):
+        return ExecuteResult()
+
+    session.execute = mock.AsyncMock(side_effect=fake_execute)
+
+    async def fake_run_orchestrator(**kwargs):
+        assert kwargs["user_query"] == "What are the latest advancements in LLM?"
+        assert kwargs["llm_model"] == "gpt-5.4"
+
+    with (
+        mock.patch.object(research, "get_run", new=mock.AsyncMock(return_value=EagerRun()), create=True),
+        mock.patch.object(research, "run_orchestrator", side_effect=fake_run_orchestrator),
+        mock.patch.object(research, "_warm_local_embed_pool"),
+    ):
+        await research.process_research_run(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+        )
+
+
 # ── Issue 9: get_last_action timestamps must not swap when created_at is None ──
 
 

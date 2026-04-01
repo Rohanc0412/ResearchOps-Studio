@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 
 import httpx
@@ -38,7 +39,7 @@ def test_search_parses_cli_results(monkeypatch):
     assert results[0].authors == ["Alice Smith", "Bob Jones"]
     assert results[0].source_type == SourceType.PAPER
     assert results[1].source_type == SourceType.PREPRINT
-    assert calls[0][0] == "latest-science-mcp"
+    assert os.path.basename(calls[0][0]) == "latest-science-mcp"
     assert "search-papers" in calls[0]
 
 
