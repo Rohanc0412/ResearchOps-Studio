@@ -9,7 +9,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "strict": true,
-    "types": ["node"]
+    "types": ["node", "vitest"]
   },
   "include": ["vite.config.ts", "tailwind.config.ts"]
 }

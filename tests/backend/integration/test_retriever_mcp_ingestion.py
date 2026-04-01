@@ -116,7 +116,7 @@ def test_retriever_ingests_selected_papers(db_session, monkeypatch):
     )
 
     class FakeConnector:
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.sources = ["openalex"]
 
         def search(self, query: str, max_results: int):
@@ -190,7 +190,7 @@ def test_retriever_updates_authors_without_duplicate_order_conflict(
     fetched_source.authors = ["Alice Smith"]
 
     class FakeConnector:
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.sources = ["openalex"]
 
         def search(self, query: str, max_results: int):
@@ -253,7 +253,7 @@ def test_retriever_continues_when_selected_ingestion_fails(db_session, monkeypat
     ]
 
     class FakeConnector:
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.sources = ["openalex", "arxiv"]
 
         def search(self, query: str, max_results: int):

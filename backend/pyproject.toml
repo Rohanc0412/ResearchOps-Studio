@@ -39,3 +39,24 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+  "*/migrations/*",
+  "*/alembic/*",
+  "*/__pycache__/*",
+  "*/tests/*",
+  "db/init_db.py",
+]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+  "@(abc\\.)?abstractmethod",
+]

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Generator
 from uuid import UUID
 
@@ -373,7 +373,7 @@ class EvaluationRunner:
             )
             .one_or_none()
         )
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         if row:
             row.issues = []
             session.flush()
@@ -703,7 +703,7 @@ class EvaluationRunner:
                 problem = issue.get("problem", "unknown")
                 issues_by_type[problem] = issues_by_type.get(problem, 0) + 1
 
-        now_str = datetime.utcnow().isoformat()
+        now_str = datetime.now(UTC).isoformat()
         self._write_metric(METRIC_EVAL_STATUS, "complete")
         self._write_metric("eval_evaluated_at", now_str)
         self._write_metric("eval_sections_passed", sections_passed)

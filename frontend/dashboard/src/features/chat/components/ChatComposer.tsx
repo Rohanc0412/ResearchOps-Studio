@@ -66,6 +66,7 @@ export function ChatComposer({
             <select
               value={selectedModel}
               onChange={(event) => onSelectedModelChange(event.target.value)}
+              aria-label="LLM model"
               className="min-w-[220px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
             >
               {modelOptions.map((option) => (
@@ -79,6 +80,7 @@ export function ChatComposer({
                 value={customModel}
                 onChange={(event) => onCustomModelChange(event.target.value)}
                 placeholder="Enter model id"
+                aria-label="Custom model ID"
                 className="min-w-[220px] flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-200 focus:border-emerald-500/50 focus:outline-none"
               />
             ) : null}
@@ -108,6 +110,7 @@ export function ChatComposer({
                 ? "Describe your research topic - report will run on send..."
                 : "Ask a question or request a report..."
             }
+            aria-label="Message input"
             rows={1}
             className="flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3.5 text-sm text-slate-200 outline-none transition-colors focus:border-emerald-500/50"
           />

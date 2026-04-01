@@ -148,7 +148,7 @@ def list_messages(
             (ChatMessageRow.created_at > cursor_ts)
             | ((ChatMessageRow.created_at == cursor_ts) & (ChatMessageRow.id > cursor_id))
         )
-    stmt = stmt.order_by(ChatMessageRow.created_at.asc(), ChatMessageRow.id.asc()).limit(limit)
+    stmt = stmt.order_by(ChatMessageRow.created_at.asc(), ChatMessageRow.role.desc(), ChatMessageRow.id.asc()).limit(limit)
     return list(session.execute(stmt).scalars().all())
 
 

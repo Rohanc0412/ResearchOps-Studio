@@ -14,8 +14,7 @@ from uuid import UUID, uuid4
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy import Column, DateTime, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, declarative_base
 
 Base = declarative_base()
 

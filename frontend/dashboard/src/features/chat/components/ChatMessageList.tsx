@@ -34,7 +34,13 @@ export function ChatMessageList({
   onAction,
 }: ChatMessageListProps) {
   return (
-    <div className="flex-1 overflow-y-auto p-6">
+    <div
+      className="flex-1 overflow-y-auto p-6"
+      role="log"
+      aria-live="polite"
+      aria-label="Chat messages"
+      aria-relevant="additions"
+    >
       {messages.map((message) => {
         const isUser = message.role === "user";
         const isOffer = message.type === "pipeline_offer";

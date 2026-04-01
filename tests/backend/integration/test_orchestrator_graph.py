@@ -19,6 +19,8 @@ from core.orchestrator.state import (
     OrchestratorState,
 )
 from db.init_db import init_db
+from db.models.projects import ProjectRow
+from db.models.runs import RunRow, RunStatusDb
 from graph import create_orchestrator_graph
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -55,7 +57,27 @@ def test_run():
     return tenant_id, run_id
 
 
-def test_outliner_creates_structure(db_session, test_run, monkeypatch):
+@pytest.fixture
+def db_run(db_session):
+    """Create test IDs and insert matching ProjectRow + RunRow into db_session."""
+    tenant_id = uuid4()
+    run_id = uuid4()
+    project = ProjectRow(tenant_id=tenant_id, name="Test Project", created_by="test")
+    db_session.add(project)
+    db_session.flush()
+    run = RunRow(
+        id=run_id,
+        tenant_id=tenant_id,
+        project_id=project.id,
+        status=RunStatusDb.running,
+        question="test query",
+    )
+    db_session.add(run)
+    db_session.flush()
+    return tenant_id, run_id
+
+
+def test_outliner_creates_structure(db_session, db_run, monkeypatch):
     """Test that outliner creates ordered outline structure."""
     from nodes import outliner_node
 
@@ -146,11 +168,11 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
             )
 
     monkeypatch.setattr(
-        "nodes.outliner.get_llm_client",
+        "nodes.outliner.get_llm_client_for_stage",
         lambda *_args, **_kwargs: StubLLM(),
     )
 
-    tenant_id, run_id = test_run
+    tenant_id, run_id = db_run
 
     state = OrchestratorState(
         tenant_id=tenant_id,
@@ -169,13 +191,13 @@ def test_outliner_creates_structure(db_session, test_run, monkeypatch):
     assert section_ids[-1] == "conclusion"
 
 
-def test_evaluator_stops_on_success(db_session, test_run):
+def test_evaluator_stops_on_success(db_session, db_run):
     """Test that evaluator stops when no errors."""
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
     from nodes import evaluator_node
 
-    tenant_id, run_id = test_run
+    tenant_id, run_id = db_run
 
     class StubLLM:
         def generate(self, _prompt, **_kwargs):
@@ -225,20 +247,20 @@ def test_evaluator_stops_on_success(db_session, test_run):
 
     import nodes.evaluator as evaluator_module
 
-    evaluator_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
+    evaluator_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
     result = evaluator_node(state, db_session)
 
     assert result.evaluator_decision == EvaluatorDecision.STOP_SUCCESS
 
 
-def test_evaluator_continues_on_errors(db_session, test_run):
+def test_evaluator_continues_on_errors(db_session, db_run):
     """Test that evaluator routes failed sections to repair."""
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
     from nodes import evaluator_node
 
-    tenant_id, run_id = test_run
+    tenant_id, run_id = db_run
 
     class StubLLM:
         def generate(self, _prompt, **_kwargs):
@@ -299,20 +321,20 @@ def test_evaluator_continues_on_errors(db_session, test_run):
 
     import nodes.evaluator as evaluator_module
 
-    evaluator_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
+    evaluator_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
     result = evaluator_node(state, db_session)
 
     assert result.evaluator_decision == EvaluatorDecision.CONTINUE_REPAIR
 
 
-def test_evaluator_repairs_on_any_failed_section(db_session, test_run):
+def test_evaluator_repairs_on_any_failed_section(db_session, db_run):
     """A single failed section should trigger repair even if overall grounding remains high."""
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
     from nodes import evaluator_node
 
-    tenant_id, run_id = test_run
+    tenant_id, run_id = db_run
 
     responses = iter(
         [
@@ -413,7 +435,7 @@ def test_evaluator_repairs_on_any_failed_section(db_session, test_run):
 
     import nodes.evaluator as evaluator_module
 
-    evaluator_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
+    evaluator_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
     result = evaluator_node(state, db_session)
 
@@ -550,14 +572,14 @@ def test_graph_execution_completes(db_session, test_run):
     assert state.run_id == run_id
 
 
-def test_repair_agent_modifies_draft(db_session, test_run):
+def test_repair_agent_modifies_draft(db_session, db_run):
     """Test that repair agent makes targeted edits."""
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
     from db.models.section_reviews import SectionReviewRow
     from nodes import repair_agent_node
 
-    tenant_id, run_id = test_run
+    tenant_id, run_id = db_run
 
     class StubLLM:
         def generate(self, _prompt, **_kwargs):
@@ -686,7 +708,7 @@ def test_repair_agent_modifies_draft(db_session, test_run):
 
     import nodes.repair_agent as repair_module
 
-    repair_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
+    repair_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
     result = repair_agent_node(state, db_session)
 
@@ -695,14 +717,14 @@ def test_repair_agent_modifies_draft(db_session, test_run):
     assert result.draft_text
 
 
-def test_repair_agent_repairs_last_section_without_next_section(db_session, test_run):
+def test_repair_agent_repairs_last_section_without_next_section(db_session, db_run):
     """The last section should still be repaired even though no next-section continuity patch exists."""
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection
     from db.models.draft_sections import DraftSectionRow
     from db.models.section_reviews import SectionReviewRow
     from nodes import repair_agent_node
 
-    tenant_id, run_id = test_run
+    tenant_id, run_id = db_run
 
     class StubLLM:
         def generate(self, _prompt, **_kwargs):
@@ -788,7 +810,7 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, test
 
     import nodes.repair_agent as repair_module
 
-    repair_module.get_llm_client = lambda *_args, **_kwargs: StubLLM()
+    repair_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
     result = repair_agent_node(state, db_session)
 

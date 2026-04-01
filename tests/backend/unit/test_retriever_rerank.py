@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -36,7 +36,7 @@ def _make_source(*, doi: str, title: str, abstract: str | None) -> RetrievedSour
         url=None,
         pdf_url=None,
         connector="openalex",
-        retrieved_at=datetime.utcnow(),
+        retrieved_at=datetime.now(UTC),
     )
 
 

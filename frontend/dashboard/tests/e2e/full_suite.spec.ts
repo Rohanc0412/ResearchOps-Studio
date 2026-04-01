@@ -8,6 +8,7 @@ import { registerEvaluationModule } from './full_suite/evaluation';
 import { registerEvidenceModule } from './full_suite/evidence';
 import { registerProjectDetailModule } from './full_suite/projectDetail';
 import { registerProjectsModule } from './full_suite/projects';
+import { registerReportModule } from './full_suite/report';
 import { registerResearchRunModule } from './full_suite/researchRun';
 
 test.describe.serial('ResearchOps Studio - Full E2E Suite', () => {
@@ -19,5 +20,6 @@ test.describe.serial('ResearchOps Studio - Full E2E Suite', () => {
   registerArtifactsModule();
   registerEvidenceModule();
   registerEvaluationModule();
+  registerReportModule();
   registerErrorModule();
 });
