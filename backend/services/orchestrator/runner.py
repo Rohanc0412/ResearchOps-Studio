@@ -13,6 +13,7 @@ from uuid import UUID
 
 from checkpoints import PostgresCheckpointSaver
 from core.env import env_int
+from observability import langfuse_enabled
 from core.orchestrator.state import OrchestratorState
 from core.runs.lifecycle import transition_run_status
 from db.models.runs import RunRow, RunStatusDb
@@ -136,6 +137,22 @@ async def run_orchestrator(
             "current_stage": "retrieve",
         },
     )
+
+    if langfuse_enabled():
+        try:
+            from langfuse.decorators import langfuse_context
+            langfuse_context.update_current_trace(
+                name="research_run",
+                id=str(run_id),
+                metadata={
+                    "tenant_id": str(tenant_id),
+                    "query": user_query,
+                    "llm_provider": llm_provider,
+                    "llm_model": llm_model,
+                },
+            )
+        except Exception:
+            pass  # Never fail the pipeline due to observability
 
     max_iterations = env_int("ORCHESTRATOR_MAX_ITERATIONS", max_iterations, min_value=1)
 

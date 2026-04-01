@@ -83,7 +83,7 @@ class OpenAICompatibleClient:
     api_key: str
     model_name: str
     timeout_seconds: float = 60.0
-    # Populated after each generate() call — used by Langfuse instrumentation
+    # Populated after each generate() call ï¿½ used by Langfuse instrumentation
     last_prompt_tokens: int = 0
     last_completion_tokens: int = 0
 
@@ -138,6 +138,18 @@ class OpenAICompatibleClient:
         usage = data.get("usage") or {}
         self.last_prompt_tokens = int(usage.get("prompt_tokens") or 0)
         self.last_completion_tokens = int(usage.get("completion_tokens") or 0)
+        # Emit token counts into active Langfuse span (no-op when not enabled)
+        try:
+            from langfuse.decorators import langfuse_context
+            langfuse_context.update_current_observation(
+                usage={
+                    "input": self.last_prompt_tokens,
+                    "output": self.last_completion_tokens,
+                },
+                model=self.model_name,
+            )
+        except Exception:
+            pass  # Never fail the pipeline due to observability
         choices = data.get("choices", [])
         if not choices:
             raise LLMError("Hosted LLM response missing choices")
@@ -204,6 +216,18 @@ class OpenAICompatibleClient:
         usage = data.get("usage") or {}
         self.last_prompt_tokens = int(usage.get("prompt_tokens") or 0)
         self.last_completion_tokens = int(usage.get("completion_tokens") or 0)
+        # Emit token counts into active Langfuse span (no-op when not enabled)
+        try:
+            from langfuse.decorators import langfuse_context
+            langfuse_context.update_current_observation(
+                usage={
+                    "input": self.last_prompt_tokens,
+                    "output": self.last_completion_tokens,
+                },
+                model=self.model_name,
+            )
+        except Exception:
+            pass  # Never fail the pipeline due to observability
         choices = data.get("choices", [])
         if not choices:
             raise LLMError("Hosted LLM response missing choices")
