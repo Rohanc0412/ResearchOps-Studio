@@ -5,28 +5,29 @@ from pathlib import Path
 
 import sqlalchemy as sa
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from db.models.base import Base
 from db.models.roles import RoleRow
 
 
-def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) -> None:
-    if engine.dialect.name == "sqlite":
-        with engine.begin() as conn:
+def init_db(engine: AsyncEngine, *, retries: int = 30, sleep_seconds: float = 1.0) -> None:
+    sync_engine = engine.sync_engine
+    if sync_engine.dialect.name == "sqlite":
+        with sync_engine.begin() as conn:
             conn.execute(text("PRAGMA journal_mode=WAL"))
             conn.execute(text("PRAGMA busy_timeout=30000"))
         import db.models  # noqa: F401
-        Base.metadata.create_all(engine)
-        with engine.begin() as conn:
+        Base.metadata.create_all(sync_engine)
+        with sync_engine.begin() as conn:
             _seed_reference_data(conn)
         return
 
     last_error: Exception | None = None
     for _ in range(retries):
         try:
-            if engine.dialect.name == "postgresql":
+            if sync_engine.dialect.name == "postgresql":
                 # Serialize schema init *and* seeding across api/worker containers.
                 # Use a session-level advisory lock so Alembic transaction boundaries
                 # cannot release the lock between revisions.
@@ -37,7 +38,7 @@ def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) ->
                 alembic_ini = backend_root / "alembic.ini"
                 alembic_dir = backend_root / "data" / "db" / "alembic"
 
-                with engine.connect() as conn:
+                with sync_engine.connect() as conn:
                     conn.execute(text("SELECT pg_advisory_lock(42424242)"))
                     conn.commit()
                     try:
@@ -57,8 +58,8 @@ def init_db(engine: Engine, *, retries: int = 30, sleep_seconds: float = 1.0) ->
                             conn.commit()
             else:
                 import db.models  # noqa: F401
-                Base.metadata.create_all(engine)
-                with engine.begin() as conn:
+                Base.metadata.create_all(sync_engine)
+                with sync_engine.begin() as conn:
                     _seed_reference_data(conn)
             return
         except IntegrityError as e:
