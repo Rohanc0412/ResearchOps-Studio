@@ -101,6 +101,8 @@ def test_operator_env_var_beats_stage_models(monkeypatch):
 def test_resolve_model_for_stage_falls_back_to_default_bedrock_model(monkeypatch):
     monkeypatch.delenv("LLM_MODEL_CHEAP", raising=False)
     monkeypatch.delenv("LLM_MODEL_CAPABLE", raising=False)
+    monkeypatch.delenv("HOSTED_LLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
 
     from llm import resolve_model_for_stage

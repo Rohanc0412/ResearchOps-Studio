@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest.mock as mock
 
-from llm import BedrockClient, OpenAICompatibleClient
+from llm import OpenAICompatibleClient
 
 
 def _ok_response() -> mock.MagicMock:
@@ -58,6 +58,8 @@ def test_generate_strips_google_prefix_for_gemini_openai_compat():
 
 
 def test_bedrock_generate_sends_converse_payload():
+    from llm import BedrockClient
+
     client = BedrockClient(
         model_name="amazon.nova-lite-v1:0",
         region_name="us-east-1",
@@ -77,4 +79,8 @@ def test_bedrock_generate_sends_converse_payload():
     payload = mock_converse.call_args.kwargs
     assert payload["modelId"] == "amazon.nova-lite-v1:0"
     assert payload["inferenceConfig"]["maxTokens"] == 128
-    assert payload["messages"][0]["role"] == "user"
+    assert payload["inferenceConfig"]["temperature"] == 0.3
+    assert payload["system"] == [{"text": "be helpful"}]
+    assert payload["messages"] == [
+        {"role": "user", "content": [{"text": "hello"}]}
+    ]

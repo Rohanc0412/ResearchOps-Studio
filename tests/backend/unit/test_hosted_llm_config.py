@@ -48,6 +48,7 @@ def test_get_llm_client_uses_bedrock_defaults(monkeypatch):
 
 def test_get_llm_client_raises_for_missing_bedrock_region(monkeypatch):
     monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
 
     from llm import LLMError, get_llm_client
