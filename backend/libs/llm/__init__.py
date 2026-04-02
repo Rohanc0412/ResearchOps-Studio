@@ -30,6 +30,7 @@ class LLMError(RuntimeError):
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com"
 DEFAULT_HOSTED_MODEL = "openai/gpt-4o-mini"
+DEFAULT_BEDROCK_MODEL = "amazon.nova-lite-v1:0"
 
 
 # Stage names must match the strings passed to get_llm_client_for_stage() in each node.
@@ -78,7 +79,7 @@ def resolve_model_for_stage(
         return model
 
     # Level 4: global default
-    return _resolve_hosted_model_name()
+    return _resolve_default_model_name(provider, model)
 
 
 def _resolve_hosted_base_url() -> str | None:
@@ -95,6 +96,28 @@ def _resolve_hosted_api_key() -> str | None:
 
 def _resolve_hosted_model_name(model: str | None = None) -> str | None:
     return model or os.getenv("HOSTED_LLM_MODEL") or os.getenv("OPENAI_MODEL") or DEFAULT_HOSTED_MODEL
+
+
+def _resolve_bedrock_region_name() -> str | None:
+    return (
+        os.getenv("BEDROCK_REGION")
+        or os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+    )
+
+
+def _resolve_bedrock_model_name(model: str | None = None) -> str | None:
+    return model or os.getenv("BEDROCK_MODEL") or DEFAULT_BEDROCK_MODEL
+
+
+def _resolve_default_model_name(
+    provider: str | None,
+    model: str | None = None,
+) -> str | None:
+    provider_name = (provider or os.getenv("LLM_PROVIDER", "hosted")).strip().lower()
+    if provider_name == "bedrock":
+        return _resolve_bedrock_model_name(model)
+    return _resolve_hosted_model_name(model)
 
 
 def explain_llm_error(reason: str) -> str:
@@ -285,6 +308,91 @@ class OpenAICompatibleClient:
         return choices[0].get("message", {})
 
 
+@dataclass
+class BedrockClient:
+    model_name: str
+    region_name: str
+    timeout_seconds: float = 60.0
+    _runtime_client: Any | None = None
+    last_prompt_tokens: int = 0
+    last_completion_tokens: int = 0
+
+    def _get_runtime_client(self) -> Any:
+        if self._runtime_client is None:
+            try:
+                import boto3
+            except ImportError as exc:
+                raise LLMError(
+                    "Bedrock support requires boto3. Install backend dependencies with boto3>=1.34."
+                ) from exc
+            config = None
+            try:
+                from botocore.config import Config
+
+                config = Config(read_timeout=self.timeout_seconds, connect_timeout=self.timeout_seconds)
+            except Exception:
+                config = None
+            kwargs: dict[str, Any] = {"region_name": self.region_name}
+            if config is not None:
+                kwargs["config"] = config
+            self._runtime_client = boto3.client("bedrock-runtime", **kwargs)
+        return self._runtime_client
+
+    def _converse(self, **kwargs: Any) -> dict[str, Any]:
+        return self._get_runtime_client().converse(**kwargs)
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int = 512,
+        temperature: float = 0.2,
+        response_format: str | dict | None = None,
+    ) -> str:
+        if response_format is not None:
+            raise LLMError("BedrockClient.generate() does not support response_format in this task.")
+        payload: dict[str, Any] = {
+            "modelId": self.model_name,
+            "messages": [{"role": "user", "content": [{"text": prompt}]}],
+            "inferenceConfig": {
+                "maxTokens": max_tokens,
+                "temperature": temperature,
+            },
+        }
+        if system:
+            payload["system"] = [{"text": system}]
+        try:
+            response = self._converse(**payload)
+        except Exception as exc:
+            raise LLMError(f"Bedrock LLM request failed: {exc}") from exc
+
+        usage = response.get("usage") or {}
+        self.last_prompt_tokens = int(usage.get("inputTokens") or 0)
+        self.last_completion_tokens = int(usage.get("outputTokens") or 0)
+        try:
+            from langfuse.decorators import langfuse_context
+
+            langfuse_context.update_current_observation(
+                usage={
+                    "input": self.last_prompt_tokens,
+                    "output": self.last_completion_tokens,
+                },
+                model=self.model_name,
+            )
+        except Exception:
+            pass
+
+        content_blocks = (
+            ((response.get("output") or {}).get("message") or {}).get("content") or []
+        )
+        for block in content_blocks:
+            text = block.get("text")
+            if isinstance(text, str):
+                return text.strip()
+        raise LLMError("Bedrock LLM response missing text content")
+
+
 def get_llm_client(
     provider: str | None = None,
     model: str | None = None,
@@ -317,6 +425,21 @@ def get_llm_client(
             base_url=base_url,
             api_key=api_key,
             model_name=model_name,
+            timeout_seconds=timeout_seconds or _resolve_timeout_seconds(),
+        )
+
+    if provider_name == "bedrock":
+        region_name = _resolve_bedrock_region_name()
+        model_name = _resolve_bedrock_model_name(model)
+        if not region_name:
+            raise LLMError(
+                "Bedrock LLM not configured. Set BEDROCK_REGION or AWS_REGION/AWS_DEFAULT_REGION."
+            )
+        if not model_name:
+            raise LLMError("Bedrock LLM not configured. Set BEDROCK_MODEL.")
+        return BedrockClient(
+            model_name=model_name,
+            region_name=region_name,
             timeout_seconds=timeout_seconds or _resolve_timeout_seconds(),
         )
 

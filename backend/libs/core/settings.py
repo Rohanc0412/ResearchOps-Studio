@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     hosted_llm_base_url: str | None = Field(default=None)
     hosted_llm_api_key: str | None = Field(default=None)
     hosted_llm_model: str | None = Field(default=None)
+    bedrock_region: str | None = Field(default=None)
+    bedrock_model: str | None = Field(default=None)
     llm_outline_debug_simple_prompt: bool | None = Field(default=None)
     retriever_max_sources: int | None = Field(default=None)
     retriever_max_queries: int | None = Field(default=None)

@@ -14,6 +14,7 @@ dependencies = [
   "pgvector>=0.3.6",
   "langgraph>=0.2,<0.3",
   "langfuse>=2.0,<3",
+  "boto3>=1.34",
   "PyJWT[crypto]>=2.8",
   "bcrypt>=4.1",
 ]
