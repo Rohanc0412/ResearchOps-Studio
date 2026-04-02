@@ -125,3 +125,20 @@ def test_stage_provider_override_routes_default_model_to_bedrock(monkeypatch):
 
     assert isinstance(client, BedrockClient)
     assert client.model_name == "amazon.nova-lite-v1:0"
+
+
+def test_stage_provider_override_ignores_hosted_balanced_profile_model_for_bedrock(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_DRAFT", "bedrock")
+    monkeypatch.setenv("LLM_MODEL_CAPABLE", "openai/gpt-4o")
+    monkeypatch.delenv("LLM_MODEL_CHEAP", raising=False)
+    monkeypatch.delenv("HOSTED_LLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    from llm import BedrockClient, get_llm_client_for_stage
+
+    client = get_llm_client_for_stage("draft", "hosted", None, stage_models={"draft": None})
+
+    assert isinstance(client, BedrockClient)
+    assert client.model_name == "amazon.nova-lite-v1:0"

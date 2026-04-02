@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest.mock as mock
 
 from llm import OpenAICompatibleClient
@@ -84,3 +86,64 @@ def test_bedrock_generate_sends_converse_payload():
     assert payload["messages"] == [
         {"role": "user", "content": [{"text": "hello"}]}
     ]
+
+
+def test_bedrock_generate_accepts_response_format_without_failing():
+    from llm import BedrockClient
+
+    client = BedrockClient(
+        model_name="amazon.nova-lite-v1:0",
+        region_name="us-east-1",
+    )
+
+    with mock.patch.object(
+        client,
+        "_converse",
+        return_value={
+            "output": {"message": {"content": [{"text": '{"ok": true}'}]}},
+            "usage": {"inputTokens": 3, "outputTokens": 2},
+        },
+    ) as mock_converse:
+        result = client.generate(
+            "hello",
+            system="return json",
+            response_format="json",
+        )
+
+    assert result == '{"ok": true}'
+    assert "system" in mock_converse.call_args.kwargs
+    assert "valid JSON" in mock_converse.call_args.kwargs["system"][0]["text"]
+
+
+def test_bedrock_generate_uses_mocked_runtime_client_execution_path():
+    from llm import BedrockClient
+
+    runtime_client = mock.MagicMock()
+    runtime_client.converse.return_value = {
+        "output": {"message": {"content": [{"text": "ok"}]}},
+        "usage": {"inputTokens": 4, "outputTokens": 2},
+    }
+
+    fake_boto3 = types.SimpleNamespace(client=mock.MagicMock(return_value=runtime_client))
+    fake_config_module = types.SimpleNamespace(Config=mock.MagicMock(return_value=object()))
+
+    with mock.patch.dict(
+        sys.modules,
+        {
+            "boto3": fake_boto3,
+            "botocore": types.SimpleNamespace(config=fake_config_module),
+            "botocore.config": fake_config_module,
+        },
+    ):
+        client = BedrockClient(
+            model_name="amazon.nova-lite-v1:0",
+            region_name="us-east-1",
+        )
+        result = client.generate("hello", system="be helpful", max_tokens=64, temperature=0.1)
+
+    assert result == "ok"
+    fake_boto3.client.assert_called_once()
+    runtime_client.converse.assert_called_once()
+    payload = runtime_client.converse.call_args.kwargs
+    assert payload["modelId"] == "amazon.nova-lite-v1:0"
+    assert payload["inferenceConfig"]["maxTokens"] == 64

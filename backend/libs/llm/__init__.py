@@ -63,14 +63,7 @@ def resolve_model_for_stage(
             return override
 
     # Level 2: balanced profile tier
-    tier = BALANCED_PROFILE.get(stage)
-    if tier == "capable":
-        tier_model = os.getenv("LLM_MODEL_CAPABLE") or os.getenv("LLM_MODEL_CHEAP")
-    elif tier == "cheap":
-        # cheap stages do not fall back to LLM_MODEL_CAPABLE — avoid silently upgrading to a pricier model
-        tier_model = os.getenv("LLM_MODEL_CHEAP")
-    else:
-        tier_model = None
+    tier_model = _resolve_balanced_profile_model(stage, provider)
     if tier_model:
         return tier_model.strip() or None
 
@@ -118,6 +111,50 @@ def _resolve_default_model_name(
     if provider_name == "bedrock":
         return _resolve_bedrock_model_name(model)
     return _resolve_hosted_model_name(model)
+
+
+def _resolve_balanced_profile_model(stage: str, provider: str | None) -> str | None:
+    provider_name = (provider or os.getenv("LLM_PROVIDER", "hosted")).strip().lower()
+    if provider_name == "bedrock":
+        return None
+    tier = BALANCED_PROFILE.get(stage)
+    if tier == "capable":
+        return os.getenv("LLM_MODEL_CAPABLE") or os.getenv("LLM_MODEL_CHEAP")
+    if tier == "cheap":
+        return os.getenv("LLM_MODEL_CHEAP")
+    return None
+
+
+def _response_format_system_instruction(response_format: str | dict | None) -> str | None:
+    if response_format is None:
+        return None
+    if isinstance(response_format, str):
+        if response_format in {"json", "json_object"}:
+            return "Return only valid JSON. Do not include markdown or commentary."
+        if response_format == "json_schema":
+            return "Return only valid JSON matching the expected schema."
+        return None
+    if isinstance(response_format, dict):
+        format_type = response_format.get("type")
+        if format_type == "json_schema":
+            schema = response_format.get("json_schema") or {}
+            return (
+                "Return only valid JSON matching the expected schema. "
+                f"Schema hint: {json.dumps(schema, ensure_ascii=True)}"
+            )
+        if format_type == "json_object":
+            return "Return only valid JSON. Do not include markdown or commentary."
+    return None
+
+
+def _compose_system_prompt(
+    system: str | None,
+    response_format: str | dict | None,
+) -> str | None:
+    format_instruction = _response_format_system_instruction(response_format)
+    if system and format_instruction:
+        return f"{system}\n\n{format_instruction}"
+    return system or format_instruction
 
 
 def explain_llm_error(reason: str) -> str:
@@ -355,8 +392,7 @@ class BedrockClient:
         temperature: float = 0.2,
         response_format: str | dict | None = None,
     ) -> str:
-        if response_format is not None:
-            raise LLMError("BedrockClient.generate() does not support response_format in this task.")
+        effective_system = _compose_system_prompt(system, response_format)
         payload: dict[str, Any] = {
             "modelId": self.model_name,
             "messages": [{"role": "user", "content": [{"text": prompt}]}],
@@ -365,8 +401,8 @@ class BedrockClient:
                 "temperature": temperature,
             },
         }
-        if system:
-            payload["system"] = [{"text": system}]
+        if effective_system:
+            payload["system"] = [{"text": effective_system}]
         try:
             response = self._converse(**payload)
         except Exception as exc:
@@ -394,7 +430,19 @@ class BedrockClient:
         for block in content_blocks:
             text = block.get("text")
             if isinstance(text, str):
-                return text.strip()
+                content = text.strip()
+                if _should_attempt_json_repair(response_format):
+                    repaired = _repair_json_response(
+                        content,
+                        response_format=response_format,
+                        client=self,
+                        system=effective_system,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                    if repaired is not None:
+                        return repaired
+                return content
         raise LLMError("Bedrock LLM response missing text content")
 
 
@@ -622,7 +670,7 @@ def _repair_json_response(
     content: str,
     *,
     response_format: str | dict | None,
-    client: OpenAICompatibleClient,
+    client: LLMProvider,
     system: str | None,
     max_tokens: int,
     temperature: float,
