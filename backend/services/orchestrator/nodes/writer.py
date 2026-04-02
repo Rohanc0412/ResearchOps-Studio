@@ -13,8 +13,8 @@ import os
 
 from core.env import env_int, now_utc
 from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
-from core.pipeline_events import emit_run_event, instrument_node
-from core.pipeline_events.events import truncate_text
+from core.pipeline_events import instrument_node
+from core.pipeline_events.events import emit_node_progress, truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
 from langfuse.decorators import observe
@@ -231,7 +231,7 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
 
     for i, section in enumerate(outline.sections):
         if i % 3 == 0:
-            emit_run_event(
+            emit_node_progress(
                 session=session,
                 tenant_id=state.tenant_id,
                 run_id=state.run_id,
@@ -259,7 +259,7 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
             else:
                 section_snippets = []
 
-        emit_run_event(
+        emit_node_progress(
             session=session,
             tenant_id=state.tenant_id,
             run_id=state.run_id,
@@ -290,7 +290,7 @@ def writer_node(state: OrchestratorState, session: Session) -> OrchestratorState
             section_summary=section_summary,
         )
 
-        emit_run_event(
+        emit_node_progress(
             session=session,
             tenant_id=state.tenant_id,
             run_id=state.run_id,

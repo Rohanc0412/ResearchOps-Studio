@@ -27,7 +27,8 @@ from connectors.base import RetrievedSource
 from connectors.dedup import deduplicate_sources
 from core.env import env_float, env_int
 from core.orchestrator.state import OrchestratorState, SourceRef
-from core.pipeline_events import emit_run_event, instrument_node
+from core.pipeline_events import instrument_node
+from core.pipeline_events.events import emit_node_progress
 from db.models.run_checkpoints import RunCheckpointRow
 from db.models.run_sources import RunSourceRow
 from db.models.snapshots import SnapshotRow
@@ -1299,7 +1300,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     if not query_plan:
         raise ValueError("Question is required for retrieval")
 
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -1344,7 +1345,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         source: count for source, count in dedup_stats.connectors_merged.items()
     }
 
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -1359,7 +1360,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
 
     candidate_count = len(deduped_sources)
     rerank_topk = _resolve_rerank_topk(candidate_count)
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -1381,7 +1382,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     )
     _cancel_check()
     latency_ms = int((time.monotonic() - rerank_start) * 1000)
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -1394,7 +1395,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             "batch_count": int(rerank_stats.get("batch_count", 0) or 0),
         },
     )
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -1423,7 +1424,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     )
     _cancel_check()
 
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -1492,7 +1493,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         },
     )
 
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,

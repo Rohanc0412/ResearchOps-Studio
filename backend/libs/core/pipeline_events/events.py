@@ -234,6 +234,17 @@ def emit_run_event(
     # SQLite cannot safely interleave a second writer connection while the
     # worker's main transaction is still active. Reuse the current session there.
     resolved_message = message or f"{event_type}: {stage or 'unknown'}"
+    runtime_enqueue = getattr(session, "enqueue_runtime_event", None)
+    if callable(runtime_enqueue):
+        runtime_enqueue(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_type=event_type,
+            stage=stage,
+            message=resolved_message,
+            data=data or {},
+        )
+        return None
 
     if _should_use_current_session(session):
         try:
@@ -295,6 +306,27 @@ def emit_run_event(
         return event
     finally:
         event_session.close()
+
+
+def emit_node_progress(
+    session: Session,
+    tenant_id: UUID,
+    run_id: UUID,
+    event_type: str,
+    stage: str | None = None,
+    message: str | None = None,
+    data: dict[str, Any] | None = None,
+) -> RunEventRow | None:
+    """Node-facing helper for runtime-owned progress/event emission."""
+    return emit_run_event(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        event_type=event_type,
+        stage=stage,
+        message=message,
+        data=data,
+    )
 
 
 def instrument_node(stage_name: str) -> Callable:

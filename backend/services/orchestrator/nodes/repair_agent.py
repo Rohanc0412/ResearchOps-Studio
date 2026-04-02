@@ -511,6 +511,7 @@ def _persist_draft_section(
 @observe(name="repair_agent")
 @instrument_node("repair")
 def repair_agent_node(state: OrchestratorState, session: Session) -> OrchestratorState:
+    # Repair emits stage-level events via instrument_node; no additional node-level progress writes.
     if state.repair_attempts >= 1:
         raise ValueError("Repair agent can only run once per draft.")
 

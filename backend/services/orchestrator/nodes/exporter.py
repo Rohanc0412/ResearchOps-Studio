@@ -10,7 +10,8 @@ import re
 from datetime import UTC, datetime
 
 from core.orchestrator.state import OrchestratorState
-from core.pipeline_events import emit_run_event, instrument_node
+from core.pipeline_events import instrument_node
+from core.pipeline_events.events import emit_node_progress
 from db.models.artifacts import ArtifactRow
 from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow
@@ -31,7 +32,7 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     """
     Assemble final report artifacts from run_sections + draft_sections.
     """
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -110,7 +111,7 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
         usage["warnings"] = warnings
     replace_run_usage_metrics(run_row, usage)
 
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
@@ -118,7 +119,7 @@ def exporter_node(state: OrchestratorState, session: Session) -> OrchestratorSta
         stage="export",
         data={"artifact_types": artifact_types},
     )
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,

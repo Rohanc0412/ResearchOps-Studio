@@ -19,7 +19,8 @@ from core.orchestrator.state import (
     OrchestratorState,
     OutlineSection,
 )
-from core.pipeline_events import emit_run_event, instrument_node
+from core.pipeline_events import instrument_node
+from core.pipeline_events.events import emit_node_progress
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
@@ -628,7 +629,7 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
             section_refs.append(ref)
         section_snippet_refs[section.section_id] = section_refs
 
-        emit_run_event(
+        emit_node_progress(
             session=session,
             tenant_id=state.tenant_id,
             run_id=state.run_id,

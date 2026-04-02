@@ -18,8 +18,8 @@ from core.orchestrator.state import (
     OrchestratorState,
     OutlineSection,
 )
-from core.pipeline_events import emit_run_event, instrument_node
-from core.pipeline_events.events import truncate_text
+from core.pipeline_events import instrument_node
+from core.pipeline_events.events import emit_node_progress, truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.section_reviews import SectionReviewRow
@@ -45,6 +45,7 @@ from llm import (
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+emit_run_event = emit_node_progress
 _CITATION_MARKER_RE = re.compile(r"\[\^\d+\]|\[CITE:[^\]]+\]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -476,7 +477,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         if not section_text:
             raise ValueError(f"Draft section missing for {section.section_id}")
 
-        emit_run_event(
+        emit_node_progress(
             session=session,
             tenant_id=state.tenant_id,
             run_id=state.run_id,
@@ -540,7 +541,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             issues=issues,
         )
 
-        emit_run_event(
+        emit_node_progress(
             session=session,
             tenant_id=state.tenant_id,
             run_id=state.run_id,
@@ -571,7 +572,7 @@ def evaluator_node(state: OrchestratorState, session: Session) -> OrchestratorSt
             llm_client=llm_client,
         )
 
-    emit_run_event(
+    emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,

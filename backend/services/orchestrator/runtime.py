@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -16,6 +17,51 @@ from event_store import append_runtime_event
 from runner import run_orchestrator
 from runtime_types import ResearchRunInputs
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _QueuedNodeEvent:
+    tenant_id: UUID
+    run_id: UUID
+    event_type: str
+    stage: str | None
+    message: str
+    payload: dict | None
+
+
+class _RuntimeNodeSessionProxy:
+    """Proxy around sync SQLAlchemy Session with runtime-owned event enqueue APIs."""
+
+    __slots__ = ("_session", "_runtime")
+
+    def __init__(self, *, session: Session, runtime: "ResearchRuntime") -> None:
+        self._session = session
+        self._runtime = runtime
+
+    def __getattr__(self, name: str):
+        return getattr(self._session, name)
+
+    def enqueue_runtime_event(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        event_type: str,
+        stage: str | None = None,
+        message: str | None = None,
+        data: dict | None = None,
+    ) -> None:
+        self._runtime.queue_node_event(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_type=event_type,
+            stage=stage,
+            message=message,
+            data=data,
+        )
 
 
 @dataclass(slots=True)
@@ -96,6 +142,7 @@ class ResearchRuntime:
     inputs: ResearchRunInputs
     event_store: RuntimeEventStore
     checkpoint_store: RuntimeCheckpointStore
+    _pending_node_events: list[_QueuedNodeEvent] = field(default_factory=list)
 
     @classmethod
     async def create(
@@ -136,7 +183,56 @@ class ResearchRuntime:
         ):
             raise RunCancelledError(f"Run {self.run_id} cancelled by user")
 
+    def queue_node_event(
+        self,
+        *,
+        tenant_id: UUID,
+        run_id: UUID,
+        event_type: str,
+        stage: str | None = None,
+        message: str | None = None,
+        data: dict | None = None,
+    ) -> None:
+        self._pending_node_events.append(
+            _QueuedNodeEvent(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                event_type=event_type,
+                stage=stage,
+                message=message or f"{event_type}: {stage or 'unknown'}",
+                payload=data or {},
+            )
+        )
+
+    def sync_node_session(self, sync_session: Session) -> _RuntimeNodeSessionProxy:
+        return _RuntimeNodeSessionProxy(session=sync_session, runtime=self)
+
     async def flush_pending_events(self) -> None:
+        pending_events = self._pending_node_events
+        self._pending_node_events = []
+        for event in pending_events:
+            try:
+                await self.event_store.append(
+                    tenant_id=event.tenant_id,
+                    run_id=event.run_id,
+                    audience=RunEventAudienceDb.diagnostic,
+                    event_type=event.event_type,
+                    level=RunEventLevelDb.info,
+                    stage=event.stage,
+                    message=event.message,
+                    payload=event.payload,
+                    allow_finished=True,
+                )
+            except Exception:
+                logger.debug(
+                    "runtime event queue suppressed append error",
+                    extra={
+                        "event_type": event.event_type,
+                        "run_id": str(event.run_id),
+                        "tenant_id": str(event.tenant_id),
+                    },
+                    exc_info=True,
+                )
         await self.session.flush()
 
     async def execute_node(
@@ -151,7 +247,9 @@ class ResearchRuntime:
         if inspect.iscoroutinefunction(node_func):
             next_state = await node_func(state, self)
         else:
-            next_state = await self.session.run_sync(lambda sync_session: node_func(state, sync_session))
+            next_state = await self.session.run_sync(
+                lambda sync_session: node_func(state, self.sync_node_session(sync_session))
+            )
 
         if isinstance(next_state, dict):
             next_state = OrchestratorState(**next_state)

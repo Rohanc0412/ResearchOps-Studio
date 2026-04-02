@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from core.pipeline_events.events import emit_run_event, instrument_node
 from db.init_db import init_db
 from core.orchestrator.state import OrchestratorState
 from db.models.projects import ProjectRow
@@ -29,9 +30,20 @@ _TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test",
 )
-_TEST_ASYNC_DATABASE_URL = _TEST_DATABASE_URL.replace(
-    "postgresql+psycopg://", "postgresql+asyncpg://"
-)
+
+
+def _to_async_url(url: str) -> str:
+    for prefix in ("postgresql+psycopg2://", "postgresql+psycopg://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+asyncpg://" + url[len(prefix) :]
+    if url.startswith("sqlite+pysqlite://"):
+        return "sqlite+aiosqlite://" + url[len("sqlite+pysqlite://") :]
+    if url.startswith("sqlite://"):
+        return "sqlite+aiosqlite://" + url[len("sqlite://") :]
+    return url
+
+
+_TEST_ASYNC_DATABASE_URL = _to_async_url(_TEST_DATABASE_URL)
 
 
 @pytest_asyncio.fixture
@@ -265,6 +277,103 @@ async def test_runtime_execute_node_commits_each_step_on_repeated_execution(
         "flush_pending_events",
         "commit",
     ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_flush_pending_events_drains_queue_only_once(
+    monkeypatch: pytest.MonkeyPatch, runtime: ResearchRuntime
+) -> None:
+    appended_event_types: list[str] = []
+    flush_calls: list[str] = []
+
+    async def fake_append(self, **kwargs):
+        appended_event_types.append(kwargs["event_type"])
+        return None
+
+    async def fake_flush() -> None:
+        flush_calls.append("flush")
+
+    monkeypatch.setattr(type(runtime.event_store), "append", fake_append, raising=False)
+    monkeypatch.setattr(runtime.session, "flush", fake_flush)
+
+    runtime.queue_node_event(
+        tenant_id=runtime.tenant_id,
+        run_id=runtime.run_id,
+        event_type="progress",
+        stage="draft",
+        data={"section_index": 1},
+    )
+    runtime.queue_node_event(
+        tenant_id=runtime.tenant_id,
+        run_id=runtime.run_id,
+        event_type="draft.section_started",
+        stage="draft",
+        data={"section_id": "s1"},
+    )
+
+    await runtime.flush_pending_events()
+    await runtime.flush_pending_events()
+
+    assert appended_event_types == ["progress", "draft.section_started"]
+    assert flush_calls == ["flush", "flush"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_execute_node_uses_runtime_event_store_for_sync_node_progress(
+    monkeypatch: pytest.MonkeyPatch, runtime: ResearchRuntime
+) -> None:
+    emitted_event_types: list[str] = []
+
+    class _SyncSessionStub:
+        def get_bind(self):
+            return SimpleNamespace(
+                dialect=SimpleNamespace(name="sqlite", driver="pysqlite")
+            )
+
+    async def fake_assert_not_cancelled(self) -> None:
+        return None
+
+    async def fake_write_after_node(self, *, state, node_name: str) -> None:
+        return None
+
+    async def fake_run_sync(fn):
+        return fn(_SyncSessionStub())
+
+    async def fake_append(self, **kwargs):
+        emitted_event_types.append(kwargs["event_type"])
+        return None
+
+    async def fake_commit() -> None:
+        return None
+
+    def fail_if_direct_append(**_kwargs):
+        raise AssertionError("node event writes must go through runtime event_store")
+
+    monkeypatch.setattr(type(runtime), "assert_not_cancelled", fake_assert_not_cancelled, raising=False)
+    monkeypatch.setattr(type(runtime.checkpoint_store), "write_after_node", fake_write_after_node, raising=False)
+    monkeypatch.setattr(runtime.session, "run_sync", fake_run_sync)
+    monkeypatch.setattr(type(runtime.event_store), "append", fake_append, raising=False)
+    monkeypatch.setattr(runtime.session, "commit", fake_commit)
+    monkeypatch.setattr("core.pipeline_events.events.append_run_event", fail_if_direct_append)
+
+    @instrument_node("draft")
+    def sync_node(state: OrchestratorState, session) -> OrchestratorState:
+        emit_run_event(
+            session=session,
+            tenant_id=state.tenant_id,
+            run_id=state.run_id,
+            event_type="progress",
+            stage="draft",
+            data={"section_index": 1, "total_sections": 3},
+        )
+        state.iteration_count += 1
+        return state
+
+    state = runtime.initial_state()
+    result = await runtime.execute_node(node_name="writer", node_func=sync_node, state=state)
+
+    assert result.iteration_count == 1
+    assert emitted_event_types == ["stage_start", "progress", "stage_finish"]
 
 
 @pytest.mark.asyncio
