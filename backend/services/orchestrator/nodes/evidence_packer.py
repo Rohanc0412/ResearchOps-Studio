@@ -14,20 +14,30 @@ import os
 from collections.abc import Iterable
 from typing import Protocol
 
-from core.orchestrator.state import EvidenceSnippetRef, OrchestratorState, OutlineSection
+from core.orchestrator.state import (
+    EvidenceSnippetRef,
+    OrchestratorState,
+    OutlineSection,
+)
 from core.pipeline_events import emit_run_event, instrument_node
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
 from db.models.snippets import SnippetRow
 from embeddings import (
+    BedrockEmbedClient,
     MODEL_EMBED_RAM_GB,
     SentenceTransformerEmbedClient,
+    get_bedrock_client,
     get_embed_worker_pool,
     get_free_ram_gb,
     get_hf_client,
     get_ollama_client,
     get_sentence_transformer_client,
+    resolve_bedrock_embed_batch_size,
+    resolve_bedrock_embed_concurrency,
+    resolve_bedrock_embed_region_name,
+    resolve_bedrock_embed_timeout_seconds,
     resolve_embed_device,
     resolve_embed_dtype,
     resolve_embed_max_seq_len,
@@ -49,7 +59,6 @@ class EmbeddingClient(Protocol):
     model_name: str
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
-
 
 
 def _env_int(name: str, default: int, *, min_value: int | None = None) -> int:
@@ -113,6 +122,23 @@ def _get_embed_client() -> EmbeddingClient:
             timeout_seconds=timeout_seconds,
             wait_for_model=wait_for_model,
         )
+    if provider == "bedrock":
+        region_name = resolve_bedrock_embed_region_name()
+        model_name = resolve_embed_model(provider)
+        if not region_name:
+            raise ValueError(
+                "Bedrock embeddings require BEDROCK_EMBED_REGION or "
+                "BEDROCK_REGION/AWS_REGION/AWS_DEFAULT_REGION."
+            )
+        if not model_name or not model_name.strip():
+            raise ValueError("Bedrock embeddings require BEDROCK_EMBED_MODEL.")
+        return get_bedrock_client(
+            model_name=model_name,
+            region_name=region_name,
+            batch_size=resolve_bedrock_embed_batch_size(),
+            max_concurrency=resolve_bedrock_embed_concurrency(),
+            timeout_seconds=resolve_bedrock_embed_timeout_seconds(),
+        )
 
     model_name = resolve_embed_model(provider)
     device = resolve_embed_device()
@@ -132,10 +158,16 @@ def _embed_texts_batched(
 ) -> list[list[float]]:
     if not texts:
         return []
+    if isinstance(client, BedrockEmbedClient):
+        return client.embed_texts(texts)
     if isinstance(client, SentenceTransformerEmbedClient):
         cpu_cap = max(1, (os.cpu_count() or 2) // 2)
         free_ram = get_free_ram_gb()
-        ram_cap = max(1, int(free_ram / MODEL_EMBED_RAM_GB)) if free_ram is not None else cpu_cap
+        ram_cap = (
+            max(1, int(free_ram / MODEL_EMBED_RAM_GB))
+            if free_ram is not None
+            else cpu_cap
+        )
         hard_cap = resolve_embed_workers()
         # pool_size = model instances (RAM-bound); n_chunks = parallelism hint (can exceed pool_size)
         pool_size = min(cpu_cap, ram_cap, hard_cap)
@@ -150,11 +182,17 @@ def _embed_texts_batched(
                     dtype=client.dtype,
                     trust_remote_code=client.trust_remote_code,
                     n_workers=pool_size,
-                    preloaded_model=None if str(client.device).startswith("cuda") else getattr(client, "_model", None),
+                    preloaded_model=(
+                        None
+                        if str(client.device).startswith("cuda")
+                        else getattr(client, "_model", None)
+                    ),
                 )
                 return pool.encode(texts, n_chunks=n_chunks)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("EmbedWorkerPool failed, falling back to sequential: %s", exc)
+                logger.warning(
+                    "EmbedWorkerPool failed, falling back to sequential: %s", exc
+                )
     embeddings: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
@@ -185,32 +223,38 @@ def _parallel_search_sections(
     """
     parallel = _env_int("EVIDENCE_PACK_PARALLEL_SECTIONS", 4, min_value=1)
 
-    def _search_one(section_id: str, query_embeddings: list[list[float]]) -> tuple[str, list[dict]]:
+    def _search_one(
+        section_id: str, query_embeddings: list[list[float]]
+    ) -> tuple[str, list[dict]]:
         with Session(engine) as s:
             all_results: list[dict] = []
             for qe in query_embeddings:
-                all_results.extend(search_snippets(
-                    session=s,
-                    tenant_id=tenant_id,
-                    query_embedding=qe,
-                    embedding_model=embedding_model,
-                    limit=search_limit,
-                    min_similarity=min_similarity,
-                    source_ids=source_ids or None,
-                ))
-            merged = _dedupe_results(all_results)
-            if len(merged) < min_required:
-                relaxed: list[dict] = []
-                for qe in query_embeddings:
-                    relaxed.extend(search_snippets(
+                all_results.extend(
+                    search_snippets(
                         session=s,
                         tenant_id=tenant_id,
                         query_embedding=qe,
                         embedding_model=embedding_model,
-                        limit=search_limit + 30,
-                        min_similarity=max(0.0, min_similarity - 0.15),
+                        limit=search_limit,
+                        min_similarity=min_similarity,
                         source_ids=source_ids or None,
-                    ))
+                    )
+                )
+            merged = _dedupe_results(all_results)
+            if len(merged) < min_required:
+                relaxed: list[dict] = []
+                for qe in query_embeddings:
+                    relaxed.extend(
+                        search_snippets(
+                            session=s,
+                            tenant_id=tenant_id,
+                            query_embedding=qe,
+                            embedding_model=embedding_model,
+                            limit=search_limit + 30,
+                            min_similarity=max(0.0, min_similarity - 0.15),
+                            source_ids=source_ids or None,
+                        )
+                    )
                 merged = _dedupe_results(merged + relaxed)
         return section_id, merged
 
@@ -275,7 +319,10 @@ def _dedupe_results(results: Iterable[dict]) -> list[dict]:
     seen: dict[str, dict] = {}
     for result in results:
         snippet_id = str(result["snippet_id"])
-        if snippet_id not in seen or result["similarity"] > seen[snippet_id]["similarity"]:
+        if (
+            snippet_id not in seen
+            or result["similarity"] > seen[snippet_id]["similarity"]
+        ):
             seen[snippet_id] = result
     return list(seen.values())
 
@@ -391,7 +438,9 @@ def _ensure_snippets_from_abstracts(
         batch_size=batch_size,
     )
     if len(vectors) != len(new_snippets):
-        raise ValueError("Mismatch between snippets and embeddings for abstract fallback.")
+        raise ValueError(
+            "Mismatch between snippets and embeddings for abstract fallback."
+        )
 
     for (snippet, _), vector in zip(new_snippets, vectors, strict=True):
         session.add(
@@ -474,7 +523,9 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
     evidence_refs: dict[str, EvidenceSnippetRef] = {}
     section_snippet_refs: dict[str, list[EvidenceSnippetRef]] = {}
 
-    max_queries_per_section = _env_int("EVIDENCE_MAX_QUERIES_PER_SECTION", 5, min_value=1)
+    max_queries_per_section = _env_int(
+        "EVIDENCE_MAX_QUERIES_PER_SECTION", 5, min_value=1
+    )
     section_queries: list[tuple[OutlineSection, list[str]]] = []
     for section in outline.sections:
         query_texts = _section_query_texts(section, max_queries=max_queries_per_section)
@@ -561,7 +612,11 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
             if ref is None:
                 snippet_text = item["snippet_text"] or ""
                 char_start = item["char_start"] if item["char_start"] is not None else 0
-                char_end = item["char_end"] if item["char_end"] is not None else len(snippet_text)
+                char_end = (
+                    item["char_end"]
+                    if item["char_end"] is not None
+                    else len(snippet_text)
+                )
                 ref = EvidenceSnippetRef(
                     snippet_id=item["snippet_id"],
                     source_id=item["source_id"],

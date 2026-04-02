@@ -41,13 +41,19 @@ from db.repositories.corpus import (
     list_source_author_names,
 )
 from embeddings import (
+    BedrockEmbedClient,
     MODEL_EMBED_RAM_GB,
     SentenceTransformerEmbedClient,
+    get_bedrock_client,
     get_embed_worker_pool,
     get_free_ram_gb,
     get_hf_client,
     get_ollama_client,
     get_sentence_transformer_client,
+    resolve_bedrock_embed_batch_size,
+    resolve_bedrock_embed_concurrency,
+    resolve_bedrock_embed_region_name,
+    resolve_bedrock_embed_timeout_seconds,
     resolve_embed_device,
     resolve_embed_dtype,
     resolve_embed_max_seq_len,
@@ -70,7 +76,6 @@ from llm import (
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
-
 
 
 @dataclass(frozen=True)
@@ -168,7 +173,9 @@ def _normalize_intent(intent: str) -> str | None:
 
 
 def _strip_code_fence(text: str) -> str:
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    match = re.search(
+        r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL
+    )
     return match.group(1).strip() if match else text
 
 
@@ -236,7 +243,9 @@ def _build_query_plan_with_llm(
     stage_models: dict[str, str | None] | None = None,
 ) -> list[QueryPlan]:
     try:
-        llm_client = get_llm_client_for_stage("retrieve", llm_provider, llm_model, stage_models=stage_models)
+        llm_client = get_llm_client_for_stage(
+            "retrieve", llm_provider, llm_model, stage_models=stage_models
+        )
     except LLMError as exc:
         logger.warning(
             "LLM client unavailable for query generation",
@@ -373,7 +382,9 @@ class EmbeddingClient(Protocol):
 def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
     provider_name = resolve_embed_provider(llm_provider)
     if provider_name in {"", "none", "disabled"}:
-        raise EmbedError("Embeddings are required for reranking but provider is disabled.")
+        raise EmbedError(
+            "Embeddings are required for reranking but provider is disabled."
+        )
     if provider_name == "ollama":
         model_name = resolve_embed_model(provider_name)
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
@@ -405,6 +416,23 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
             timeout_seconds=timeout_seconds,
             wait_for_model=wait_for_model,
         )
+    if provider_name == "bedrock":
+        region_name = resolve_bedrock_embed_region_name()
+        model_name = resolve_embed_model(provider_name)
+        if not region_name:
+            raise EmbedError(
+                "Bedrock embeddings require BEDROCK_EMBED_REGION or "
+                "BEDROCK_REGION/AWS_REGION/AWS_DEFAULT_REGION."
+            )
+        if not model_name or not model_name.strip():
+            raise EmbedError("Bedrock embeddings require BEDROCK_EMBED_MODEL.")
+        return get_bedrock_client(
+            model_name=model_name,
+            region_name=region_name,
+            batch_size=resolve_bedrock_embed_batch_size(),
+            max_concurrency=resolve_bedrock_embed_concurrency(),
+            timeout_seconds=resolve_bedrock_embed_timeout_seconds(),
+        )
     if provider_name in {"local", "sentence-transformers", "bge"}:
         model_name = resolve_embed_model(provider_name)
         device = resolve_embed_device()
@@ -420,7 +448,9 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
     raise EmbedError(f"Unknown embedding provider: {provider_name}")
 
 
-def _embedding_text_for_source(source: RetrievedSource, *, abstract_only: bool = False) -> str:
+def _embedding_text_for_source(
+    source: RetrievedSource, *, abstract_only: bool = False
+) -> str:
     title = (source.title or "").strip()
     abstract = (source.abstract or "").strip()
     if abstract_only or not source.full_text:
@@ -518,11 +548,17 @@ def _embed_texts_batched(
 ) -> list[list[float]]:
     if not texts:
         return []
+    if isinstance(client, BedrockEmbedClient):
+        return client.embed_texts(texts)
     # Use multiprocess pool for local SentenceTransformer when workers > 1
     if isinstance(client, SentenceTransformerEmbedClient):
         cpu_cap = max(1, (os.cpu_count() or 2) // 2)
         free_ram = get_free_ram_gb()
-        ram_cap = max(1, int(free_ram / MODEL_EMBED_RAM_GB)) if free_ram is not None else cpu_cap
+        ram_cap = (
+            max(1, int(free_ram / MODEL_EMBED_RAM_GB))
+            if free_ram is not None
+            else cpu_cap
+        )
         hard_cap = resolve_embed_workers()
         # pool_size = model instances (RAM-bound); n_chunks = parallelism hint (can exceed pool_size)
         pool_size = min(cpu_cap, ram_cap, hard_cap)
@@ -537,11 +573,17 @@ def _embed_texts_batched(
                     dtype=client.dtype,
                     trust_remote_code=client.trust_remote_code,
                     n_workers=pool_size,
-                    preloaded_model=None if str(client.device).startswith("cuda") else getattr(client, "_model", None),
+                    preloaded_model=(
+                        None
+                        if str(client.device).startswith("cuda")
+                        else getattr(client, "_model", None)
+                    ),
                 )
                 return pool.encode(texts, n_chunks=n_chunks)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("EmbedWorkerPool failed, falling back to sequential: %s", exc)
+                logger.warning(
+                    "EmbedWorkerPool failed, falling back to sequential: %s", exc
+                )
     # Sequential fallback (Ollama, HF, or pool unavailable / workers=1)
     embeddings: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
@@ -734,11 +776,15 @@ def _rank_sources(
             pending.append((idx, canonical_id, text_hash, cached_row))
 
         batch_size = env_int("RETRIEVER_EMBED_BATCH", 32, min_value=1)
-        stats["batch_count"] = math.ceil(len(texts_to_embed) / batch_size) if texts_to_embed else 0
+        stats["batch_count"] = (
+            math.ceil(len(texts_to_embed) / batch_size) if texts_to_embed else 0
+        )
         if texts_to_embed:
             if cancel_check is not None:
                 cancel_check()
-            vectors = _embed_texts_batched(embed_client, texts_to_embed, batch_size=batch_size)
+            vectors = _embed_texts_batched(
+                embed_client, texts_to_embed, batch_size=batch_size
+            )
             if len(vectors) != len(texts_to_embed):
                 raise EmbedError(
                     "Embedding batch size mismatch: expected "
@@ -759,7 +805,9 @@ def _rank_sources(
                     existing=cached_row,
                 )
                 stats["embedded_now"] += 1
-                embed_norms[idx] = (1.0 + _cosine_similarity(query_embedding, vector)) / 2.0
+                embed_norms[idx] = (
+                    1.0 + _cosine_similarity(query_embedding, vector)
+                ) / 2.0
             if cancel_check is not None:
                 cancel_check()
 
@@ -795,7 +843,9 @@ def _select_diverse(
     selected: list[RankedCandidate] = []
     intent_counts: dict[str, int] = {intent: 0 for intent in ALLOWED_INTENTS}
     connector_counts: dict[str, int] = {}
-    max_connector_fraction = env_float("RETRIEVER_MAX_CONNECTOR_FRACTION", 0.6, min_value=0.0)
+    max_connector_fraction = env_float(
+        "RETRIEVER_MAX_CONNECTOR_FRACTION", 0.6, min_value=0.0
+    )
     connector_cap = max(1, math.ceil(target_count * max_connector_fraction))
 
     for candidate in candidates:
@@ -1021,12 +1071,16 @@ def _ingest_selected_sources(
     max_workers = env_int("RETRIEVER_INGEST_WORKERS", 4, min_value=1)
     fetched_map: dict[int, RetrievedSource | None] = {}
 
-    def _fetch_one(args: tuple[int, RankedCandidate]) -> tuple[int, RetrievedSource | None]:
+    def _fetch_one(
+        args: tuple[int, RankedCandidate],
+    ) -> tuple[int, RetrievedSource | None]:
         idx, candidate = args
         return idx, _fetch_selected_source_content(connector, candidate.source)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_fetch_one, (idx, c)): idx for idx, c in enumerate(selected)}
+        futures = {
+            executor.submit(_fetch_one, (idx, c)): idx for idx, c in enumerate(selected)
+        }
         for future in concurrent.futures.as_completed(futures):
             orig_idx = futures[future]
             try:
@@ -1034,7 +1088,9 @@ def _ingest_selected_sources(
                 fetched_map[result_idx] = fetched
             except Exception as exc:
                 fetched_map[orig_idx] = None
-                logger.warning("Parallel fetch failed for candidate %d: %s", orig_idx, exc)
+                logger.warning(
+                    "Parallel fetch failed for candidate %d: %s", orig_idx, exc
+                )
             if cancel_check is not None:
                 cancel_check()
 
@@ -1069,12 +1125,16 @@ def _ingest_selected_sources(
         )
 
         current_sha = _sha256_text(content)
-        latest_sha = _latest_snapshot_sha(session, tenant_id=tenant_id, source_id=row.id)
+        latest_sha = _latest_snapshot_sha(
+            session, tenant_id=tenant_id, source_id=row.id
+        )
         if latest_sha == current_sha:
             stats["skipped_existing"] += 1
             continue
 
-        had_existing = _snapshot_exists_for_source(session, tenant_id=tenant_id, source_id=row.id)
+        had_existing = _snapshot_exists_for_source(
+            session, tenant_id=tenant_id, source_id=row.id
+        )
         metadata = dict(content_source.extra_metadata or {})
         metadata.update(
             {
@@ -1103,7 +1163,9 @@ def _ingest_selected_sources(
         if content_origin != "full_text":
             stats["fallback_only"] += 1
         if had_existing:
-            logger.info("Created new snapshot version for updated source '%s'", canonical_id)
+            logger.info(
+                "Created new snapshot version for updated source '%s'", canonical_id
+            )
 
 
 def _create_run_checkpoint(
@@ -1136,7 +1198,9 @@ def _plan_step_labels(
     Never raises.
     """
     try:
-        llm_client = get_llm_client_for_stage("retrieve", llm_provider, llm_model, stage_models=stage_models)
+        llm_client = get_llm_client_for_stage(
+            "retrieve", llm_provider, llm_model, stage_models=stage_models
+        )
         if llm_client is None:
             return None
 
@@ -1155,11 +1219,18 @@ def _plan_step_labels(
             temperature=0.3,
         )
         payload = extract_json_payload(response)
-        if isinstance(payload, list) and len(payload) == 6 and all(isinstance(s, str) for s in payload):
+        if (
+            isinstance(payload, list)
+            and len(payload) == 6
+            and all(isinstance(s, str) for s in payload)
+        ):
             return [s.strip() for s in payload]
         logger.warning(
             "Step label planning returned unexpected shape",
-            extra={"event": "pipeline.llm.step_labels", "payload_type": type(payload).__name__},
+            extra={
+                "event": "pipeline.llm.step_labels",
+                "payload_type": type(payload).__name__,
+            },
         )
         return None
     except Exception as exc:
@@ -1193,7 +1264,9 @@ def _parallel_mcp_search(
             return []
 
     all_sources: list = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_queries) as executor:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=parallel_queries
+    ) as executor:
         futures = [executor.submit(_search_one, plan) for plan in query_plan]
         for future in concurrent.futures.as_completed(futures):
             if cancel_check is not None:
@@ -1241,7 +1314,9 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     )
 
     mcp_rate = env_float("RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND", 2.0, min_value=0.1)
-    logger.info("MCP rate limit: %.1f req/s (RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND)", mcp_rate)
+    logger.info(
+        "MCP rate limit: %.1f req/s (RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND)", mcp_rate
+    )
     mcp_connector = ScientificPapersMCPConnector(max_requests_per_second=mcp_rate)
     mcp_max_per_source = env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
     retrieved_by_source: dict[str, list[RetrievedSource]] = {}
@@ -1256,10 +1331,18 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     for src in raw_sources:
         retrieved_by_source.setdefault(src.connector, []).append(src)
 
-    all_sources = [source for sources in retrieved_by_source.values() for source in sources]
-    deduped_sources, dedup_stats = deduplicate_sources(all_sources, prefer_connector="openalex")
-    found_by_source = {source: len(items) for source, items in retrieved_by_source.items()}
-    kept_by_source = {source: count for source, count in dedup_stats.connectors_merged.items()}
+    all_sources = [
+        source for sources in retrieved_by_source.values() for source in sources
+    ]
+    deduped_sources, dedup_stats = deduplicate_sources(
+        all_sources, prefer_connector="openalex"
+    )
+    found_by_source = {
+        source: len(items) for source, items in retrieved_by_source.items()
+    }
+    kept_by_source = {
+        source: count for source, count in dedup_stats.connectors_merged.items()
+    }
 
     emit_run_event(
         session=session,
@@ -1354,7 +1437,9 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         _cancel_check()
         source = candidate.source
         origin = source.connector
-        row = _upsert_source(session, tenant_id=state.tenant_id, source=source, origin=origin)
+        row = _upsert_source(
+            session, tenant_id=state.tenant_id, source=source, origin=origin
+        )
         _upsert_run_source(
             session,
             tenant_id=state.tenant_id,
@@ -1420,6 +1505,5 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
     state.retrieved_sources = selected_refs
     state.vetted_sources = selected_refs
     state.evidence_snippets = []
-
 
     return state

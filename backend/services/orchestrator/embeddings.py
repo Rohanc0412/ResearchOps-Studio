@@ -1,54 +1,80 @@
 from __future__ import annotations
 
 import atexit
+import json
 import math
 import multiprocessing
 import os
 import threading
 from collections.abc import Iterable
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
-from core.env import env_optional_int
+from core.env import env_float, env_int, env_optional_int
+
+DEFAULT_BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 
 # ---------------------------------------------------------------------------
 # Shared embedding configuration resolvers
 # Reads EMBED_* env vars; falls back to legacy RETRIEVER_EMBED_* for compat.
 # ---------------------------------------------------------------------------
 
+
 def resolve_embed_provider(llm_provider: str | None = None) -> str:
     """Return the embedding provider name.
 
     Resolution order:
     1. EMBED_PROVIDER env var (or legacy RETRIEVER_EMBED_PROVIDER)
-    2. ``llm_provider`` hint passed by the caller (e.g. the retriever passes the
-       active LLM provider so embeddings stay on the same backend by default)
-    3. LLM_PROVIDER env var
-    4. Hard default: ``"local"``
+    2. Hard default: ``"local"``
     """
+    _ = llm_provider
     raw = os.getenv("EMBED_PROVIDER") or os.getenv("RETRIEVER_EMBED_PROVIDER")
     if raw and raw.strip():
         return raw.strip().lower()
-    if llm_provider and llm_provider.strip():
-        return llm_provider.strip().lower()
-    lp = os.getenv("LLM_PROVIDER", "").strip().lower()
-    return lp if lp else "local"
+    return "local"
 
 
 def resolve_embed_model(provider: str) -> str:
-    raw = (
-        os.getenv("EMBED_MODEL")
-        or os.getenv("HF_EMBED_MODEL")
-        or os.getenv("RETRIEVER_EMBED_MODEL")
-    )
+    raw = None
+    if provider == "bedrock":
+        raw = os.getenv("BEDROCK_EMBED_MODEL")
+    elif provider in {"hf", "huggingface", "hosted", "inference"}:
+        raw = os.getenv("HF_EMBED_MODEL")
+    raw = raw or os.getenv("EMBED_MODEL") or os.getenv("RETRIEVER_EMBED_MODEL")
     if raw and raw.strip():
         return raw.strip()
+    if provider == "bedrock":
+        return DEFAULT_BEDROCK_EMBED_MODEL
     if provider == "ollama":
         return "nomic-embed-text"
     if provider in {"local", "sentence-transformers", "bge"}:
         return "BAAI/bge-m3"
     return "text-embedding-3-small"
+
+
+def resolve_bedrock_embed_region_name() -> str | None:
+    raw = (
+        os.getenv("BEDROCK_EMBED_REGION")
+        or os.getenv("BEDROCK_REGION")
+        or os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+    )
+    if raw and raw.strip():
+        return raw.strip()
+    return None
+
+
+def resolve_bedrock_embed_batch_size() -> int:
+    return env_int("BEDROCK_EMBED_BATCH_SIZE", 8, min_value=1)
+
+
+def resolve_bedrock_embed_concurrency() -> int:
+    return env_int("BEDROCK_EMBED_CONCURRENCY", 4, min_value=1)
+
+
+def resolve_bedrock_embed_timeout_seconds() -> float:
+    return env_float("BEDROCK_EMBED_TIMEOUT_SECONDS", 60.0, min_value=1.0)
 
 
 def resolve_embed_device() -> str:
@@ -61,6 +87,7 @@ def resolve_embed_device() -> str:
         return raw.strip()
     try:
         import torch
+
         return "cuda" if torch.cuda.is_available() else "cpu"
     except Exception:
         return "cpu"
@@ -83,9 +110,8 @@ def resolve_embed_normalize() -> bool:
 
 
 def resolve_embed_trust_remote_code(model_name: str) -> bool:
-    raw = (
-        os.getenv("EMBED_TRUST_REMOTE_CODE")
-        or os.getenv("RETRIEVER_EMBED_TRUST_REMOTE_CODE")
+    raw = os.getenv("EMBED_TRUST_REMOTE_CODE") or os.getenv(
+        "RETRIEVER_EMBED_TRUST_REMOTE_CODE"
     )
     if raw and raw.strip():
         return raw.strip().lower() in {"1", "true", "yes"}
@@ -93,10 +119,7 @@ def resolve_embed_trust_remote_code(model_name: str) -> bool:
 
 
 def resolve_embed_max_seq_len() -> int | None:
-    raw = (
-        os.getenv("EMBED_MAX_SEQ_LEN")
-        or os.getenv("RETRIEVER_EMBED_MAX_SEQ_LEN")
-    )
+    raw = os.getenv("EMBED_MAX_SEQ_LEN") or os.getenv("RETRIEVER_EMBED_MAX_SEQ_LEN")
     if not raw or not raw.strip():
         return None
     try:
@@ -117,10 +140,12 @@ def resolve_embed_workers() -> int:
             pass
     return 3
 
+
 _EMBED_CLIENTS: dict[tuple, SentenceTransformerEmbedClient] = {}
 _EMBED_MODEL_CONFIGS: dict[str, set[tuple]] = {}
 _OLLAMA_CLIENTS: dict[tuple, OllamaEmbedClient] = {}
 _HF_CLIENTS: dict[tuple, HuggingFaceEmbedClient] = {}
+_BEDROCK_CLIENTS: dict[tuple, BedrockEmbedClient] = {}
 
 
 @dataclass
@@ -202,9 +227,13 @@ class OllamaEmbedClient:
             return []
         max_chars = env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
         if max_chars is not None:
-            texts = [text[:max_chars] if len(text) > max_chars else text for text in texts]
+            texts = [
+                text[:max_chars] if len(text) > max_chars else text for text in texts
+            ]
         try:
-            data = self._post_json("/api/embed", {"model": self.model_name, "input": texts})
+            data = self._post_json(
+                "/api/embed", {"model": self.model_name, "input": texts}
+            )
             embeddings = data.get("embeddings")
             if embeddings is None:
                 embedding = data.get("embedding")
@@ -222,7 +251,11 @@ class OllamaEmbedClient:
             if _is_http_status(exc, 500) and len(texts) > 1:
                 mid = len(texts) // 2
                 return self.embed_texts(texts[:mid]) + self.embed_texts(texts[mid:])
-            if _is_http_status(exc, 404) or _is_http_status(exc, 400) or _is_http_status(exc, 500):
+            if (
+                _is_http_status(exc, 404)
+                or _is_http_status(exc, 400)
+                or _is_http_status(exc, 500)
+            ):
                 return [self._embed_single(text) for text in texts]
             raise RuntimeError(f"Ollama embeddings request failed: {exc}") from exc
 
@@ -230,7 +263,9 @@ class OllamaEmbedClient:
         max_chars = env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
         if max_chars is not None and len(text) > max_chars:
             text = text[:max_chars]
-        data = self._post_json("/api/embeddings", {"model": self.model_name, "prompt": text})
+        data = self._post_json(
+            "/api/embeddings", {"model": self.model_name, "prompt": text}
+        )
         embedding = data.get("embedding")
         if not isinstance(embedding, list):
             raise RuntimeError("Ollama embeddings response missing embedding.")
@@ -289,6 +324,136 @@ class HuggingFaceEmbedClient:
         return resp.json()
 
 
+@dataclass
+class BedrockEmbedClient:
+    model_name: str
+    region_name: str
+    batch_size: int
+    max_concurrency: int
+    timeout_seconds: float
+    dimensions: int | None = None
+    _runtime_client: Any | None = None
+
+    def _get_runtime_client(self) -> Any:
+        if self._runtime_client is None:
+            try:
+                import boto3
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Bedrock embeddings require boto3. Install backend dependencies with boto3>=1.34."
+                ) from exc
+            config = None
+            try:
+                from botocore.config import Config
+
+                config = Config(
+                    read_timeout=self.timeout_seconds,
+                    connect_timeout=self.timeout_seconds,
+                )
+            except Exception:
+                config = None
+            kwargs: dict[str, Any] = {"region_name": self.region_name}
+            if config is not None:
+                kwargs["config"] = config
+            self._runtime_client = boto3.client("bedrock-runtime", **kwargs)
+        return self._runtime_client
+
+    def _invoke_text(self, text: str) -> list[float]:
+        payload = {"inputText": text}
+        response = self._get_runtime_client().invoke_model(
+            modelId=self.model_name,
+            body=json.dumps(payload),
+            contentType="application/json",
+            accept="application/json",
+        )
+        data = self._read_response_json(response)
+        embedding = self._extract_embedding(data)
+        if self.dimensions is None:
+            self.dimensions = len(embedding)
+        elif embedding and len(embedding) != self.dimensions:
+            raise RuntimeError(
+                "Bedrock embeddings dimension mismatch: "
+                f"expected {self.dimensions} got {len(embedding)}"
+            )
+        return embedding
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        embeddings = [self._invoke_text(text) for text in texts]
+        if len(embeddings) != len(texts):
+            raise RuntimeError(
+                f"Bedrock embeddings count mismatch: expected {len(texts)} got {len(embeddings)}"
+            )
+        return embeddings
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        batches = [
+            texts[start : start + self.batch_size]
+            for start in range(0, len(texts), self.batch_size)
+        ]
+        batch_results: list[list[list[float]] | None] = [None] * len(batches)
+        with ThreadPoolExecutor(max_workers=self.max_concurrency) as executor:
+            futures = {
+                executor.submit(self._embed_batch, batch): batch_idx
+                for batch_idx, batch in enumerate(batches)
+            }
+            for future in as_completed(futures):
+                batch_idx = futures[future]
+                embeddings = future.result()
+                expected = len(batches[batch_idx])
+                if len(embeddings) != expected:
+                    raise RuntimeError(
+                        f"Bedrock embeddings count mismatch: expected {expected} got {len(embeddings)}"
+                    )
+                batch_results[batch_idx] = embeddings
+
+        ordered: list[list[float]] = []
+        for embeddings in batch_results:
+            if embeddings is None:
+                raise RuntimeError(
+                    "Bedrock embeddings request did not return all batch results."
+                )
+            ordered.extend(embeddings)
+        if len(ordered) != len(texts):
+            raise RuntimeError(
+                f"Bedrock embeddings count mismatch: expected {len(texts)} got {len(ordered)}"
+            )
+        return ordered
+
+    @staticmethod
+    def _read_response_json(response: Any) -> dict[str, Any]:
+        body = response.get("body") if isinstance(response, dict) else None
+        if hasattr(body, "read"):
+            payload = body.read()
+        else:
+            payload = body
+        if isinstance(payload, (bytes, bytearray)):
+            payload = payload.decode("utf-8")
+        if not isinstance(payload, str):
+            raise RuntimeError("Bedrock embeddings response body is missing.")
+        data = json.loads(payload)
+        if not isinstance(data, dict):
+            raise RuntimeError("Bedrock embeddings response is invalid.")
+        return data
+
+    @staticmethod
+    def _extract_embedding(data: dict[str, Any]) -> list[float]:
+        embedding = data.get("embedding")
+        if isinstance(embedding, list) and all(
+            isinstance(val, (int, float)) for val in embedding
+        ):
+            return [float(val) for val in embedding]
+        embeddings_by_type = data.get("embeddingsByType")
+        if isinstance(embeddings_by_type, dict):
+            values = embeddings_by_type.get("float")
+            if isinstance(values, list) and all(
+                isinstance(val, (int, float)) for val in values
+            ):
+                return [float(val) for val in values]
+        raise RuntimeError("Bedrock embeddings response missing embedding.")
+
+
 def _is_http_status(exc: Exception, status_code: int) -> bool:
     try:
         import httpx
@@ -305,7 +470,9 @@ def _coerce_hf_embeddings(data: Any, *, expected: int) -> list[list[float]]:
         raise RuntimeError("Hugging Face embeddings response invalid.")
 
     def is_vector(item: Any) -> bool:
-        return isinstance(item, list) and (not item or isinstance(item[0], (int, float)))
+        return isinstance(item, list) and (
+            not item or isinstance(item[0], (int, float))
+        )
 
     def mean_pool(matrix: Iterable[Iterable[float]]) -> list[float]:
         rows = [list(row) for row in matrix if isinstance(row, list)]
@@ -429,6 +596,35 @@ def get_hf_client(
     return client
 
 
+def get_bedrock_client(
+    *,
+    model_name: str,
+    region_name: str,
+    batch_size: int,
+    max_concurrency: int,
+    timeout_seconds: float,
+) -> BedrockEmbedClient:
+    cache_key = (
+        model_name,
+        region_name,
+        batch_size,
+        max_concurrency,
+        timeout_seconds,
+    )
+    cached = _BEDROCK_CLIENTS.get(cache_key)
+    if cached is not None:
+        return cached
+    client = BedrockEmbedClient(
+        model_name=model_name,
+        region_name=region_name,
+        batch_size=batch_size,
+        max_concurrency=max_concurrency,
+        timeout_seconds=timeout_seconds,
+    )
+    _BEDROCK_CLIENTS[cache_key] = client
+    return client
+
+
 # ── Free RAM detection (no psutil dependency) ─────────────────────────────────
 
 # Approximate RAM consumed per bge-m3 worker process.
@@ -503,6 +699,7 @@ def _worker_init(
     if dtype:
         try:
             import torch
+
             _dtype = getattr(torch, dtype)
             model_kwargs["dtype"] = _dtype
         except Exception:
@@ -518,6 +715,7 @@ def _worker_init(
         _worker_model = SentenceTransformer(model_name, **init_kwargs)
     except TypeError:
         import warnings
+
         # Older sentence-transformers may not support all kwargs; retry with minimal args
         init_kwargs.pop("model_kwargs", None)
         init_kwargs.pop("trust_remote_code", None)
@@ -590,7 +788,12 @@ class EmbedWorkerPool:
             self._executor = ProcessPoolExecutor(
                 max_workers=n_workers,
                 initializer=_worker_init_shared,
-                initargs=(preloaded_model, device, normalize_embeddings, max_seq_length),
+                initargs=(
+                    preloaded_model,
+                    device,
+                    normalize_embeddings,
+                    max_seq_length,
+                ),
                 mp_context=multiprocessing.get_context("spawn"),
             )
         else:
@@ -598,12 +801,21 @@ class EmbedWorkerPool:
             self._executor = ProcessPoolExecutor(
                 max_workers=n_workers,
                 initializer=_worker_init,
-                initargs=(model_name, device, normalize_embeddings, max_seq_length, dtype, trust_remote_code),
+                initargs=(
+                    model_name,
+                    device,
+                    normalize_embeddings,
+                    max_seq_length,
+                    dtype,
+                    trust_remote_code,
+                ),
                 mp_context=multiprocessing.get_context("spawn"),
             )
         atexit.register(self.shutdown)
 
-    def encode(self, texts: list[str], *, n_chunks: int | None = None) -> list[list[float]]:
+    def encode(
+        self, texts: list[str], *, n_chunks: int | None = None
+    ) -> list[list[float]]:
         """Distribute texts across workers and return embeddings in original order.
 
         n_chunks controls how many pieces the text list is split into before being
@@ -678,13 +890,16 @@ def release_gpu_memory() -> None:
 
     try:
         import torch
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception:
         pass
 
     if offloaded:
-        _log.info("GPU offload: %d model(s) moved to CPU; CUDA cache cleared.", offloaded)
+        _log.info(
+            "GPU offload: %d model(s) moved to CPU; CUDA cache cleared.", offloaded
+        )
 
 
 def get_embed_worker_pool(
@@ -719,6 +934,9 @@ def get_embed_worker_pool(
             )
         else:
             import logging
+
             _log = logging.getLogger(__name__)
-            _log.debug("get_embed_worker_pool: returning existing pool (new params ignored)")
+            _log.debug(
+                "get_embed_worker_pool: returning existing pool (new params ignored)"
+            )
         return _EMBED_WORKER_POOL
