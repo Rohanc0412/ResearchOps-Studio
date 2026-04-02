@@ -183,6 +183,35 @@ class ResearchRuntime:
         ):
             raise RunCancelledError(f"Run {self.run_id} cancelled by user")
 
+    async def mark_succeeded(self, *, current_stage: str = "export") -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.succeeded,
+            current_stage=current_stage,
+            finished_at=datetime.now(UTC),
+        )
+
+    async def mark_canceled(self) -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.canceled,
+            finished_at=datetime.now(UTC),
+        )
+
+    async def mark_failed(self, *, failure_reason: str) -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.failed,
+            failure_reason=failure_reason,
+            finished_at=datetime.now(UTC),
+        )
+
     def queue_node_event(
         self,
         *,

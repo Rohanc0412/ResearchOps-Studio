@@ -187,6 +187,63 @@ async def test_run_research_orchestrator_transitions_to_running_before_graph_han
 
 
 @pytest.mark.asyncio
+async def test_run_research_orchestrator_uses_real_runtime_terminal_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    statuses: list[RunStatusDb] = []
+    runtime_run_orchestrator = run_research_orchestrator.__globals__["run_orchestrator"]
+
+    class _SessionStub:
+        async def execute(self, _stmt):
+            raise AssertionError("graph execution should be short-circuited by fake graph")
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class _FakeGraph:
+        async def ainvoke(self, state, config=None):
+            raise run_orchestrator.__globals__["RunCancelledError"]("cancel requested")
+
+    async def fake_runtime_transition(**kwargs):
+        statuses.append(kwargs["to_status"])
+        return SimpleNamespace(status=kwargs["to_status"])
+
+    async def fail_if_runner_transition_called(**_kwargs):
+        raise AssertionError("runner terminal fallback should not be used for ResearchRuntime")
+
+    monkeypatch.setitem(
+        run_research_orchestrator.__globals__,
+        "transition_run_status_async",
+        fake_runtime_transition,
+    )
+    monkeypatch.setitem(
+        runtime_run_orchestrator.__globals__,
+        "transition_run_status_async",
+        fail_if_runner_transition_called,
+    )
+    monkeypatch.setitem(
+        runtime_run_orchestrator.__globals__,
+        "create_orchestrator_graph",
+        lambda *_a, **_k: _FakeGraph(),
+    )
+
+    result = await run_research_orchestrator(
+        session=_SessionStub(),
+        tenant_id=tenant_id,
+        run_id=run_id,
+        inputs=ResearchRunInputs(user_query="q"),
+    )
+
+    assert result.run_id == run_id
+    assert statuses == [RunStatusDb.running, RunStatusDb.canceled]
+
+
+@pytest.mark.asyncio
 async def test_runtime_execute_node_checks_cancellation_and_commits_after_node(
     monkeypatch: pytest.MonkeyPatch, runtime: ResearchRuntime
 ) -> None:
@@ -560,6 +617,11 @@ async def test_run_orchestrator_final_execute_node_commit_ignores_late_cancel(
             return next_state.model_dump()
 
     monkeypatch.setattr("services.orchestrator.runner.transition_run_status_async", fake_transition)
+    monkeypatch.setitem(
+        type(runtime).mark_succeeded.__globals__,
+        "transition_run_status_async",
+        fake_transition,
+    )
     monkeypatch.setattr("services.orchestrator.runner._persist_artifacts", AsyncMock(return_value=0))
     monkeypatch.setattr(
         "services.orchestrator.runner.create_orchestrator_graph",

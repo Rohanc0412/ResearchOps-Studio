@@ -22,6 +22,9 @@ from sqlalchemy.orm import Session
 
 ORPHANED_JOB_RECOVERY_ERROR = "Recovered orphaned running job after service restart"
 ORPHANED_RUN_RECOVERY_ERROR_CODE = "stale_running_recovered"
+SYNC_RESEARCH_DISPATCH_ERROR = (
+    "research.run dispatch requires async worker runtime; use run_once_async"
+)
 
 
 def _now_utc() -> datetime:
@@ -245,9 +248,7 @@ def run_once_sync(*, SessionLocal) -> bool:
     try:
         with SessionLocal() as session:
             if job_type == RESEARCH_JOB_TYPE:
-                raise RuntimeError(
-                    "research.run dispatch requires async worker runtime; use run_once_async"
-                )
+                raise RuntimeError(SYNC_RESEARCH_DISPATCH_ERROR)
             raise RuntimeError(f"Unknown job_type: {job_type}")
         with SessionLocal() as session:
             _mark_job_done_sync(session, job_id)
@@ -256,7 +257,7 @@ def run_once_sync(*, SessionLocal) -> bool:
         err = str(e)
         with SessionLocal() as session:
             _mark_job_failed_sync(session, job_id, err)
-            if job_type != RESEARCH_JOB_TYPE:
+            if job_type != RESEARCH_JOB_TYPE or err == SYNC_RESEARCH_DISPATCH_ERROR:
                 _mark_run_failed_sync(session, run_id=run_id, tenant_id=tenant_id, error=err)
             session.commit()
     finally:

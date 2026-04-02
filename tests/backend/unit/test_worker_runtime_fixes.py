@@ -419,7 +419,9 @@ def test_run_once_sync_research_dispatch_is_disabled(monkeypatch):
     assert worker_main.run_once_sync(SessionLocal=session_local) is True
     assert process_called is False
     assert any(name == "mark_job_failed" for name, _ in calls)
-    assert not any(name == "mark_run_failed" for name, _ in calls)
+    run_failed = [payload for name, payload in calls if name == "mark_run_failed"]
+    assert len(run_failed) == 1
+    assert run_failed[0]["error"] == worker_main.SYNC_RESEARCH_DISPATCH_ERROR
     assert not any(name == "mark_done" for name, _ in calls)
 
 
