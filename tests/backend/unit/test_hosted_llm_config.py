@@ -34,6 +34,11 @@ def test_resolve_model_for_stage_falls_back_to_default_hosted_model(monkeypatch)
 def test_get_llm_client_uses_bedrock_defaults(monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("AWS_SHARED_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("AWS_SDK_LOAD_CONFIG", raising=False)
     monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
@@ -50,6 +55,11 @@ def test_get_llm_client_uses_bedrock_defaults(monkeypatch):
 def test_get_llm_client_raises_for_missing_bedrock_region(monkeypatch):
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("AWS_SHARED_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("AWS_SDK_LOAD_CONFIG", raising=False)
     monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
 
     from llm import LLMError, get_llm_client
