@@ -8,9 +8,10 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from core.pipeline_events.events import emit_run_event, instrument_node
+from core.pipeline_events.events import emit_node_progress, emit_run_event, instrument_node
 from db.init_db import init_db
 from core.orchestrator.state import OrchestratorState
+from db.models.run_events import RunEventRow
 from db.models.projects import ProjectRow
 from db.models.run_usage_metrics import RunUsageMetricRow
 from db.models.runs import RunRow, RunStatusDb
@@ -24,6 +25,7 @@ from services.orchestrator.runtime import (
     run_research_orchestrator,
 )
 from services.orchestrator.runtime_types import ResearchRunInputs
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _TEST_DATABASE_URL = os.environ.get(
@@ -279,6 +281,18 @@ async def test_runtime_execute_node_commits_each_step_on_repeated_execution(
     ]
 
 
+def test_emit_node_progress_requires_runtime_owned_session() -> None:
+    with pytest.raises(RuntimeError, match="runtime-owned"):
+        emit_node_progress(
+            session=SimpleNamespace(),
+            tenant_id=uuid4(),
+            run_id=uuid4(),
+            event_type="progress",
+            stage="draft",
+            data={"section_index": 1},
+        )
+
+
 @pytest.mark.asyncio
 async def test_runtime_flush_pending_events_drains_queue_only_once(
     monkeypatch: pytest.MonkeyPatch, runtime: ResearchRuntime
@@ -374,6 +388,52 @@ async def test_runtime_execute_node_uses_runtime_event_store_for_sync_node_progr
 
     assert result.iteration_count == 1
     assert emitted_event_types == ["stage_start", "progress", "stage_finish"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_execute_node_persists_single_progress_sequence_without_duplicate_direct_writes(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncSession, seeded_run: RunRow
+) -> None:
+    def fail_if_direct_append(**_kwargs):
+        raise AssertionError("direct sync append path must not be used for node progress")
+
+    monkeypatch.setattr("core.pipeline_events.events.append_run_event", fail_if_direct_append)
+    runtime = await ResearchRuntime.create(
+        session=session,
+        tenant_id=seeded_run.tenant_id,
+        run_id=seeded_run.id,
+        inputs=ResearchRunInputs(user_query="persisted progress"),
+    )
+
+    @instrument_node("draft")
+    def sync_node(state: OrchestratorState, sync_session) -> OrchestratorState:
+        emit_node_progress(
+            session=sync_session,
+            tenant_id=state.tenant_id,
+            run_id=state.run_id,
+            event_type="progress",
+            stage="draft",
+            data={"section_index": 1, "total_sections": 1},
+        )
+        state.iteration_count += 1
+        return state
+
+    state = runtime.initial_state()
+    await runtime.execute_node(node_name="writer", node_func=sync_node, state=state)
+    rows = (
+        await session.execute(
+            select(RunEventRow)
+            .where(
+                RunEventRow.tenant_id == seeded_run.tenant_id,
+                RunEventRow.run_id == seeded_run.id,
+            )
+            .order_by(RunEventRow.event_number.asc())
+        )
+    ).scalars().all()
+
+    event_types = [row.event_type for row in rows]
+    assert event_types == ["stage_start", "progress", "stage_finish"]
+    assert [row.event_number for row in rows] == [1, 2, 3]
 
 
 @pytest.mark.asyncio

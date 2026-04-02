@@ -317,16 +317,23 @@ def emit_node_progress(
     message: str | None = None,
     data: dict[str, Any] | None = None,
 ) -> RunEventRow | None:
-    """Node-facing helper for runtime-owned progress/event emission."""
-    return emit_run_event(
-        session=session,
+    """Node-facing helper that requires runtime-owned event emission."""
+    runtime_enqueue = getattr(session, "enqueue_runtime_event", None)
+    if not callable(runtime_enqueue):
+        raise RuntimeError(
+            "emit_node_progress requires a runtime-owned session proxy "
+            "that exposes enqueue_runtime_event"
+        )
+
+    runtime_enqueue(
         tenant_id=tenant_id,
         run_id=run_id,
         event_type=event_type,
         stage=stage,
-        message=message,
-        data=data,
+        message=message or f"{event_type}: {stage or 'unknown'}",
+        data=data or {},
     )
+    return None
 
 
 def instrument_node(stage_name: str) -> Callable:
