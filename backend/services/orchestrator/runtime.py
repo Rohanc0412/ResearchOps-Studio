@@ -159,7 +159,6 @@ class ResearchRuntime:
         await self.checkpoint_store.write_after_node(state=next_state, node_name=node_name)
         await self.flush_pending_events()
         await self.session.commit()
-        await self.assert_not_cancelled()
         return next_state
 
 

@@ -9,10 +9,13 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from db.init_db import init_db
+from core.orchestrator.state import OrchestratorState
 from db.models.projects import ProjectRow
 from db.models.run_usage_metrics import RunUsageMetricRow
 from db.models.runs import RunRow, RunStatusDb
+from services.orchestrator.cancellation import RunCancelledError
 from services.orchestrator.research import process_research_run
+from services.orchestrator.runner import run_orchestrator
 from services.orchestrator.runtime import (
     ResearchRuntime,
     RuntimeCheckpointStore,
@@ -209,8 +212,153 @@ async def test_runtime_execute_node_checks_cancellation_and_commits_after_node(
         "checkpoint:retriever",
         "flush_pending_events",
         "commit",
-        "assert_not_cancelled",
     ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_execute_node_commits_each_step_on_repeated_execution(
+    monkeypatch: pytest.MonkeyPatch, runtime: ResearchRuntime
+) -> None:
+    calls: list[str] = []
+
+    async def fake_assert_not_cancelled(self) -> None:
+        calls.append("assert_not_cancelled")
+
+    async def fake_write_after_node(self, *, state, node_name: str) -> None:
+        calls.append(f"checkpoint:{node_name}")
+
+    async def fake_flush_pending_events(self) -> None:
+        calls.append("flush_pending_events")
+
+    async def fake_commit() -> None:
+        calls.append("commit")
+
+    monkeypatch.setattr(type(runtime), "assert_not_cancelled", fake_assert_not_cancelled, raising=False)
+    monkeypatch.setattr(type(runtime.checkpoint_store), "write_after_node", fake_write_after_node, raising=False)
+    monkeypatch.setattr(type(runtime), "flush_pending_events", fake_flush_pending_events, raising=False)
+    monkeypatch.setattr(runtime.session, "commit", fake_commit)
+
+    async def step_one(state, runtime):
+        calls.append("node:retriever")
+        state.iteration_count += 1
+        return state
+
+    async def step_two(state, runtime):
+        calls.append("node:writer")
+        state.iteration_count += 1
+        return state
+
+    state = runtime.initial_state()
+    state = await runtime.execute_node(node_name="retriever", node_func=step_one, state=state)
+    state = await runtime.execute_node(node_name="writer", node_func=step_two, state=state)
+
+    assert state.iteration_count == 2
+    assert calls == [
+        "assert_not_cancelled",
+        "node:retriever",
+        "checkpoint:retriever",
+        "flush_pending_events",
+        "commit",
+        "assert_not_cancelled",
+        "node:writer",
+        "checkpoint:writer",
+        "flush_pending_events",
+        "commit",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_orchestrator_final_execute_node_commit_ignores_late_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    run_row = SimpleNamespace(id=run_id, tenant_id=tenant_id, project_id=uuid4())
+    statuses: list[RunStatusDb] = []
+
+    class _ExecuteResult:
+        def scalar_one_or_none(self):
+            return run_row
+
+    class _SessionStub:
+        def __init__(self):
+            self.cancel_requested = False
+
+        async def execute(self, _stmt):
+            return _ExecuteResult()
+
+        async def flush(self):
+            return None
+
+        async def run_sync(self, fn):
+            return fn(None)
+
+        async def commit(self):
+            # Simulate a cancellation signal landing right after final-step commit.
+            self.cancel_requested = True
+
+        async def rollback(self):
+            return None
+
+    session = _SessionStub()
+    runtime = ResearchRuntime(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        inputs=ResearchRunInputs(user_query="q"),
+        event_store=RuntimeEventStore(session=session),
+        checkpoint_store=RuntimeCheckpointStore(session=session),
+    )
+
+    async def fake_transition(**kwargs):
+        statuses.append(kwargs["to_status"])
+        return run_row
+
+    async def fake_checkpoint(*args, **kwargs):
+        return None
+
+    async def fake_assert_not_cancelled(self):
+        if self.session.cancel_requested:
+            raise RunCancelledError("cancelled after commit")
+
+    class _FakeGraph:
+        def __init__(self, graph_runtime: ResearchRuntime):
+            self.graph_runtime = graph_runtime
+
+        async def ainvoke(self, state, config=None):
+            orchestrator_state = OrchestratorState(**state)
+
+            def final_node(node_state, _session):
+                node_state.artifacts = {}
+                return node_state
+
+            next_state = await self.graph_runtime.execute_node(
+                node_name="exporter",
+                node_func=final_node,
+                state=orchestrator_state,
+            )
+            return next_state.model_dump()
+
+    monkeypatch.setattr("services.orchestrator.runner.transition_run_status_async", fake_transition)
+    monkeypatch.setattr("services.orchestrator.runner._persist_artifacts", AsyncMock(return_value=0))
+    monkeypatch.setattr(
+        "services.orchestrator.runner.create_orchestrator_graph",
+        lambda graph_runtime: _FakeGraph(graph_runtime),
+    )
+    monkeypatch.setattr(type(runtime.checkpoint_store), "write_after_node", fake_checkpoint, raising=False)
+    monkeypatch.setattr(type(runtime), "assert_not_cancelled", fake_assert_not_cancelled, raising=False)
+
+    result = await run_orchestrator(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_query="q",
+        transition_to_running=False,
+        runtime=runtime,
+    )
+
+    assert result.user_query == "q"
+    assert statuses == [RunStatusDb.succeeded]
 
 
 @pytest.mark.asyncio
