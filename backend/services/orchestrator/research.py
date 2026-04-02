@@ -17,7 +17,8 @@ from embeddings import (
     resolve_embed_workers,
 )
 from observability.context import bind
-from runner import run_orchestrator
+from runtime import run_research_orchestrator
+from runtime_types import ResearchRunInputs
 from sqlalchemy.ext.asyncio import AsyncSession
 
 RESEARCH_JOB_TYPE = "research.run"
@@ -58,6 +59,20 @@ def _warm_local_embed_pool(*, llm_provider: str | None) -> None:
     )
 
 
+def _parse_max_iterations(value: object, *, default: int = 5) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value if value >= 1 else default
+    if isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+        return parsed if parsed >= 1 else default
+    return default
+
+
 async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id: UUID) -> None:
     """Process a full research run using the LangGraph pipeline."""
     run = await get_run(session=session, tenant_id=tenant_id, run_id=run_id)
@@ -78,9 +93,19 @@ async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id
             stage_models = None
     elif isinstance(stage_models_raw, dict):
         stage_models = stage_models_raw
+    max_iterations = _parse_max_iterations(inputs.get("max_iterations"), default=5)
 
     if not user_query:
         raise ValueError("run input missing user_query")
+
+    run_inputs = ResearchRunInputs(
+        user_query=user_query,
+        research_goal=research_goal,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        stage_models=stage_models or {},
+        max_iterations=max_iterations,
+    )
 
     bind(tenant_id=str(tenant_id), run_id=str(run_id))
     logger.info(
@@ -93,11 +118,12 @@ async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id
             "research_goal": research_goal,
             "llm_provider": llm_provider,
             "llm_model": llm_model,
-            "stage_models": stage_models,
+            "stage_models": run_inputs.stage_models,
+            "max_iterations": run_inputs.max_iterations,
         },
     )
     try:
-        _warm_local_embed_pool(llm_provider=llm_provider)
+        _warm_local_embed_pool(llm_provider=run_inputs.llm_provider)
         logger.info(
             "Research pipeline invoking orchestrator",
             extra={
@@ -106,15 +132,11 @@ async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id
                 "tenant_id": str(tenant_id),
             },
         )
-        await run_orchestrator(
+        await run_research_orchestrator(
             session=session,
             tenant_id=tenant_id,
             run_id=run_id,
-            user_query=user_query,
-            research_goal=research_goal,
-            llm_provider=llm_provider,
-            llm_model=llm_model,
-            stage_models=stage_models,
+            inputs=run_inputs,
         )
         logger.info(
             "Research pipeline run finished",

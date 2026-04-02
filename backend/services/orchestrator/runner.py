@@ -101,6 +101,7 @@ async def run_orchestrator(
     llm_model: str | None = None,
     stage_models: dict[str, str | None] | None = None,
     max_iterations: int = 5,
+    transition_to_running: bool = True,
 ) -> OrchestratorState:
     """
     Execute the orchestrator graph for a run.
@@ -119,24 +120,24 @@ async def run_orchestrator(
     Raises:
         Exception: If graph execution fails
     """
-    # Transition run to running
-    await transition_run_status_async(
-        session=session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        to_status=RunStatusDb.running,
-        current_stage="retrieve",
-    )
-    await session.commit()
-    logger.info(
-        "Run transitioned to running",
-        extra={
-            "event": "pipeline.run.transitioned",
-            "run_id": str(run_id),
-            "tenant_id": str(tenant_id),
-            "current_stage": "retrieve",
-        },
-    )
+    if transition_to_running:
+        await transition_run_status_async(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            to_status=RunStatusDb.running,
+            current_stage="retrieve",
+        )
+        await session.commit()
+        logger.info(
+            "Run transitioned to running",
+            extra={
+                "event": "pipeline.run.transitioned",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+                "current_stage": "retrieve",
+            },
+        )
 
     if langfuse_enabled():
         try:
