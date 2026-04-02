@@ -170,6 +170,87 @@ class _RunnerRuntimeAdapter:
         await self.session.commit()
         return next_state
 
+    async def mark_succeeded(self, *, current_stage: str = "export") -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.succeeded,
+            current_stage=current_stage,
+            finished_at=datetime.now(UTC),
+        )
+
+    async def mark_canceled(self) -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.canceled,
+            finished_at=datetime.now(UTC),
+        )
+
+    async def mark_failed(self, *, failure_reason: str) -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.failed,
+            failure_reason=failure_reason,
+            finished_at=datetime.now(UTC),
+        )
+
+
+class _RunnerTerminalLifecycleAdapter:
+    def __init__(self, *, session: AsyncSession, tenant_id: UUID, run_id: UUID) -> None:
+        self.session = session
+        self.tenant_id = tenant_id
+        self.run_id = run_id
+
+    async def mark_succeeded(self, *, current_stage: str = "export") -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.succeeded,
+            current_stage=current_stage,
+            finished_at=datetime.now(UTC),
+        )
+
+    async def mark_canceled(self) -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.canceled,
+            finished_at=datetime.now(UTC),
+        )
+
+    async def mark_failed(self, *, failure_reason: str) -> None:
+        await transition_run_status_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            to_status=RunStatusDb.failed,
+            failure_reason=failure_reason,
+            finished_at=datetime.now(UTC),
+        )
+
+
+def _resolve_terminal_lifecycle_owner(
+    runtime_obj: Any,
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+):
+    has_terminal_hooks = all(
+        callable(getattr(runtime_obj, hook_name, None))
+        for hook_name in ("mark_succeeded", "mark_canceled", "mark_failed")
+    )
+    if has_terminal_hooks:
+        return runtime_obj
+    return _RunnerTerminalLifecycleAdapter(session=session, tenant_id=tenant_id, run_id=run_id)
+
 
 async def run_orchestrator(
     session: AsyncSession,
@@ -249,6 +330,12 @@ async def run_orchestrator(
         stage_models=stage_models or {},
         max_iterations=max_iterations,
     )
+    terminal_lifecycle = _resolve_terminal_lifecycle_owner(
+        runtime_obj,
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
     initial_state = runtime_obj.initial_state()
     initial_state.max_iterations = max_iterations
 
@@ -308,14 +395,7 @@ async def run_orchestrator(
         if run_row:
             await _persist_artifacts(session, run_row, final_state.artifacts or {})
 
-        # Transition to succeeded
-        await transition_run_status_async(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            to_status=RunStatusDb.succeeded,
-            current_stage="export",
-        )
+        await terminal_lifecycle.mark_succeeded(current_stage="export")
 
         await session.commit()
 
@@ -323,25 +403,13 @@ async def run_orchestrator(
 
     except RunCancelledError:
         await session.rollback()
-        await transition_run_status_async(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            to_status=RunStatusDb.canceled,
-        )
+        await terminal_lifecycle.mark_canceled()
         await session.commit()
         return initial_state
 
     except Exception as e:
         await session.rollback()
-        # Transition to failed
-        await transition_run_status_async(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            to_status=RunStatusDb.failed,
-            failure_reason=str(e),
-        )
+        await terminal_lifecycle.mark_failed(failure_reason=str(e))
         await session.commit()
 
         raise
@@ -391,6 +459,12 @@ async def resume_orchestrator(
         stage_models=checkpoint_state.stage_models,
         max_iterations=checkpoint_state.max_iterations,
     )
+    terminal_lifecycle = _resolve_terminal_lifecycle_owner(
+        runtime_obj,
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
     graph = create_orchestrator_graph(runtime_obj)
     config = {
         "configurable": {
@@ -405,14 +479,7 @@ async def resume_orchestrator(
         # Update completion time
         final_state.completed_at = datetime.now(UTC)
 
-        # Update run status
-        await transition_run_status_async(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            to_status=RunStatusDb.succeeded,
-            current_stage="export",
-        )
+        await terminal_lifecycle.mark_succeeded(current_stage="export")
 
         await session.commit()
 
@@ -420,23 +487,12 @@ async def resume_orchestrator(
 
     except RunCancelledError:
         await session.rollback()
-        await transition_run_status_async(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            to_status=RunStatusDb.canceled,
-        )
+        await terminal_lifecycle.mark_canceled()
         await session.commit()
         return checkpoint_state
 
     except Exception as e:
         await session.rollback()
-        await transition_run_status_async(
-            session=session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            to_status=RunStatusDb.failed,
-            failure_reason=str(e),
-        )
+        await terminal_lifecycle.mark_failed(failure_reason=str(e))
         await session.commit()
         raise

@@ -354,6 +354,15 @@ def test_async_run_once_handles_empty_queue_success_and_failure(monkeypatch):
     assert ("mark_done", (fake_session, "job-1")) in calls
 
     calls.clear()
+    async def fake_process_failure(*, session, run_id, tenant_id):
+        raise RuntimeError("runtime failure")
+
+    monkeypatch.setattr(worker_main, "process_research_run", fake_process_failure)
+    assert worker_main.run_once(SessionLocal=fake_session_local) is True
+    assert any(name == "mark_job_failed" for name, _ in calls)
+    assert not any(name == "mark_run_failed" for name, _ in calls)
+
+    calls.clear()
     job.job_type = "unexpected.job"
     assert worker_main.run_once(SessionLocal=fake_session_local) is True
     assert any(name == "mark_job_failed" for name, _ in calls)

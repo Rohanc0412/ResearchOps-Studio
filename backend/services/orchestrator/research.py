@@ -75,6 +75,9 @@ def _parse_max_iterations(value: object, *, default: int = 5) -> int:
 
 async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id: UUID) -> None:
     """Process a full research run using the LangGraph pipeline."""
+    if not isinstance(session, AsyncSession):
+        raise TypeError("process_research_run requires an AsyncSession")
+
     run = await get_run(session=session, tenant_id=tenant_id, run_id=run_id)
     if run is None:
         raise ValueError("run not found")

@@ -5,7 +5,7 @@ Tests cover:
 - Concurrent job claiming (SKIP LOCKED semantics on PostgreSQL)
 - FIFO ordering under concurrent insertion
 - Orphan recovery with many stale jobs
-- Failure handling: job and run marked failed on worker error
+- Failure handling: worker marks job failed while runtime owns run terminal state
 - Job deduplication in enqueue_run_job
 - Throughput: N jobs processed sequentially with mock processors
 """
@@ -475,7 +475,7 @@ def test_run_once_processes_job_and_marks_succeeded(engine):
 
     calls: list[tuple[Any, ...]] = []
 
-    def fake_process(*, session, run_id, tenant_id):
+    async def fake_process(*, session, run_id, tenant_id):
         calls.append((run_id, tenant_id))
 
     with patch("services.workers.main.process_research_run", fake_process), \
@@ -498,7 +498,7 @@ def test_run_once_returns_false_on_empty_queue(engine):
 
 
 def test_run_once_marks_job_failed_on_exception(engine):
-    """When the processor raises, job and run are both marked failed."""
+    """Research failures should mark the job failed without clobbering runtime-owned run state."""
     SessionLocal = sessionmaker(bind=engine)
 
     with SessionLocal() as seed:
@@ -508,7 +508,11 @@ def test_run_once_marks_job_failed_on_exception(engine):
         )
         seed.commit()
 
-    def boom(**_kwargs):
+    async def boom(*, session, run_id, tenant_id):
+        run = session.execute(select(RunRow).where(RunRow.id == run_id)).scalars().first()
+        assert run is not None
+        run.status = RunStatusDb.failed
+        run.failure_reason = "runtime-owned failure"
         raise RuntimeError("intentional test failure")
 
     with patch("services.workers.main.process_research_run", boom), \
@@ -525,10 +529,11 @@ def test_run_once_marks_job_failed_on_exception(engine):
 
         run = verify.execute(select(RunRow)).scalars().first()
         assert run.status == RunStatusDb.failed
+        assert run.failure_reason == "runtime-owned failure"
 
 
 def test_run_once_processes_awaitable_result(engine):
-    """run_once also handles processors that return a coroutine."""
+    """run_once processes research jobs via async processors."""
     SessionLocal = sessionmaker(bind=engine)
 
     with SessionLocal() as seed:
@@ -540,11 +545,8 @@ def test_run_once_processes_awaitable_result(engine):
 
     calls: list[tuple[Any, ...]] = []
 
-    async def fake_async_process(*, session, run_id, tenant_id):
+    async def fake_process(*, session, run_id, tenant_id):
         calls.append((run_id, tenant_id, session is not None))
-
-    def fake_process(**kwargs):
-        return fake_async_process(**kwargs)
 
     with patch("services.workers.main.process_research_run", fake_process), \
          patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
@@ -596,7 +598,7 @@ def test_run_once_throughput_n_sequential_jobs(engine):
 
     processed = 0
 
-    def noop_process(**_kwargs):
+    async def noop_process(**_kwargs):
         nonlocal processed
         processed += 1
 

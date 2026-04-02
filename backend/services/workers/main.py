@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from datetime import UTC, datetime
 from threading import Event
 from uuid import UUID
@@ -246,11 +245,13 @@ def run_once_sync(*, SessionLocal) -> bool:
     try:
         with SessionLocal() as session:
             if job_type == RESEARCH_JOB_TYPE:
-                result = process_research_run(
-                    session=session, run_id=run_id, tenant_id=tenant_id
+                asyncio.run(
+                    process_research_run(
+                        session=session,
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                    )
                 )
-                if inspect.isawaitable(result):
-                    asyncio.run(result)
             else:
                 raise RuntimeError(f"Unknown job_type: {job_type}")
             session.commit()
@@ -261,7 +262,8 @@ def run_once_sync(*, SessionLocal) -> bool:
         err = str(e)
         with SessionLocal() as session:
             _mark_job_failed_sync(session, job_id, err)
-            _mark_run_failed_sync(session, run_id=run_id, tenant_id=tenant_id, error=err)
+            if job_type != RESEARCH_JOB_TYPE:
+                _mark_run_failed_sync(session, run_id=run_id, tenant_id=tenant_id, error=err)
             session.commit()
     finally:
         from embeddings import release_gpu_memory
@@ -283,18 +285,21 @@ async def run_once_async(*, SessionLocal: async_sessionmaker[AsyncSession]) -> b
     try:
         async with session_scope(SessionLocal) as session:
             if job_type == RESEARCH_JOB_TYPE:
-                result = process_research_run(
-                    session=session, run_id=run_id, tenant_id=tenant_id
-                )
-                if inspect.isawaitable(result):
-                    await result
+                await process_research_run(session=session, run_id=run_id, tenant_id=tenant_id)
             else:
                 raise RuntimeError(f"Unknown job_type: {job_type}")
 
         await _finish(SessionLocal, job_id)
     except Exception as e:
         err = str(e)
-        await _fail(SessionLocal, job_id, run_id, tenant_id, err)
+        await _fail(
+            SessionLocal,
+            job_id,
+            run_id,
+            tenant_id,
+            err,
+            update_run=job_type != RESEARCH_JOB_TYPE,
+        )
     finally:
         from embeddings import release_gpu_memory
         release_gpu_memory()
@@ -311,10 +316,19 @@ async def _finish(SessionLocal, job_id):
         await _mark_job_done(session, job_id)
 
 
-async def _fail(SessionLocal, job_id, run_id, tenant_id, err):
+async def _fail(
+    SessionLocal,
+    job_id,
+    run_id,
+    tenant_id,
+    err,
+    *,
+    update_run: bool = True,
+):
     async with session_scope(SessionLocal) as session:
         await _mark_job_failed(session, job_id, err)
-        await _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
+        if update_run:
+            await _mark_run_failed(session, run_id=run_id, tenant_id=tenant_id, error=err)
 
 
 async def _run_forever_async(*, poll_seconds: float, stop_event: Event | None = None) -> None:

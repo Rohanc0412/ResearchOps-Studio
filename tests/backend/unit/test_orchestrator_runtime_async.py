@@ -582,6 +582,67 @@ async def test_run_orchestrator_final_execute_node_commit_ignores_late_cancel(
 
 
 @pytest.mark.asyncio
+async def test_run_orchestrator_uses_runtime_terminal_cancellation_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    lifecycle_calls: list[str] = []
+
+    class _SessionStub:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class _RuntimeStub:
+        def __init__(self):
+            self.session = _SessionStub()
+
+        def initial_state(self) -> OrchestratorState:
+            return OrchestratorState(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                user_query="runtime terminal hook",
+                max_iterations=5,
+            )
+
+        async def mark_succeeded(self, *, current_stage: str = "export") -> None:
+            lifecycle_calls.append(f"succeeded:{current_stage}")
+
+        async def mark_canceled(self) -> None:
+            lifecycle_calls.append("canceled")
+
+        async def mark_failed(self, *, failure_reason: str) -> None:
+            lifecycle_calls.append(f"failed:{failure_reason}")
+
+    class _FakeGraph:
+        async def ainvoke(self, state, config=None):
+            raise run_orchestrator.__globals__["RunCancelledError"]("cancel requested")
+
+    runtime = _RuntimeStub()
+
+    async def fail_if_transition_called(**_kwargs):
+        raise AssertionError("transition_run_status_async should not be called when runtime owns terminal transitions")
+
+    monkeypatch.setattr("services.orchestrator.runner.transition_run_status_async", fail_if_transition_called)
+    monkeypatch.setattr("services.orchestrator.runner.create_orchestrator_graph", lambda *_a, **_k: _FakeGraph())
+
+    result = await run_orchestrator(
+        session=runtime.session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_query="runtime terminal hook",
+        transition_to_running=False,
+        runtime=runtime,
+    )
+
+    assert result.run_id == run_id
+    assert lifecycle_calls == ["canceled"]
+
+
+@pytest.mark.asyncio
 async def test_run_orchestrator_no_longer_uses_sync_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
