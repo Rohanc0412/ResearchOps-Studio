@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
+from cancellation import RunCancelledError
 from checkpoint_store import write_checkpoint
 from core.orchestrator.state import OrchestratorState
-from core.runs.lifecycle import transition_run_status_async
+from core.runs.lifecycle import is_run_cancel_requested_async, transition_run_status_async
 from db.models.run_checkpoints import RunCheckpointRow
 from db.models.run_events import RunEventAudienceDb, RunEventLevelDb, RunEventRow
 from db.models.runs import RunStatusDb
@@ -72,6 +75,18 @@ class RuntimeCheckpointStore:
             checkpoint_version=checkpoint_version,
         )
 
+    async def write_after_node(
+        self, *, state: OrchestratorState, node_name: str
+    ) -> RunCheckpointRow:
+        return await self.write(
+            tenant_id=state.tenant_id,
+            run_id=state.run_id,
+            node_name=node_name,
+            iteration_count=state.iteration_count,
+            state_payload=state.model_dump(mode="json"),
+            summary_payload={"node_name": node_name},
+        )
+
 
 @dataclass(slots=True)
 class ResearchRuntime:
@@ -90,7 +105,7 @@ class ResearchRuntime:
         tenant_id: UUID,
         run_id: UUID,
         inputs: ResearchRunInputs,
-    ) -> "ResearchRuntime":
+    ) -> ResearchRuntime:
         return cls(
             session=session,
             tenant_id=tenant_id,
@@ -99,6 +114,53 @@ class ResearchRuntime:
             event_store=RuntimeEventStore(session=session),
             checkpoint_store=RuntimeCheckpointStore(session=session),
         )
+
+    def initial_state(self) -> OrchestratorState:
+        return OrchestratorState(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            user_query=self.inputs.user_query,
+            research_goal=self.inputs.research_goal,
+            llm_provider=self.inputs.llm_provider,
+            llm_model=self.inputs.llm_model,
+            stage_models=self.inputs.stage_models,
+            max_iterations=self.inputs.max_iterations,
+            started_at=datetime.now(UTC),
+        )
+
+    async def assert_not_cancelled(self) -> None:
+        if await is_run_cancel_requested_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+        ):
+            raise RunCancelledError(f"Run {self.run_id} cancelled by user")
+
+    async def flush_pending_events(self) -> None:
+        await self.session.flush()
+
+    async def execute_node(
+        self,
+        *,
+        node_name: str,
+        node_func,
+        state: OrchestratorState,
+    ) -> OrchestratorState:
+        await self.assert_not_cancelled()
+
+        if inspect.iscoroutinefunction(node_func):
+            next_state = await node_func(state, self)
+        else:
+            next_state = await self.session.run_sync(lambda sync_session: node_func(state, sync_session))
+
+        if isinstance(next_state, dict):
+            next_state = OrchestratorState(**next_state)
+
+        await self.checkpoint_store.write_after_node(state=next_state, node_name=node_name)
+        await self.flush_pending_events()
+        await self.session.commit()
+        await self.assert_not_cancelled()
+        return next_state
 
 
 async def run_research_orchestrator(
@@ -135,6 +197,7 @@ async def run_research_orchestrator(
         stage_models=runtime.inputs.stage_models,
         max_iterations=runtime.inputs.max_iterations,
         transition_to_running=False,
+        runtime=runtime,
     )
 
 

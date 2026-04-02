@@ -375,7 +375,7 @@ async def emit_run_event_async(
     message: str,
     stage: str | None = None,
     payload: dict | None = None,
-) -> RunEventRow:
+    ) -> RunEventRow:
     """Async version of emit_run_event for use with AsyncSession."""
     return await append_run_event(
         session=session,
@@ -388,6 +388,21 @@ async def emit_run_event_async(
         payload_json=payload or {},
         allow_finished=True,
     )
+
+
+async def is_run_cancel_requested_async(
+    session: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+) -> bool:
+    """Return True when cancellation has been requested for the run."""
+    stmt = (
+        select(RunRow.cancel_requested_at)
+        .where(RunRow.tenant_id == tenant_id, RunRow.id == run_id)
+        .execution_options(populate_existing=True)
+    )
+    cancel_requested_at = (await session.execute(stmt)).scalar_one_or_none()
+    return cancel_requested_at is not None
 
 
 async def transition_run_status_async(

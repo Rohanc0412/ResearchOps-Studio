@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -11,7 +13,12 @@ from db.models.projects import ProjectRow
 from db.models.run_usage_metrics import RunUsageMetricRow
 from db.models.runs import RunRow, RunStatusDb
 from services.orchestrator.research import process_research_run
-from services.orchestrator.runtime import ResearchRuntime, run_research_orchestrator
+from services.orchestrator.runtime import (
+    ResearchRuntime,
+    RuntimeCheckpointStore,
+    RuntimeEventStore,
+    run_research_orchestrator,
+)
 from services.orchestrator.runtime_types import ResearchRunInputs
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -110,6 +117,19 @@ async def test_research_runtime_create_sets_runtime_fields(
     assert runtime.inputs.user_query == "test query"
 
 
+@pytest.fixture
+def runtime() -> ResearchRuntime:
+    session = AsyncMock(spec=AsyncSession)
+    return ResearchRuntime(
+        session=session,
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        inputs=ResearchRunInputs(user_query="fixture query"),
+        event_store=RuntimeEventStore(session=session),
+        checkpoint_store=RuntimeCheckpointStore(session=session),
+    )
+
+
 @pytest.mark.asyncio
 async def test_research_run_inputs_defaults() -> None:
     inputs = ResearchRunInputs(user_query="defaults query")
@@ -122,7 +142,7 @@ async def test_research_run_inputs_defaults() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_research_orchestrator_transitions_to_running_before_graph_execution(
+async def test_run_research_orchestrator_transitions_to_running_before_graph_handoff(
     monkeypatch: pytest.MonkeyPatch, session: AsyncSession, seeded_run: RunRow
 ) -> None:
     call_order: list[str] = []
@@ -147,6 +167,112 @@ async def test_run_research_orchestrator_transitions_to_running_before_graph_exe
 
     assert result is sentinel
     assert call_order == ["graph"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_execute_node_checks_cancellation_and_commits_after_node(
+    monkeypatch: pytest.MonkeyPatch, runtime: ResearchRuntime
+) -> None:
+    calls: list[str] = []
+
+    async def fake_assert_not_cancelled(self) -> None:
+        calls.append("assert_not_cancelled")
+
+    async def fake_write_after_node(self, *, state, node_name: str) -> None:
+        calls.append(f"checkpoint:{node_name}")
+
+    async def fake_flush_pending_events(self) -> None:
+        calls.append("flush_pending_events")
+
+    async def fake_commit() -> None:
+        calls.append("commit")
+
+    monkeypatch.setattr(type(runtime), "assert_not_cancelled", fake_assert_not_cancelled, raising=False)
+    monkeypatch.setattr(type(runtime.checkpoint_store), "write_after_node", fake_write_after_node, raising=False)
+    monkeypatch.setattr(type(runtime), "flush_pending_events", fake_flush_pending_events, raising=False)
+    monkeypatch.setattr(runtime.session, "commit", fake_commit)
+
+    async def fake_node(state, runtime):
+        calls.append("node")
+        state.iteration_count = 1
+        return state
+
+    next_state = await runtime.execute_node(
+        node_name="retriever",
+        node_func=fake_node,
+        state=runtime.initial_state(),
+    )
+    assert next_state.iteration_count == 1
+    assert calls == [
+        "assert_not_cancelled",
+        "node",
+        "checkpoint:retriever",
+        "flush_pending_events",
+        "commit",
+        "assert_not_cancelled",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_orchestrator_no_longer_uses_sync_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+    project_id = uuid4()
+    run_row = SimpleNamespace(id=run_id, tenant_id=tenant_id, project_id=project_id)
+
+    class _ExecuteResult:
+        def scalar_one_or_none(self):
+            return run_row
+
+    class _SessionStub:
+        @property
+        def sync_session(self):
+            raise AssertionError("sync_session should not be accessed")
+
+        async def execute(self, _stmt):
+            return _ExecuteResult()
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class _FakeGraph:
+        def invoke(self, state, config=None):
+            return state
+
+        async def ainvoke(self, state, config=None):
+            return state
+
+    async def _noop_transition(*args, **kwargs):
+        return None
+
+    run_orchestrator_func = run_research_orchestrator.__globals__["run_orchestrator"]
+    runner_module = importlib.import_module(run_orchestrator_func.__module__)
+
+    session = _SessionStub()
+    monkeypatch.setitem(
+        run_research_orchestrator.__globals__,
+        "transition_run_status_async",
+        _noop_transition,
+    )
+    monkeypatch.setattr(runner_module, "transition_run_status_async", _noop_transition)
+    monkeypatch.setattr(runner_module, "_persist_artifacts", AsyncMock(return_value=0))
+    monkeypatch.setattr(runner_module, "create_orchestrator_graph", lambda *_a, **_k: _FakeGraph())
+
+    final_state = await run_research_orchestrator(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        inputs=ResearchRunInputs(user_query="q"),
+    )
+
+    assert final_state.user_query == "q"
 
 
 @pytest.mark.asyncio

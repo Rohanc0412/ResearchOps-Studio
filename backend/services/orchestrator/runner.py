@@ -6,18 +6,22 @@ Integrates with the run lifecycle and emits SSE events.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
-from checkpoints import PostgresCheckpointSaver
+from cancellation import RunCancelledError
+from checkpoint_store import write_checkpoint
 from core.env import env_int
 from core.orchestrator.state import OrchestratorState
-from core.runs.lifecycle import transition_run_status_async
+from core.runs.lifecycle import is_run_cancel_requested_async, transition_run_status_async
+from db.models.run_checkpoints import RunCheckpointRow
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.artifacts import create_artifact, list_artifacts
-from graph import RunCancelledError, create_orchestrator_graph
+from graph import create_orchestrator_graph
 from observability import langfuse_enabled
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,6 +95,83 @@ async def _persist_artifacts(session: AsyncSession, run_row: RunRow, artifacts: 
     return created
 
 
+class _RunnerRuntimeAdapter:
+    def __init__(
+        self,
+        *,
+        session: AsyncSession,
+        tenant_id: UUID,
+        run_id: UUID,
+        user_query: str,
+        research_goal: str | None,
+        llm_provider: str | None,
+        llm_model: str | None,
+        stage_models: dict[str, str | None],
+        max_iterations: int,
+    ) -> None:
+        self.session = session
+        self.tenant_id = tenant_id
+        self.run_id = run_id
+        self.user_query = user_query
+        self.research_goal = research_goal
+        self.llm_provider = llm_provider
+        self.llm_model = llm_model
+        self.stage_models = stage_models
+        self.max_iterations = max_iterations
+
+    def initial_state(self) -> OrchestratorState:
+        return OrchestratorState(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            user_query=self.user_query,
+            research_goal=self.research_goal,
+            llm_provider=self.llm_provider,
+            llm_model=self.llm_model,
+            stage_models=self.stage_models,
+            max_iterations=self.max_iterations,
+            started_at=datetime.now(UTC),
+        )
+
+    async def assert_not_cancelled(self) -> None:
+        if await is_run_cancel_requested_async(
+            session=self.session,
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+        ):
+            raise RunCancelledError(f"Run {self.run_id} cancelled by user")
+
+    async def flush_pending_events(self) -> None:
+        await self.session.flush()
+
+    async def _write_after_node(self, *, state: OrchestratorState, node_name: str) -> None:
+        await write_checkpoint(
+            session=self.session,
+            tenant_id=state.tenant_id,
+            run_id=state.run_id,
+            node_name=node_name,
+            iteration_count=state.iteration_count,
+            state_payload=state.model_dump(mode="json"),
+            summary_payload={"node_name": node_name},
+        )
+
+    async def execute_node(self, *, node_name: str, node_func, state: OrchestratorState) -> OrchestratorState:
+        await self.assert_not_cancelled()
+
+        if inspect.iscoroutinefunction(node_func):
+            next_state = await node_func(state, self)
+        else:
+            next_state = await self.session.run_sync(lambda sync_session: node_func(state, sync_session))
+
+        if isinstance(next_state, dict):
+            next_state = OrchestratorState(**next_state)
+
+        await self._write_after_node(state=next_state, node_name=node_name)
+        await self.flush_pending_events()
+        await self.session.commit()
+        await self.assert_not_cancelled()
+        return next_state
+
+
 async def run_orchestrator(
     session: AsyncSession,
     tenant_id: UUID,
@@ -102,6 +183,7 @@ async def run_orchestrator(
     stage_models: dict[str, str | None] | None = None,
     max_iterations: int = 5,
     transition_to_running: bool = True,
+    runtime: Any | None = None,
 ) -> OrchestratorState:
     """
     Execute the orchestrator graph for a run.
@@ -157,8 +239,8 @@ async def run_orchestrator(
 
     max_iterations = env_int("ORCHESTRATOR_MAX_ITERATIONS", max_iterations, min_value=1)
 
-    # Initialize state
-    initial_state = OrchestratorState(
+    runtime_obj = runtime or _RunnerRuntimeAdapter(
+        session=session,
         tenant_id=tenant_id,
         run_id=run_id,
         user_query=user_query,
@@ -167,28 +249,12 @@ async def run_orchestrator(
         llm_model=llm_model,
         stage_models=stage_models or {},
         max_iterations=max_iterations,
-        started_at=datetime.now(UTC),
     )
-
-    # Extract sync session proxy for synchronous graph execution
-    sync_session = session.sync_session
-
-    # Create checkpoint saver
-    checkpoint_saver = PostgresCheckpointSaver(
-        session=sync_session, tenant_id=tenant_id, run_id=run_id
-    )
-    logger.info(
-        "Checkpoint saver initialized",
-        extra={
-            "event": "pipeline.run.checkpoint_init",
-            "run_id": str(run_id),
-            "tenant_id": str(tenant_id),
-            "checkpoint_saver": checkpoint_saver.__class__.__name__,
-        },
-    )
+    initial_state = runtime_obj.initial_state()
+    initial_state.max_iterations = max_iterations
 
     # Create graph
-    graph = create_orchestrator_graph(sync_session)
+    graph = create_orchestrator_graph(runtime_obj)
     logger.info(
         "Orchestrator graph compiled",
         extra={
@@ -202,7 +268,6 @@ async def run_orchestrator(
     config = {
         "configurable": {
             "thread_id": str(run_id),
-            "checkpoint_ns": "orchestrator",
         },
         "recursion_limit": max_iterations * 20,  # Allow plenty of steps
     }
@@ -216,8 +281,7 @@ async def run_orchestrator(
                 "tenant_id": str(tenant_id),
             },
         )
-        # Execute graph (synchronous for now, can be made async)
-        final_state_dict = graph.invoke(initial_state.dict(), config=config)
+        final_state_dict = await graph.ainvoke(initial_state.model_dump(), config=config)
         logger.info(
             "Orchestrator graph returned",
             extra={
@@ -301,32 +365,42 @@ async def resume_orchestrator(
     Raises:
         Exception: If no checkpoint found or execution fails
     """
-    # Extract sync session proxy for synchronous graph execution
-    sync_session = session.sync_session
-
-    # Create checkpoint saver
-    checkpoint_saver = PostgresCheckpointSaver(
-        session=sync_session, tenant_id=tenant_id, run_id=run_id
+    checkpoint = (
+        (
+            await session.execute(
+                select(RunCheckpointRow.payload_json)
+                .where(RunCheckpointRow.tenant_id == tenant_id, RunCheckpointRow.run_id == run_id)
+                .order_by(RunCheckpointRow.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
     )
+    if checkpoint is None:
+        raise ValueError(f"No checkpoint found for run {run_id}")
 
-    # Get latest checkpoint
+    checkpoint_state = OrchestratorState(**checkpoint)
+    runtime_obj = _RunnerRuntimeAdapter(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_query=checkpoint_state.user_query,
+        research_goal=checkpoint_state.research_goal,
+        llm_provider=checkpoint_state.llm_provider,
+        llm_model=checkpoint_state.llm_model,
+        stage_models=checkpoint_state.stage_models,
+        max_iterations=checkpoint_state.max_iterations,
+    )
+    graph = create_orchestrator_graph(runtime_obj)
     config = {
         "configurable": {
             "thread_id": str(run_id),
-            "checkpoint_ns": "orchestrator",
-        }
+        },
+        "recursion_limit": checkpoint_state.max_iterations * 20,
     }
 
-    checkpoint, metadata = checkpoint_saver.get(config)
-
-    if not checkpoint:
-        raise ValueError(f"No checkpoint found for run {run_id}")
-
-    # Resume from checkpoint
-    graph = create_orchestrator_graph(sync_session)
-
-    # Continue execution
-    final_state_dict = graph.invoke(checkpoint, config=config)
+    final_state_dict = await graph.ainvoke(checkpoint_state.model_dump(), config=config)
     final_state = OrchestratorState(**final_state_dict)
 
     # Update completion time

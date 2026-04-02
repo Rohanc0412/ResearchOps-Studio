@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from cancellation import RunCancelledError, raise_if_run_cancel_requested
 from core.orchestrator.state import EvaluatorDecision, OrchestratorState
 from langgraph.graph import END, StateGraph
 from nodes import (
@@ -20,8 +19,6 @@ from nodes import (
     retriever_node,
     writer_node,
 )
-from sqlalchemy.orm import Session
-
 
 # Node display names for logging
 NODE_DISPLAY_NAMES = {
@@ -35,7 +32,7 @@ NODE_DISPLAY_NAMES = {
 }
 
 
-def create_orchestrator_graph(session: Session) -> StateGraph:
+def create_orchestrator_graph(runtime) -> StateGraph:
     """
     Create the orchestrator StateGraph.
 
@@ -50,7 +47,7 @@ def create_orchestrator_graph(session: Session) -> StateGraph:
                   -> (CONTINUE_REWRITE -> Writer)
 
     Args:
-        session: Database session to pass to all nodes
+        runtime: Orchestrator runtime that owns node execution
 
     Returns:
         Compiled StateGraph
@@ -58,26 +55,26 @@ def create_orchestrator_graph(session: Session) -> StateGraph:
     # Create graph
     workflow = StateGraph(OrchestratorState)
 
-    # Wrap nodes to inject session and add logging
-    def wrap_node(node_func):
-        """Wrapper to inject session into node, check for cancellation, and log execution."""
-        def wrapped(state: OrchestratorState) -> dict[str, Any]:
-            """Wrapped node function."""
-            # Check for cooperative cancellation before running each node
-            raise_if_run_cancel_requested(session, state.tenant_id, state.run_id)
-            result_state = node_func(state, session)
-            return result_state.dict()
+    # Wrap nodes so runtime controls cancellation, checkpointing, and commit cadence.
+    def wrap_node(node_name: str, node_func):
+        async def wrapped(state: OrchestratorState) -> dict[str, Any]:
+            result_state = await runtime.execute_node(
+                node_name=node_name,
+                node_func=node_func,
+                state=state,
+            )
+            return result_state.model_dump()
 
         return wrapped
 
     # Add nodes
-    workflow.add_node("retriever", wrap_node(retriever_node))
-    workflow.add_node("outliner", wrap_node(outliner_node))
-    workflow.add_node("evidence_pack", wrap_node(evidence_pack_node))
-    workflow.add_node("writer", wrap_node(writer_node))
-    workflow.add_node("evaluator", wrap_node(evaluator_node))
-    workflow.add_node("repair_agent", wrap_node(repair_agent_node))
-    workflow.add_node("exporter", wrap_node(exporter_node))
+    workflow.add_node("retriever", wrap_node("retriever", retriever_node))
+    workflow.add_node("outliner", wrap_node("outliner", outliner_node))
+    workflow.add_node("evidence_pack", wrap_node("evidence_pack", evidence_pack_node))
+    workflow.add_node("writer", wrap_node("writer", writer_node))
+    workflow.add_node("evaluator", wrap_node("evaluator", evaluator_node))
+    workflow.add_node("repair_agent", wrap_node("repair_agent", repair_agent_node))
+    workflow.add_node("exporter", wrap_node("exporter", exporter_node))
 
     # Set entry point
     workflow.set_entry_point("retriever")

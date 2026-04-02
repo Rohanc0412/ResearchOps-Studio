@@ -601,14 +601,18 @@ def test_exporter_generates_three_artifacts(db_session, test_run):
     assert "Content here." in result.artifacts["report.md"]
 
 
-def test_graph_execution_completes(db_session, test_run):
+def test_graph_execution_completes(test_run):
     """Test that graph can execute end-to-end (simplified)."""
     tenant_id, run_id = test_run
 
     # Note: Full graph execution requires mocked connectors
     # This test verifies graph creation and basic structure
 
-    graph = create_orchestrator_graph(db_session)
+    class RuntimeStub:
+        async def execute_node(self, *, node_name: str, node_func, state: OrchestratorState):
+            return state
+
+    graph = create_orchestrator_graph(RuntimeStub())
 
     # Verify graph has nodes
     assert graph is not None
@@ -623,6 +627,50 @@ def test_graph_execution_completes(db_session, test_run):
 
     assert state.tenant_id == tenant_id
     assert state.run_id == run_id
+
+
+@pytest.mark.asyncio
+async def test_graph_execution_uses_runtime_execute_node(monkeypatch, test_run):
+    """Graph wrappers should delegate each node execution through runtime.execute_node."""
+    import graph as graph_module
+
+    tenant_id, run_id = test_run
+    calls: list[str] = []
+
+    def _passthrough_node(state: OrchestratorState, _session) -> OrchestratorState:
+        return state
+
+    monkeypatch.setattr(graph_module, "retriever_node", _passthrough_node)
+    monkeypatch.setattr(graph_module, "outliner_node", _passthrough_node)
+    monkeypatch.setattr(graph_module, "evidence_pack_node", _passthrough_node)
+    monkeypatch.setattr(graph_module, "writer_node", _passthrough_node)
+    monkeypatch.setattr(graph_module, "evaluator_node", _passthrough_node)
+    monkeypatch.setattr(graph_module, "repair_agent_node", _passthrough_node)
+    monkeypatch.setattr(graph_module, "exporter_node", _passthrough_node)
+
+    class RuntimeStub:
+        async def execute_node(self, *, node_name: str, node_func, state: OrchestratorState):
+            calls.append(node_name)
+            return node_func(state, None)
+
+    graph = graph_module.create_orchestrator_graph(RuntimeStub())
+    initial_state = OrchestratorState(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_query="test query",
+        max_iterations=1,
+    )
+    final_state = await graph.ainvoke(initial_state.model_dump())
+
+    assert final_state["run_id"] == run_id
+    assert calls == [
+        "retriever",
+        "outliner",
+        "evidence_pack",
+        "writer",
+        "evaluator",
+        "exporter",
+    ]
 
 
 def test_raise_if_run_cancel_requested_bypasses_stale_identity_map(db_session, db_run):
