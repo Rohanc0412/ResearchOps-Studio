@@ -15,7 +15,7 @@ from db.models.run_usage_metrics import RunUsageMetricRow
 from db.models.runs import RunRow, RunStatusDb
 from services.orchestrator.cancellation import RunCancelledError
 from services.orchestrator.research import process_research_run
-from services.orchestrator.runner import run_orchestrator
+from services.orchestrator.runner import resume_orchestrator, run_orchestrator
 from services.orchestrator.runtime import (
     ResearchRuntime,
     RuntimeCheckpointStore,
@@ -421,6 +421,125 @@ async def test_run_orchestrator_no_longer_uses_sync_session(
     )
 
     assert final_state.user_query == "q"
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestrator_transitions_to_canceled_on_run_cancelled_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    statuses: list[RunStatusDb] = []
+    commits = 0
+    rollbacks = 0
+    checkpoint_payload = {
+        "tenant_id": str(tenant_id),
+        "run_id": str(run_id),
+        "user_query": "checkpoint query",
+        "max_iterations": 5,
+    }
+
+    class _ExecuteResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return checkpoint_payload
+
+    class _SessionStub:
+        async def execute(self, _stmt):
+            return _ExecuteResult()
+
+        async def commit(self):
+            nonlocal commits
+            commits += 1
+
+        async def rollback(self):
+            nonlocal rollbacks
+            rollbacks += 1
+
+    class _FakeGraph:
+        async def ainvoke(self, _state, config=None):
+            raise resume_orchestrator.__globals__["RunCancelledError"]("resume canceled")
+
+    async def _fake_transition(**kwargs):
+        statuses.append(kwargs["to_status"])
+        return SimpleNamespace(status=kwargs["to_status"])
+
+    monkeypatch.setattr("services.orchestrator.runner.create_orchestrator_graph", lambda *_a, **_k: _FakeGraph())
+    monkeypatch.setattr("services.orchestrator.runner.transition_run_status_async", _fake_transition)
+
+    result = await resume_orchestrator(
+        session=_SessionStub(),
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+
+    assert result.user_query == "checkpoint query"
+    assert statuses == [RunStatusDb.canceled]
+    assert rollbacks == 1
+    assert commits == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestrator_transitions_to_failed_on_graph_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    statuses: list[RunStatusDb] = []
+    failure_reasons: list[str] = []
+    commits = 0
+    rollbacks = 0
+    checkpoint_payload = {
+        "tenant_id": str(tenant_id),
+        "run_id": str(run_id),
+        "user_query": "checkpoint query",
+        "max_iterations": 5,
+    }
+
+    class _ExecuteResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return checkpoint_payload
+
+    class _SessionStub:
+        async def execute(self, _stmt):
+            return _ExecuteResult()
+
+        async def commit(self):
+            nonlocal commits
+            commits += 1
+
+        async def rollback(self):
+            nonlocal rollbacks
+            rollbacks += 1
+
+    class _FakeGraph:
+        async def ainvoke(self, _state, config=None):
+            raise RuntimeError("resume failure")
+
+    async def _fake_transition(**kwargs):
+        statuses.append(kwargs["to_status"])
+        failure_reasons.append(kwargs.get("failure_reason"))
+        return SimpleNamespace(status=kwargs["to_status"])
+
+    monkeypatch.setattr("services.orchestrator.runner.create_orchestrator_graph", lambda *_a, **_k: _FakeGraph())
+    monkeypatch.setattr("services.orchestrator.runner.transition_run_status_async", _fake_transition)
+
+    with pytest.raises(RuntimeError, match="resume failure"):
+        await resume_orchestrator(
+            session=_SessionStub(),
+            tenant_id=tenant_id,
+            run_id=run_id,
+        )
+
+    assert statuses == [RunStatusDb.failed]
+    assert failure_reasons == ["resume failure"]
+    assert rollbacks == 1
+    assert commits == 1
 
 
 @pytest.mark.asyncio

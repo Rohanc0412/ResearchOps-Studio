@@ -398,22 +398,45 @@ async def resume_orchestrator(
         },
         "recursion_limit": checkpoint_state.max_iterations * 20,
     }
+    try:
+        final_state_dict = await graph.ainvoke(checkpoint_state.model_dump(), config=config)
+        final_state = OrchestratorState(**final_state_dict)
 
-    final_state_dict = await graph.ainvoke(checkpoint_state.model_dump(), config=config)
-    final_state = OrchestratorState(**final_state_dict)
+        # Update completion time
+        final_state.completed_at = datetime.now(UTC)
 
-    # Update completion time
-    final_state.completed_at = datetime.now(UTC)
+        # Update run status
+        await transition_run_status_async(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            to_status=RunStatusDb.succeeded,
+            current_stage="export",
+        )
 
-    # Update run status
-    await transition_run_status_async(
-        session=session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        to_status=RunStatusDb.succeeded,
-        current_stage="export",
-    )
+        await session.commit()
 
-    await session.commit()
+        return final_state
 
-    return final_state
+    except RunCancelledError:
+        await session.rollback()
+        await transition_run_status_async(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            to_status=RunStatusDb.canceled,
+        )
+        await session.commit()
+        return checkpoint_state
+
+    except Exception as e:
+        await session.rollback()
+        await transition_run_status_async(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            to_status=RunStatusDb.failed,
+            failure_reason=str(e),
+        )
+        await session.commit()
+        raise
