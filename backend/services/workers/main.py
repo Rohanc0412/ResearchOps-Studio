@@ -245,16 +245,10 @@ def run_once_sync(*, SessionLocal) -> bool:
     try:
         with SessionLocal() as session:
             if job_type == RESEARCH_JOB_TYPE:
-                asyncio.run(
-                    process_research_run(
-                        session=session,
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                    )
+                raise RuntimeError(
+                    "research.run dispatch requires async worker runtime; use run_once_async"
                 )
-            else:
-                raise RuntimeError(f"Unknown job_type: {job_type}")
-            session.commit()
+            raise RuntimeError(f"Unknown job_type: {job_type}")
         with SessionLocal() as session:
             _mark_job_done_sync(session, job_id)
             session.commit()

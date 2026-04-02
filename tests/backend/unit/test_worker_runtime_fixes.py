@@ -369,6 +369,60 @@ def test_async_run_once_handles_empty_queue_success_and_failure(monkeypatch):
     assert any(name == "mark_run_failed" for name, _ in calls)
 
 
+def test_run_once_sync_research_dispatch_is_disabled(monkeypatch):
+    calls: list[tuple[str, object]] = []
+    process_called = False
+
+    class _Session:
+        def commit(self):
+            return None
+
+    class _SessionLocal:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            return _Session()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    session_local = _SessionLocal()
+    job = SimpleNamespace(
+        id="job-1",
+        run_id="run-1",
+        tenant_id="tenant-1",
+        job_type="research.run",
+    )
+
+    monkeypatch.setattr(worker_main, "RESEARCH_JOB_TYPE", "research.run")
+    monkeypatch.setattr("embeddings.release_gpu_memory", lambda: calls.append(("release", None)))
+    monkeypatch.setattr(worker_main, "_claim_next_job_sync", lambda _session: job)
+    monkeypatch.setattr(worker_main, "_mark_job_done_sync", lambda _session, _job_id: calls.append(("mark_done", _job_id)))
+    monkeypatch.setattr(
+        worker_main,
+        "_mark_job_failed_sync",
+        lambda _session, _job_id, _err: calls.append(("mark_job_failed", (_job_id, _err))),
+    )
+    monkeypatch.setattr(
+        worker_main,
+        "_mark_run_failed_sync",
+        lambda _session, **_kwargs: calls.append(("mark_run_failed", _kwargs)),
+    )
+
+    async def fake_process(**_kwargs):
+        nonlocal process_called
+        process_called = True
+
+    monkeypatch.setattr(worker_main, "process_research_run", fake_process)
+
+    assert worker_main.run_once_sync(SessionLocal=session_local) is True
+    assert process_called is False
+    assert any(name == "mark_job_failed" for name, _ in calls)
+    assert not any(name == "mark_run_failed" for name, _ in calls)
+    assert not any(name == "mark_done" for name, _ in calls)
+
+
 def test_run_forever_and_main_delegate_runtime_setup(monkeypatch):
     stop_event = Event()
     calls: list[str] = []

@@ -12,6 +12,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 import time
@@ -21,6 +22,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from db.init_db import init_db_sync as init_db
@@ -35,7 +37,7 @@ from services.workers.main import (
     _mark_job_failed_sync as _mark_job_failed,
     _mark_run_failed_sync as _mark_run_failed,
     recover_orphaned_jobs_sync as recover_orphaned_jobs,
-    run_once_sync as run_once,
+    run_once as run_once_async_dispatch,
 )
 
 RESEARCH_JOB_TYPE = "research.run"
@@ -44,6 +46,13 @@ RESEARCH_JOB_TYPE = "research.run"
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 _DEFAULT_PG_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/researchops_test"
+
+
+def _to_async_url(url: str) -> str:
+    for prefix in ("postgresql+psycopg2://", "postgresql+psycopg://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+asyncpg://" + url[len(prefix) :]
+    return url
 
 
 def _ensure_test_db(url: str) -> None:
@@ -99,6 +108,18 @@ def clean_tables(engine):
 @pytest.fixture()
 def SessionLocal(engine):
     return sessionmaker(bind=engine)
+
+
+@pytest.fixture()
+def AsyncWorkerSessionLocal(engine):
+    async_engine = create_async_engine(_to_async_url(str(engine.url)), future=True)
+    session_local = async_sessionmaker(
+        bind=async_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    try:
+        yield session_local
+    finally:
+        asyncio.run(async_engine.dispose())
 
 
 @pytest.fixture()
@@ -462,8 +483,8 @@ def test_enqueue_raises_for_nonexistent_run(session):
 # ── run_once throughput ───────────────────────────────────────────────────────
 
 
-def test_run_once_processes_job_and_marks_succeeded(engine):
-    """run_once claims a job, calls the processor, marks it succeeded."""
+def test_run_once_processes_job_and_marks_succeeded(engine, AsyncWorkerSessionLocal):
+    """Async worker dispatch claims a job, calls the processor, marks it succeeded."""
     SessionLocal = sessionmaker(bind=engine)
 
     with SessionLocal() as seed:
@@ -481,7 +502,7 @@ def test_run_once_processes_job_and_marks_succeeded(engine):
     with patch("services.workers.main.process_research_run", fake_process), \
          patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
          patch("embeddings.release_gpu_memory"):
-        ran = run_once(SessionLocal=SessionLocal)
+        ran = run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal)
 
     assert ran is True
     assert len(calls) == 1
@@ -491,13 +512,12 @@ def test_run_once_processes_job_and_marks_succeeded(engine):
         assert job.status == JobStatusDb.succeeded
 
 
-def test_run_once_returns_false_on_empty_queue(engine):
-    SessionLocal = sessionmaker(bind=engine)
-    ran = run_once(SessionLocal=SessionLocal)
+def test_run_once_returns_false_on_empty_queue(engine, AsyncWorkerSessionLocal):
+    ran = run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal)
     assert ran is False
 
 
-def test_run_once_marks_job_failed_on_exception(engine):
+def test_run_once_marks_job_failed_on_exception(engine, AsyncWorkerSessionLocal):
     """Research failures should mark the job failed without clobbering runtime-owned run state."""
     SessionLocal = sessionmaker(bind=engine)
 
@@ -518,7 +538,7 @@ def test_run_once_marks_job_failed_on_exception(engine):
     with patch("services.workers.main.process_research_run", boom), \
          patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
          patch("embeddings.release_gpu_memory"):
-        ran = run_once(SessionLocal=SessionLocal)
+        ran = run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal)
 
     assert ran is True
 
@@ -532,8 +552,8 @@ def test_run_once_marks_job_failed_on_exception(engine):
         assert run.failure_reason == "runtime-owned failure"
 
 
-def test_run_once_processes_awaitable_result(engine):
-    """run_once processes research jobs via async processors."""
+def test_run_once_processes_async_dispatch(engine, AsyncWorkerSessionLocal):
+    """Async worker path dispatches research jobs through awaited processor call."""
     SessionLocal = sessionmaker(bind=engine)
 
     with SessionLocal() as seed:
@@ -551,13 +571,13 @@ def test_run_once_processes_awaitable_result(engine):
     with patch("services.workers.main.process_research_run", fake_process), \
          patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
          patch("embeddings.release_gpu_memory"):
-        ran = run_once(SessionLocal=SessionLocal)
+        ran = run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal)
 
     assert ran is True
     assert calls == [(run_id, tenant_id, True)]
 
 
-def test_run_once_marks_unknown_job_type_as_failed(engine):
+def test_run_once_marks_unknown_job_type_as_failed(engine, AsyncWorkerSessionLocal):
     """Unexpected job types should fail the claimed job and run."""
     SessionLocal = sessionmaker(bind=engine)
 
@@ -570,7 +590,7 @@ def test_run_once_marks_unknown_job_type_as_failed(engine):
 
     with patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
          patch("embeddings.release_gpu_memory"):
-        ran = run_once(SessionLocal=SessionLocal)
+        ran = run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal)
 
     assert ran is True
 
@@ -583,7 +603,7 @@ def test_run_once_marks_unknown_job_type_as_failed(engine):
         assert "Unknown job_type" in (run.failure_reason or "")
 
 
-def test_run_once_throughput_n_sequential_jobs(engine):
+def test_run_once_throughput_n_sequential_jobs(engine, AsyncWorkerSessionLocal):
     """N jobs inserted sequentially are all processed successfully."""
     N = 15
     SessionLocal = sessionmaker(bind=engine)
@@ -605,7 +625,7 @@ def test_run_once_throughput_n_sequential_jobs(engine):
     with patch("services.workers.main.process_research_run", noop_process), \
          patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
          patch("embeddings.release_gpu_memory"):
-        while run_once(SessionLocal=SessionLocal):
+        while run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal):
             pass
 
     assert processed == N
