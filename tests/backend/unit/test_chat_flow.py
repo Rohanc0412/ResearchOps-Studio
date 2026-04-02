@@ -62,17 +62,21 @@ def _send_message(
     message: str,
     client_message_id: str,
     force_pipeline: bool = False,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ):
-    return client.post(
-        "/chat/send",
-        json={
-            "conversation_id": conversation_id,
-            "project_id": project_id,
-            "message": message,
-            "client_message_id": client_message_id,
-            "force_pipeline": force_pipeline,
-        },
-    )
+    payload = {
+        "conversation_id": conversation_id,
+        "project_id": project_id,
+        "message": message,
+        "client_message_id": client_message_id,
+        "force_pipeline": force_pipeline,
+    }
+    if llm_provider is not None:
+        payload["llm_provider"] = llm_provider
+    if llm_model is not None:
+        payload["llm_model"] = llm_model
+    return client.post("/chat/send", json=payload)
 
 
 def _parse_send_response(resp) -> dict:
@@ -719,3 +723,94 @@ def test_run_start_idempotency(api_client) -> None:
             assert len(runs) == 1
 
     asyncio.run(_check())
+
+
+def test_project_run_setup_accepts_bedrock_provider(api_client) -> None:
+    client, _ = api_client
+    project_id = _create_project(client, "Bedrock Setup Project")
+
+    resp = client.post(
+        f"/projects/{project_id}/runs",
+        json={
+            "question": "Prepare a cited report on evaluation benchmarks for coding agents.",
+            "client_request_id": "bedrock-run-1",
+            "llm_provider": "bedrock",
+        },
+    )
+
+    assert resp.status_code == 200
+    run_resp = client.get(f"/runs/{resp.json()['run_id']}")
+    assert run_resp.status_code == 200
+    usage = run_resp.json()["usage"]
+    assert usage["llm_provider"] == "bedrock"
+    assert usage["llm_model"] == "amazon.nova-lite-v1:0"
+
+
+def test_bedrock_pending_action_replay_preserves_provider(api_client) -> None:
+    client, _ = api_client
+    project_id = _create_project(client, "Bedrock Pending Project")
+    conversation_id = _create_conversation(client, project_id)
+
+    offer = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message="Create a literature review with citations about Bedrock model evaluation.",
+        client_message_id="bedrock-offer-1",
+        llm_provider="bedrock",
+    )
+    assert offer.status_code == 200
+    assert offer.json()["assistant_message"]["type"] == "pipeline_offer"
+    assert offer.json()["pending_action"]["llm_provider"] == "bedrock"
+
+    accept = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message="__ACTION__:run_pipeline",
+        client_message_id="bedrock-accept-1",
+    )
+    assert accept.status_code == 200
+    assert accept.json()["assistant_message"]["type"] == "run_started"
+
+    run_id = accept.json()["assistant_message"]["content_json"]["run_id"]
+    run_resp = client.get(f"/runs/{run_id}")
+    assert run_resp.status_code == 200
+    usage = run_resp.json()["usage"]
+    assert usage["llm_provider"] == "bedrock"
+
+
+def test_bedrock_quick_answer_skips_tool_calling_when_tools_are_unavailable(
+    api_client, monkeypatch
+) -> None:
+    client, _ = api_client
+    project_id = _create_project(client, "Bedrock Quick Answer Project")
+    conversation_id = _create_conversation(client, project_id)
+
+    class StubBedrockLLM:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def generate(self, prompt, **_kwargs):
+            self.prompts.append(prompt)
+            return "Bedrock quick answer."
+
+    stub = StubBedrockLLM()
+
+    import routes.chat as chat_route
+
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    monkeypatch.setattr(chat_route, "get_llm_client", lambda *_args, **_kwargs: stub)
+
+    resp = _send_message(
+        client,
+        conversation_id=conversation_id,
+        project_id=project_id,
+        message="What is Amazon Bedrock?",
+        client_message_id="bedrock-chat-1",
+        llm_provider="bedrock",
+    )
+
+    assert resp.status_code == 200
+    assert _parse_send_response(resp)["assistant_message"]["content_text"] == "Bedrock quick answer."
+    assert len(stub.prompts) == 1

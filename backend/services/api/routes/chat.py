@@ -235,7 +235,6 @@ def _generate_quick_answer(
 
     resolved_model = _resolve_chat_model(llm_model)
     tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
-    use_tools = bool(tavily_key)
 
     try:
         client = get_llm_client(llm_provider, resolved_model)
@@ -249,6 +248,8 @@ def _generate_quick_answer(
         )
         yield ("answer", response_text)
         return
+
+    use_tools = bool(tavily_key) and callable(getattr(client, "generate_with_tools", None))
 
     if client is None:
         response_text = "I am not configured to generate a response right now."
@@ -722,8 +723,6 @@ async def post_send_chat(
         pending_provider = pending.get("llm_provider") or llm_provider
         pending_model = pending.get("llm_model") or llm_model
         pending_stage_models = pending.get("stage_models") or body.stage_models
-        if pending_provider not in (None, "hosted"):
-            pending_provider = None
         llm_provider = pending_provider
         llm_model = pending_model
         decision = decision_override or parse_consent_reply(body.message, pending_prompt)
@@ -979,7 +978,7 @@ async def post_send_chat(
                     llm_model=llm_model,
                     created_at=now,
                     ambiguous_count=ambiguous_count + 1,
-                    stage_models=body.stage_models,
+                    stage_models=pending_stage_models,
                 )
                 set_pending_action(convo, pending_action)
                 assistant_message = await create_message(

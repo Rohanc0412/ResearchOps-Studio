@@ -41,7 +41,7 @@ class WebRunCreate(BaseModel):
     client_request_id: str | None = Field(default=None, min_length=1, max_length=200)
     output_type: Literal["report"] = "report"
     budget_override: dict | None = None
-    llm_provider: str | None = Field(default=None, pattern="^(hosted)$")
+    llm_provider: str | None = Field(default=None, pattern="^(hosted|bedrock)$")
     llm_model: str | None = Field(default=None, min_length=1)
 
 

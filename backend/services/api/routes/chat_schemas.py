@@ -54,7 +54,7 @@ class ChatSendRequest(BaseModel):
     project_id: UUID | None = None
     message: str = Field(min_length=1)
     client_message_id: str = Field(min_length=1, max_length=200)
-    llm_provider: str | None = Field(default=None, pattern="^(hosted)$")
+    llm_provider: str | None = Field(default=None, pattern="^(hosted|bedrock)$")
     llm_model: str | None = Field(default=None, min_length=1)
     force_pipeline: bool = False
     stage_models: dict[str, str | None] | None = None
