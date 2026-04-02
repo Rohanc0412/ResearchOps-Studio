@@ -96,3 +96,13 @@ def test_operator_env_var_beats_stage_models(monkeypatch):
     client = get_llm_client_for_stage("draft", "hosted", None, stage_models={"draft": "user-model"})
     assert client is not None
     assert client.model_name == "operator-model"
+
+
+def test_resolve_model_for_stage_falls_back_to_default_bedrock_model(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL_CHEAP", raising=False)
+    monkeypatch.delenv("LLM_MODEL_CAPABLE", raising=False)
+    monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
+
+    from llm import resolve_model_for_stage
+
+    assert resolve_model_for_stage("draft", None, "bedrock", None) == "amazon.nova-lite-v1:0"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 def test_get_llm_client_uses_openai_env_fallbacks(monkeypatch):
     monkeypatch.delenv("HOSTED_LLM_BASE_URL", raising=False)
@@ -27,6 +29,31 @@ def test_resolve_model_for_stage_falls_back_to_default_hosted_model(monkeypatch)
     from llm import resolve_model_for_stage
 
     assert resolve_model_for_stage("draft", None, "hosted", None) == "openai/gpt-4o-mini"
+
+
+def test_get_llm_client_uses_bedrock_defaults(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+
+    from llm import BedrockClient, get_llm_client
+
+    client = get_llm_client("bedrock", None)
+
+    assert isinstance(client, BedrockClient)
+    assert client.model_name == "amazon.nova-lite-v1:0"
+    assert client.region_name == "us-east-1"
+
+
+def test_get_llm_client_raises_for_missing_bedrock_region(monkeypatch):
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
+
+    from llm import LLMError, get_llm_client
+
+    with pytest.raises(LLMError, match="AWS_REGION"):
+        get_llm_client("bedrock", None)
 
 
 def test_explain_llm_error_surfaces_quota_issue():
