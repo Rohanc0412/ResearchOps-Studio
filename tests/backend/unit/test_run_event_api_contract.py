@@ -7,11 +7,14 @@ import pytest
 import pytest_asyncio
 import db.models  # noqa: F401
 from db.models.base import Base
+from db.models.run_checkpoints import RunCheckpointRow
+from db.models.run_events import RunEventRow
 from db.models.projects import ProjectRow
 from db.models.run_events import RunEventAudienceDb, RunEventLevelDb
 from db.models.runs import RunRow, RunStatusDb
 from services.orchestrator.checkpoint_store import write_checkpoint
 from services.orchestrator.event_store import append_runtime_event
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _TEST_DATABASE_URL = os.environ.get(
@@ -70,8 +73,20 @@ async def test_append_runtime_event_persists_audience_and_event_type(
         message="Searching OpenAlex for query 1/3",
         payload={"connector": "openalex", "completed_count": 0, "total_count": 3},
     )
-    assert row.audience == RunEventAudienceDb.progress
-    assert row.event_type == "retrieve.connector_query_started"
+    await session.flush()
+    session.expunge_all()
+
+    stored_row = (
+        await session.execute(
+            select(RunEventRow).where(
+                RunEventRow.tenant_id == tenant_id,
+                RunEventRow.run_id == run_id,
+                RunEventRow.id == row.id,
+            )
+        )
+    ).scalar_one()
+    assert stored_row.audience == RunEventAudienceDb.progress
+    assert stored_row.event_type == "retrieve.connector_query_started"
 
 
 @pytest.mark.asyncio
@@ -88,5 +103,19 @@ async def test_write_checkpoint_persists_resume_metadata(
         state_payload={"user_query": "test", "generated_queries": ["a"]},
         summary_payload={"query_count": 1},
     )
-    assert row.node_name == "retriever"
-    assert row.iteration_count == 1
+    await session.flush()
+    session.expunge_all()
+
+    stored_row = (
+        await session.execute(
+            select(RunCheckpointRow).where(
+                RunCheckpointRow.tenant_id == tenant_id,
+                RunCheckpointRow.run_id == run_id,
+                RunCheckpointRow.id == row.id,
+            )
+        )
+    ).scalar_one()
+    assert stored_row.node_name == "retriever"
+    assert stored_row.iteration_count == 1
+    assert stored_row.checkpoint_version == 1
+    assert stored_row.summary_json == {"query_count": 1}
