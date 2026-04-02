@@ -61,6 +61,7 @@ from ingestion import ingest_source
 from langfuse.decorators import observe
 from llm import (
     LLMError,
+    explain_llm_error,
     extract_json_payload,
     get_llm_client_for_stage,
     json_response_format,
@@ -247,7 +248,7 @@ def _build_query_plan_with_llm(
                 "llm_model": llm_model,
             },
         )
-        return []
+        raise ValueError(explain_llm_error(str(exc))) from exc
 
     if llm_client is None:
         logger.warning(
@@ -300,7 +301,7 @@ def _build_query_plan_with_llm(
                 "llm_model": llm_model,
             },
         )
-        return []
+        raise ValueError(explain_llm_error(str(exc))) from exc
 
     log_llm_exchange("response", response, stage="retrieve", logger=logger)
     payload = extract_json_payload(response)

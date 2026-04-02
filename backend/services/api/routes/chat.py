@@ -37,7 +37,7 @@ from db.session import session_scope
 from deps import DBDep
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse as _StreamingResponse
-from llm import LLMError, get_llm_client
+from llm import LLMError, explain_llm_error, get_llm_client
 from middlewares.auth import IdentityDep
 from routes.chat_intents import (
     _build_prompt,
@@ -239,8 +239,8 @@ def _generate_quick_answer(
 
     try:
         client = get_llm_client(llm_provider, resolved_model)
-    except LLMError:
-        response_text = "I am not configured to generate a response right now."
+    except LLMError as exc:
+        response_text = explain_llm_error(str(exc))
         _log_step(
             "finish",
             conversation_id=conversation_id,
@@ -324,8 +324,8 @@ def _generate_quick_answer(
         _log_llm_exchange("response", conversation_id, response_text or "")
         yield ("answer", response_text or "I am having trouble generating a response right now.")
 
-    except LLMError:
-        response_text = "I am having trouble generating a response right now."
+    except LLMError as exc:
+        response_text = explain_llm_error(str(exc))
         yield ("answer", response_text)
     finally:
         if response_text is not None:

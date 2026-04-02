@@ -32,6 +32,7 @@ from db.repositories.project_runs import (
 )
 from fastapi import HTTPException, Request
 from job_queue import enqueue_run_job_async
+from llm import _resolve_hosted_model_name
 from research import RESEARCH_JOB_TYPE
 from schemas.truth import ArtifactOut, ProjectOut
 from sqlalchemy import select
@@ -235,7 +236,7 @@ async def create_project_run(
         resolved_provider = llm_provider or "hosted"
         if resolved_provider != "hosted":
             raise HTTPException(status_code=400, detail="Only hosted LLM provider is supported.")
-        resolved_model = llm_model or os.getenv("HOSTED_LLM_MODEL")
+        resolved_model = _resolve_hosted_model_name(llm_model)
         run = await create_research_run(
             session=session,
             tenant_id=tenant_id,

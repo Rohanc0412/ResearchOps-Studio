@@ -82,3 +82,42 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
         ).json()
         headers_b = {"Authorization": f"Bearer {reg_b['access_token']}"}
         assert client.get(f"/runs/{run_id}", headers=headers_b).status_code == 404
+
+
+def test_register_duplicate_email_returns_email_specific_error() -> None:
+    os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
+    os.environ["AUTH_REQUIRED"] = "true"
+    os.environ["DEV_BYPASS_AUTH"] = "false"
+    os.environ["AUTH_JWT_SECRET"] = "test-secret"
+    os.environ["AUTH_JWT_ISSUER"] = "researchops-api"
+
+    get_settings.cache_clear()
+    get_auth_config.cache_clear()
+
+    app = create_app()
+
+    run_id_suffix = uuid4().hex[:8]
+    email = f"shared-{run_id_suffix}@example.com"
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/auth/register",
+            json={
+                "username": f"first-{run_id_suffix}",
+                "email": email,
+                "password": "password123",
+            },
+        )
+        assert first.status_code == 200
+
+        duplicate = client.post(
+            "/auth/register",
+            json={
+                "username": f"second-{run_id_suffix}",
+                "email": email,
+                "password": "password123",
+            },
+        )
+
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "Email already exists"

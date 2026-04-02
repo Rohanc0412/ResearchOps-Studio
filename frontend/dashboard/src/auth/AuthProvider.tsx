@@ -123,6 +123,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     async function init() {
+      if (!accessToken) {
+        await clearSession();
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
       try {
         await refreshSession();
       } catch {
@@ -135,7 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accessToken]);
 
   async function login(username: string, password: string): Promise<LoginResult> {
     const response = await authFetch("/auth/login", {

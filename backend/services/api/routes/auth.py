@@ -49,6 +49,15 @@ router = APIRouter(tags=["auth"])
 logger = logging.getLogger(__name__)
 
 
+def _registration_conflict_detail(exc: IntegrityError) -> str:
+    message = str(exc).lower()
+    if "uq_auth_users_email" in message or "auth_users_email_key" in message:
+        return "Email already exists"
+    if "uq_auth_users_username" in message or "auth_users_username_key" in message:
+        return "Username already exists"
+    return "Account already exists"
+
+
 def _email_domain(value: str) -> str | None:
     value = (value or "").strip().lower()
     if "@" not in value:
@@ -302,7 +311,7 @@ async def register(request: Request, response: Response, body: RegisterIn, sessi
             is_active=True,
         )
     except IntegrityError as e:
-        raise HTTPException(status_code=409, detail="Username already exists") from e
+        raise HTTPException(status_code=409, detail=_registration_conflict_detail(e)) from e
 
     access_token, refresh_token, refresh_expires, expires_in = _issue_tokens(user)
     await _persist_refresh_token(

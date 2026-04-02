@@ -83,9 +83,9 @@ Open [http://localhost:5173](http://localhost:5173).
 | Variable | Description |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `HOSTED_LLM_BASE_URL` | OpenAI-compatible endpoint (e.g. Gemini) |
-| `HOSTED_LLM_API_KEY` | API key for the LLM endpoint |
-| `HOSTED_LLM_MODEL` | Model name (e.g. `gemini-2.5-flash`) |
+| `HOSTED_LLM_BASE_URL` | OpenAI-compatible endpoint. Optional when using standard OpenAI; defaults to `https://api.openai.com`. |
+| `HOSTED_LLM_API_KEY` | API key for the hosted LLM endpoint. `OPENAI_API_KEY` is also accepted. |
+| `HOSTED_LLM_MODEL` | Model name override. Defaults to `openai/gpt-4o-mini`; `OPENAI_MODEL` is also accepted. |
 | `TAVILY_API_KEY` | Tavily search API key (web search in chat) |
 
 ## Tech stack

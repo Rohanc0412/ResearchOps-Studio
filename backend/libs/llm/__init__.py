@@ -28,6 +28,10 @@ class LLMError(RuntimeError):
     """Raised when an LLM request fails."""
 
 
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com"
+DEFAULT_HOSTED_MODEL = "openai/gpt-4o-mini"
+
+
 # Stage names must match the strings passed to get_llm_client_for_stage() in each node.
 BALANCED_PROFILE: dict[str, str] = {
     "retrieve": "cheap",
@@ -74,7 +78,41 @@ def resolve_model_for_stage(
         return model
 
     # Level 4: global default
-    return os.getenv("HOSTED_LLM_MODEL")
+    return _resolve_hosted_model_name()
+
+
+def _resolve_hosted_base_url() -> str | None:
+    return (
+        os.getenv("HOSTED_LLM_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL")
+        or DEFAULT_OPENAI_BASE_URL
+    )
+
+
+def _resolve_hosted_api_key() -> str | None:
+    return os.getenv("HOSTED_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+
+
+def _resolve_hosted_model_name(model: str | None = None) -> str | None:
+    return model or os.getenv("HOSTED_LLM_MODEL") or os.getenv("OPENAI_MODEL") or DEFAULT_HOSTED_MODEL
+
+
+def explain_llm_error(reason: str) -> str:
+    text = (reason or "").strip()
+    lowered = text.lower()
+    if any(token in lowered for token in ("http 429", "resource_exhausted", "quota", "rate limit")):
+        return (
+            "The configured LLM provider rejected the request due to quota or rate limits. "
+            "Check billing or retry later."
+        )
+    if "not configured" in lowered:
+        return (
+            "The hosted LLM is not configured. Set HOSTED_LLM_API_KEY or OPENAI_API_KEY "
+            "and verify the base URL/model settings."
+        )
+    if text:
+        return text
+    return "The configured LLM provider could not complete the request."
 
 
 @dataclass
@@ -267,13 +305,13 @@ def get_llm_client(
         raise LLMError("Local LLM provider is no longer supported.")
 
     if provider_name == "hosted":
-        base_url = os.getenv("HOSTED_LLM_BASE_URL")
-        api_key = os.getenv("HOSTED_LLM_API_KEY")
-        model_name = model or os.getenv("HOSTED_LLM_MODEL")
+        base_url = _resolve_hosted_base_url()
+        api_key = _resolve_hosted_api_key()
+        model_name = _resolve_hosted_model_name(model)
         if not base_url or not api_key or not model_name:
             raise LLMError(
-                "Hosted LLM not configured. Set HOSTED_LLM_BASE_URL, "
-                "HOSTED_LLM_API_KEY, HOSTED_LLM_MODEL."
+                "Hosted LLM not configured. Set HOSTED_LLM_API_KEY or OPENAI_API_KEY, "
+                "and optionally HOSTED_LLM_BASE_URL/OPENAI_BASE_URL plus HOSTED_LLM_MODEL/OPENAI_MODEL."
             )
         return OpenAICompatibleClient(
             base_url=base_url,
