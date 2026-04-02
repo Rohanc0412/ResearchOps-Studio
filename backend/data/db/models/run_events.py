@@ -34,6 +34,12 @@ class RunEventLevelDb(enum.StrEnum):
     error = "error"
 
 
+class RunEventAudienceDb(enum.StrEnum):
+    progress = "progress"
+    diagnostic = "diagnostic"
+    state = "state"
+
+
 class RunEventRow(Base):
     __tablename__ = "run_events"
     __table_args__ = (
@@ -45,6 +51,12 @@ class RunEventRow(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
+    audience: Mapped[RunEventAudienceDb] = mapped_column(
+        Enum(RunEventAudienceDb, name="run_event_audience"),
+        nullable=False,
+        default=RunEventAudienceDb.diagnostic,
+        server_default=RunEventAudienceDb.diagnostic.value,
+    )
     event_number: Mapped[int] = mapped_column(BigInteger(), nullable=False)
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

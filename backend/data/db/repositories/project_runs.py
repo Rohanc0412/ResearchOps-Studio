@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session, attributes, selectinload
 
 from db.models import ProjectRow, RunEventRow, RunRow
 from db.models.run_budget_limits import RunBudgetLimitRow
-from db.models.run_events import RunEventLevelDb
+from db.models.run_checkpoints import RunCheckpointRow
+from db.models.run_events import RunEventAudienceDb, RunEventLevelDb
 from db.models.run_status_transitions import RunStatusTransitionRow
 from db.models.run_usage_metrics import RunUsageMetricRow
 from db.models.runs import RunStatusDb
@@ -294,6 +295,7 @@ async def append_run_event(
     run_id: UUID,
     level: RunEventLevelDb,
     message: str,
+    audience: RunEventAudienceDb = RunEventAudienceDb.diagnostic,
     stage: str | None = None,
     event_type: str = "log",
     payload_json: dict | None = None,
@@ -331,6 +333,7 @@ async def append_run_event(
     row = RunEventRow(
         tenant_id=tenant_id,
         run_id=run_id,
+        audience=audience,
         event_number=int(next_event_number),
         ts=now,
         stage=stage,
@@ -363,6 +366,7 @@ def append_run_event_sync(
     run_id: UUID,
     level: RunEventLevelDb,
     message: str,
+    audience: RunEventAudienceDb = RunEventAudienceDb.diagnostic,
     stage: str | None = None,
     event_type: str = "log",
     payload_json: dict | None = None,
@@ -396,6 +400,7 @@ def append_run_event_sync(
     row = RunEventRow(
         tenant_id=tenant_id,
         run_id=run_id,
+        audience=audience,
         event_number=int(next_event_number),
         ts=now,
         stage=stage,
@@ -434,6 +439,32 @@ async def list_run_events(
         stmt = stmt.where(RunEventRow.event_number > after_event_number)
     stmt = stmt.order_by(RunEventRow.event_number.asc()).limit(limit)
     return list((await session.execute(stmt)).scalars().all())
+
+
+async def write_run_checkpoint(
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+    node_name: str,
+    iteration_count: int = 0,
+    state_payload: dict | None = None,
+    summary_payload: dict | None = None,
+    checkpoint_version: int = 1,
+) -> RunCheckpointRow:
+    row = RunCheckpointRow(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        checkpoint_version=checkpoint_version,
+        node_name=node_name,
+        iteration_count=iteration_count,
+        stage=node_name,
+        payload_json=state_payload or {},
+        summary_json=summary_payload or {},
+    )
+    session.add(row)
+    await session.flush()
+    return row
 
 
 async def _touch_project_from_run(
@@ -505,6 +536,7 @@ __all__ = [
     "list_projects",
     "list_projects_for_user",
     "list_run_events",
+    "write_run_checkpoint",
     "patch_run_usage_metrics",
     "replace_run_budget_limits",
     "replace_run_usage_metrics",
