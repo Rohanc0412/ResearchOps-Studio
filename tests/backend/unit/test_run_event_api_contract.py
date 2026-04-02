@@ -14,6 +14,7 @@ from db.models.run_events import RunEventRow
 from db.models.projects import ProjectRow
 from db.models.run_events import RunEventAudienceDb, RunEventLevelDb
 from db.models.runs import RunRow, RunStatusDb
+from core.runs.lifecycle import transition_run_status_async
 from routes.runs import _event_to_sse
 from schemas.truth import RunEventOut
 from services.orchestrator.checkpoint_store import write_checkpoint
@@ -164,3 +165,55 @@ def test_sse_payload_includes_audience_and_event_type() -> None:
     data = json.loads(lines[2].removeprefix("data: "))
     assert data["audience"] == "progress"
     assert data["event_type"] == "draft.section_started"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_terminal_transition_emits_state_audience_event(tmp_path) -> None:
+    db_path = tmp_path / "lifecycle_event_contract.sqlite3"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+    await init_db(engine)
+
+    session_local = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_local() as session:
+        tenant_id = uuid4()
+        project = ProjectRow(tenant_id=tenant_id, name=f"proj-{uuid4()}", created_by="tester")
+        session.add(project)
+        await session.flush()
+
+        run = RunRow(
+            tenant_id=tenant_id,
+            project_id=project.id,
+            status=RunStatusDb.running,
+            current_stage="evaluate",
+            question="lifecycle contract test",
+        )
+        session.add(run)
+        await session.flush()
+
+        await transition_run_status_async(
+            session=session,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            to_status=RunStatusDb.failed,
+            current_stage="evaluate",
+            finished_at=datetime.now(UTC),
+        )
+        await session.commit()
+
+        rows = list(
+            (
+                await session.execute(
+                    select(RunEventRow)
+                    .where(RunEventRow.tenant_id == tenant_id, RunEventRow.run_id == run.id)
+                    .order_by(RunEventRow.event_number.asc())
+                )
+            ).scalars().all()
+        )
+
+    await engine.dispose()
+
+    assert len(rows) >= 1
+    terminal_event = rows[-1]
+    assert terminal_event.event_type == "state"
+    assert terminal_event.audience == RunEventAudienceDb.state
+    assert terminal_event.payload_json.get("to_status") == "failed"

@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from db.models.run_events import RunEventLevelDb, RunEventRow
+from db.models.run_events import RunEventAudienceDb, RunEventLevelDb, RunEventRow
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.project_runs import append_run_event
 from sqlalchemy import select
@@ -211,6 +211,7 @@ def emit_run_event(
         tenant_id=tenant_id,
         run_id=run_id,
         level=level,
+        audience=RunEventAudienceDb.state,
         message=message,
         stage=stage,
         event_type=event_type,
@@ -382,6 +383,7 @@ async def emit_run_event_async(
         tenant_id=tenant_id,
         run_id=run_id,
         level=level,
+        audience=RunEventAudienceDb.state,
         message=message,
         stage=stage,
         event_type=event_type,
