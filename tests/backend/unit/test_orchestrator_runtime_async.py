@@ -437,6 +437,57 @@ async def test_runtime_execute_node_persists_single_progress_sequence_without_du
 
 
 @pytest.mark.asyncio
+async def test_runtime_execute_node_persists_queued_error_events_on_node_failure(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncSession, seeded_run: RunRow
+) -> None:
+    def fail_if_direct_append(**_kwargs):
+        raise AssertionError("direct sync append path must not be used for queued node events")
+
+    monkeypatch.setattr("core.pipeline_events.events.append_run_event", fail_if_direct_append)
+    await session.commit()
+    runtime = await ResearchRuntime.create(
+        session=session,
+        tenant_id=seeded_run.tenant_id,
+        run_id=seeded_run.id,
+        inputs=ResearchRunInputs(user_query="failure events"),
+    )
+
+    @instrument_node("draft")
+    def sync_failing_node(state: OrchestratorState, sync_session) -> OrchestratorState:
+        emit_node_progress(
+            session=sync_session,
+            tenant_id=state.tenant_id,
+            run_id=state.run_id,
+            event_type="progress",
+            stage="draft",
+            data={"section_index": 1, "total_sections": 1},
+        )
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        await runtime.execute_node(
+            node_name="writer",
+            node_func=sync_failing_node,
+            state=runtime.initial_state(),
+        )
+
+    rows = (
+        await session.execute(
+            select(RunEventRow)
+            .where(
+                RunEventRow.tenant_id == seeded_run.tenant_id,
+                RunEventRow.run_id == seeded_run.id,
+            )
+            .order_by(RunEventRow.event_number.asc())
+        )
+    ).scalars().all()
+
+    event_types = [row.event_type for row in rows]
+    assert event_types == ["stage_start", "progress", "error"]
+    assert [row.event_number for row in rows] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
 async def test_run_orchestrator_final_execute_node_commit_ignores_late_cancel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

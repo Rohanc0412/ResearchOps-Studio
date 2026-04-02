@@ -244,20 +244,41 @@ class ResearchRuntime:
     ) -> OrchestratorState:
         await self.assert_not_cancelled()
 
-        if inspect.iscoroutinefunction(node_func):
-            next_state = await node_func(state, self)
-        else:
-            next_state = await self.session.run_sync(
-                lambda sync_session: node_func(state, self.sync_node_session(sync_session))
-            )
+        try:
+            if inspect.iscoroutinefunction(node_func):
+                next_state = await node_func(state, self)
+            else:
+                next_state = await self.session.run_sync(
+                    lambda sync_session: node_func(state, self.sync_node_session(sync_session))
+                )
 
-        if isinstance(next_state, dict):
-            next_state = OrchestratorState(**next_state)
+            if isinstance(next_state, dict):
+                next_state = OrchestratorState(**next_state)
 
-        await self.checkpoint_store.write_after_node(state=next_state, node_name=node_name)
-        await self.flush_pending_events()
-        await self.session.commit()
-        return next_state
+            await self.checkpoint_store.write_after_node(state=next_state, node_name=node_name)
+            await self.flush_pending_events()
+            await self.session.commit()
+            return next_state
+        except Exception:
+            try:
+                await self.session.rollback()
+                if self._pending_node_events:
+                    await self.flush_pending_events()
+                    await self.session.commit()
+            except Exception:
+                logger.exception(
+                    "failed to persist queued node events after node exception",
+                    extra={
+                        "node_name": node_name,
+                        "run_id": str(self.run_id),
+                        "tenant_id": str(self.tenant_id),
+                    },
+                )
+                try:
+                    await self.session.rollback()
+                except Exception:
+                    pass
+            raise
 
 
 async def run_research_orchestrator(
