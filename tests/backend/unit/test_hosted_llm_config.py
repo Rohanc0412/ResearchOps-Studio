@@ -33,6 +33,7 @@ def test_resolve_model_for_stage_falls_back_to_default_hosted_model(monkeypatch)
 
 def test_get_llm_client_uses_bedrock_defaults(monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
     monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
