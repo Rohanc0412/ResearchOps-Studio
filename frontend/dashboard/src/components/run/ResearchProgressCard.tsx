@@ -236,14 +236,14 @@ export function ResearchProgressCard({
         <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/70 p-3 md:p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-              Recent updates
+              Progress updates
             </div>
             <div className="text-xs text-slate-600">{model.currentAction ? model.recentEvents.length + 1 : model.recentEvents.length} events</div>
           </div>
 
           {!model.currentAction && model.recentEvents.length === 0 ? (
             <div className="rounded-xl border border-slate-900 bg-slate-950 px-3 py-4 text-sm text-slate-500">
-              Waiting for live updates from the run stream.
+              Waiting for progress events from the run stream.
             </div>
           ) : (
             <div className="max-h-56 space-y-2 overflow-y-auto pr-1">

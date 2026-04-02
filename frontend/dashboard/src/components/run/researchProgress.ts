@@ -1,6 +1,7 @@
 import type { ChatMessage, RunEvent } from "../../types/dto";
 
 type ProgressStatus = "running" | "blocked" | "failed" | "succeeded" | "canceled";
+type RunState = "created" | "queued" | "running" | "blocked" | "failed" | "succeeded" | "canceled";
 
 export type ResearchProgressStepState = "complete" | "current" | "pending";
 
@@ -64,6 +65,26 @@ const FALLBACK_STEP_LABELS: string[] = [
   "Export the final report.",
 ];
 
+const TERMINAL_STATES = new Set<RunState>(["failed", "succeeded", "canceled"]);
+
+function isTerminalStateEvent(event: RunEvent): boolean {
+  if (event.audience !== "state" || event.event_type !== "state") {
+    return false;
+  }
+
+  const payload = event.payload ?? {};
+  const maybeStatus = payload["to_status"] ?? payload["status"];
+  if (typeof maybeStatus !== "string") {
+    return false;
+  }
+
+  return TERMINAL_STATES.has(maybeStatus as RunState);
+}
+
+function filterProgressContractEvents(events: RunEvent[]): RunEvent[] {
+  return events.filter((event) => event.audience === "progress" || isTerminalStateEvent(event));
+}
+
 function deriveCurrentAction(
   events: RunEvent[],
   currentStepIndex: number,
@@ -76,19 +97,16 @@ function deriveCurrentAction(
     .filter(([, idx]) => idx === currentStepIndex)
     .map(([stage]) => stage);
 
-  type E = RunEvent & { event_type?: string };
-  const evts = events as E[];
-
   // Filter to current-step events
-  const stageEvents = evts
+  const stageEvents = events
     .map((e, i) => ({ e, i }))
-    .filter(({ e }) => currentStages.includes(e.stage) && (e.level as string) !== "debug");
+    .filter(({ e }) => currentStages.includes(e.stage));
 
   if (stageEvents.length === 0) return null;
 
   // Prefer events whose event_type ends with "_started" or ".started"
   const inProgressEvents = stageEvents.filter(({ e }) => {
-    const et = (e as E).event_type ?? "";
+    const et = e.event_type;
     return et.endsWith("_started") || et.endsWith(".started");
   });
 
@@ -106,13 +124,11 @@ export function buildResearchProgressCardModel({
   messages,
   events
 }: BuildResearchProgressCardModelArgs): ResearchProgressCardModel {
+  const contractEvents = filterProgressContractEvents(events);
   const title = deriveResearchTitle(activeRun?.question, messages, chatTitle);
 
-  // Read LLM-planned labels from the first retrieve.plan_created event.
-  // event_type is sent by the backend and preserved by RunEventSchema's .passthrough().
-  const planEvent = events.find(
-    e => (e as RunEvent & { event_type?: string }).event_type === "retrieve.plan_created"
-  );
+  // Read LLM-planned labels from the first retrieve.plan_created progress event.
+  const planEvent = contractEvents.find((e) => e.event_type === "retrieve.plan_created");
   const rawLabels = planEvent?.payload?.["step_labels"];
   const stepLabels: string[] = (
     Array.isArray(rawLabels) && rawLabels.length === 6
@@ -122,13 +138,13 @@ export function buildResearchProgressCardModel({
 
   const STEP_IDS = ["retrieve", "outline", "evidence_pack", "draft", "evaluate", "export"] as const;
 
-  const latestEvent = events.at(-1);
+  const latestEvent = contractEvents.at(-1);
   const currentStepIndex = deriveCurrentStepIndex(activeRun?.status ?? "running", latestEvent);
   const completedCount = activeRun?.status === "succeeded" ? STEP_IDS.length : Math.max(0, currentStepIndex);
   const progressRatio = deriveProgressRatio(activeRun?.status ?? "running", currentStepIndex, latestEvent);
 
   const currentActionData = deriveCurrentAction(
-    events,
+    contractEvents,
     currentStepIndex,
     activeRun?.status ?? "running"
   );
@@ -145,8 +161,8 @@ export function buildResearchProgressCardModel({
 
   // Exclude the chosen currentAction event from recentEvents to avoid duplication
   const recentEventsSource = currentActionData
-    ? events.filter((_, i) => i !== currentActionData.originalIndex)
-    : events;
+    ? contractEvents.filter((_, i) => i !== currentActionData.originalIndex)
+    : contractEvents;
 
   return {
     title,
@@ -163,27 +179,21 @@ export function buildResearchProgressCardModel({
             : "pending"
     })),
     summaryText: deriveSummaryText(activeRun, latestEvent),
-    metricText: deriveMetricText(activeRun?.status ?? "running", latestEvent, events, currentStepIndex),
+    metricText: deriveMetricText(activeRun?.status ?? "running", latestEvent, contractEvents, currentStepIndex),
     progressRatio,
     status: activeRun?.status ?? "running",
     recentEvents: recentEventsSource
       .slice(-20)
       .reverse()
-      .reduce<ResearchProgressEventRow[]>((acc, event, index) => {
-        const message = humanizeEventMessage(event);
-        const previous = acc.at(-1);
-        if (previous && previous.message === message) return acc;
-        acc.push({
+      .map((event, index) => ({
           id: `${event.ts}-${event.message}-${index}`,
           ts: event.ts,
-          message,
+          message: humanizeEventMessage(event),
           detail: humanizeEventDetail(event),
           level: event.level,
-        });
-        return acc;
-      }, [])
+        }))
       .slice(0, 6),
-    stepMetrics: deriveStepMetrics(events, activeRun?.status ?? "running"),
+    stepMetrics: deriveStepMetrics(contractEvents, activeRun?.status ?? "running"),
     currentAction,
   };
 }
@@ -290,16 +300,15 @@ function deriveMetricText(
 }
 
 function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string | null)[] {
-  // event_type is sent by the backend and preserved via .passthrough() — not in the TS type
-  type E = RunEvent & { event_type?: string };
-  const evts = events as E[];
+  // Step metrics are derived from filtered contract events only.
+
 
   // ── Step 0: retrieve ──────────────────────────────────────────
   let queryCount: number | null = null;
   let foundTotal: number | null = null;
   let selectedTotal: number | null = null;
 
-  for (const e of evts) {
+  for (const e of events) {
     if (e.event_type === "retrieve.plan_created") {
       const q = pickNumber(e.payload ?? {}, ["query_count"]);
       if (q !== null) queryCount = q;
@@ -327,7 +336,7 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
 
   // ── Step 1: outline ───────────────────────────────────────────
   let step1: string | null = null;
-  for (const e of evts) {
+  for (const e of events) {
     if (e.event_type === "outline.created") {
       const n = pickNumber(e.payload ?? {}, ["section_count"]);
       if (n !== null) step1 = `${n} sections`;
@@ -337,9 +346,9 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
   // ── Step 2: evidence_pack ─────────────────────────────────────
   let step2: string | null = null;
   {
-    const packedSections = evts.filter(e => e.event_type === "evidence_pack.created").length;
+    const packedSections = events.filter(e => e.event_type === "evidence_pack.created").length;
     let outlineSections: number | null = null;
-    for (const e of evts) {
+    for (const e of events) {
       if (e.event_type === "outline.created") {
         outlineSections = pickNumber(e.payload ?? {}, ["section_count"]);
       }
@@ -354,16 +363,16 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
   // ── Step 3: draft ─────────────────────────────────────────────
   let step3: string | null = null;
   {
-    const draftedSections = evts.filter(e => e.event_type === "draft.section_completed").length;
+    const draftedSections = events.filter(e => e.event_type === "draft.section_completed").length;
     let totalSections: number | null = null;
-    for (const e of evts) {
+    for (const e of events) {
       if (e.stage === "draft" && e.event_type === "progress") {
         const t = pickNumber(e.payload ?? {}, ["total_sections"]);
         if (t !== null) totalSections = t;
       }
     }
     if (totalSections === null) {
-      for (const e of evts) {
+      for (const e of events) {
         if (e.event_type === "outline.created") {
           totalSections = pickNumber(e.payload ?? {}, ["section_count"]);
         }
@@ -378,7 +387,7 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
 
   // ── Step 4: evaluate ──────────────────────────────────────────
   let step4: string | null = null;
-  for (const e of evts) {
+  for (const e of events) {
     if (e.event_type === "evaluate.summary") {
       const pass = pickNumber(e.payload ?? {}, ["pass_count"]);
       const fail = pickNumber(e.payload ?? {}, ["fail_count"]);
@@ -392,7 +401,7 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
     }
   }
   if (step4 === null) {
-    const evalDone = evts.filter(
+    const evalDone = events.filter(
       e => e.event_type === "evaluate.section_completed" || e.event_type === "evaluate.completed"
     ).length;
     if (evalDone > 0) step4 = `${evalDone} reviewed`;
@@ -400,7 +409,7 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
 
   // ── Step 5: export ────────────────────────────────────────────
   let step5: string | null = null;
-  const hasExport = evts.some(e => e.stage === "export");
+  const hasExport = events.some(e => e.stage === "export");
   if (status === "succeeded" || hasExport) step5 = "done";
 
   return [step0, step1, step2, step3, step4, step5];

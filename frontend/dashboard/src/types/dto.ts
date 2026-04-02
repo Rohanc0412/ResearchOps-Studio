@@ -150,6 +150,8 @@ export const RunEventSchema = z
       "factcheck",
       "export"
     ]),
+    audience: z.enum(["progress", "diagnostic", "state"]),
+    event_type: z.string().min(1),
     message: z.string(),
     payload: z.record(z.unknown()).optional()
   })

@@ -13,6 +13,7 @@ class ApiModel(BaseModel):
 
 RunStatus = Literal["created", "queued", "running", "blocked", "failed", "succeeded", "canceled"]
 RunEventLevel = Literal["debug", "info", "warn", "error"]
+RunEventAudience = Literal["progress", "diagnostic", "state"]
 
 
 class ProjectCreate(ApiModel):
@@ -40,6 +41,8 @@ class RunEventOut(ApiModel):
     ts: datetime
     stage: str | None = None
     level: RunEventLevel
+    audience: RunEventAudience
+    event_type: str
     message: str
     payload_json: dict[str, Any]
 

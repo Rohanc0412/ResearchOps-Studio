@@ -88,11 +88,13 @@ def _event_to_sse(event) -> str:
         stage = "retrieve"
 
     payload = event.payload_json or {}
+    audience = event.audience.value if hasattr(event.audience, "value") else str(event.audience)
     data = {
         "id": event.event_number,
         "ts": event.ts.isoformat(),
         "level": level,
         "stage": stage,
+        "audience": audience,
         "event_type": event.event_type,
         "message": event.message,
         "payload": payload,

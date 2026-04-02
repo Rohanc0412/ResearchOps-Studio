@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -11,6 +14,8 @@ from db.models.run_events import RunEventRow
 from db.models.projects import ProjectRow
 from db.models.run_events import RunEventAudienceDb, RunEventLevelDb
 from db.models.runs import RunRow, RunStatusDb
+from routes.runs import _event_to_sse
+from schemas.truth import RunEventOut
 from services.orchestrator.checkpoint_store import write_checkpoint
 from services.orchestrator.event_store import append_runtime_event
 from sqlalchemy import select
@@ -116,3 +121,46 @@ async def test_write_checkpoint_persists_resume_metadata(
     assert stored_row.iteration_count == 1
     assert stored_row.checkpoint_version == 1
     assert stored_row.summary_json == {"query_count": 1}
+
+
+def test_run_event_out_includes_audience_and_event_type() -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    event_id = uuid4()
+    row = SimpleNamespace(
+        id=event_id,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        ts=datetime.now(UTC),
+        stage="retrieve",
+        level=RunEventLevelDb.info,
+        audience=RunEventAudienceDb.progress,
+        event_type="retrieve.plan_created",
+        message="Created query plan",
+        payload_json={"query_count": 3},
+    )
+
+    event = RunEventOut.model_validate(row)
+    assert event.audience == "progress"
+    assert event.event_type == "retrieve.plan_created"
+
+
+def test_sse_payload_includes_audience_and_event_type() -> None:
+    event = SimpleNamespace(
+        event_number=42,
+        ts=datetime(2026, 4, 2, 12, 30, tzinfo=UTC),
+        level=RunEventLevelDb.info,
+        stage="draft",
+        audience=RunEventAudienceDb.progress,
+        event_type="draft.section_started",
+        message="draft.section_started",
+        payload_json={"section_id": "introduction"},
+    )
+
+    sse_payload = _event_to_sse(event)
+    lines = [line for line in sse_payload.splitlines() if line]
+    assert lines[0] == "id: 42"
+    assert lines[1] == "event: run_event"
+    data = json.loads(lines[2].removeprefix("data: "))
+    assert data["audience"] == "progress"
+    assert data["event_type"] == "draft.section_started"
