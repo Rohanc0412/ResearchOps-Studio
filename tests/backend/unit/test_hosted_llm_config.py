@@ -77,3 +77,15 @@ def test_explain_llm_error_surfaces_quota_issue():
 
     assert "quota or rate limits" in message
     assert "retry later" in message.lower()
+
+
+def test_explain_llm_error_surfaces_bedrock_config_guidance():
+    from llm import explain_llm_error
+
+    message = explain_llm_error(
+        "Bedrock LLM not configured. Set BEDROCK_REGION or AWS_REGION/AWS_DEFAULT_REGION."
+    )
+
+    assert "bedrock" in message.lower()
+    assert "aws_region" in message.lower()
+    assert "openai" not in message.lower()

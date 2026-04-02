@@ -108,3 +108,20 @@ def test_resolve_model_for_stage_falls_back_to_default_bedrock_model(monkeypatch
     from llm import resolve_model_for_stage
 
     assert resolve_model_for_stage("draft", None, "bedrock", None) == "amazon.nova-lite-v1:0"
+
+
+def test_stage_provider_override_routes_default_model_to_bedrock(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL_CHEAP", raising=False)
+    monkeypatch.delenv("LLM_MODEL_CAPABLE", raising=False)
+    monkeypatch.delenv("HOSTED_LLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER_DRAFT", "bedrock")
+    monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    from llm import BedrockClient, get_llm_client_for_stage
+
+    client = get_llm_client_for_stage("draft", "hosted", None, stage_models={"draft": None})
+
+    assert isinstance(client, BedrockClient)
+    assert client.model_name == "amazon.nova-lite-v1:0"

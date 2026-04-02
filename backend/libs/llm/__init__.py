@@ -128,6 +128,11 @@ def explain_llm_error(reason: str) -> str:
             "The configured LLM provider rejected the request due to quota or rate limits. "
             "Check billing or retry later."
         )
+    if "bedrock" in lowered and "not configured" in lowered:
+        return (
+            "The Bedrock LLM is not configured. Set BEDROCK_REGION or AWS_REGION/AWS_DEFAULT_REGION "
+            "and verify BEDROCK_MODEL."
+        )
     if "not configured" in lowered:
         return (
             "The hosted LLM is not configured. Set HOSTED_LLM_API_KEY or OPENAI_API_KEY "
@@ -464,7 +469,7 @@ def get_llm_client_for_stage(
     if model_override:
         resolved_model = model_override
     else:
-        resolved_model = resolve_model_for_stage(stage, stage_models, provider, model)
+        resolved_model = resolve_model_for_stage(stage, stage_models, resolved_provider, model)
     timeout_seconds = _resolve_timeout_seconds(stage_key)
     return get_llm_client(
         resolved_provider,
