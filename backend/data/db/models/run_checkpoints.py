@@ -30,7 +30,7 @@ class RunCheckpointRow(Base):
         Integer(), nullable=False, default=1, server_default="1"
     )
     node_name: Mapped[str] = mapped_column(
-        String(100), nullable=False, default="unknown", server_default="unknown", index=True
+        String(100), nullable=False, default="unknown", server_default="unknown"
     )
     iteration_count: Mapped[int] = mapped_column(
         Integer(), nullable=False, default=0, server_default="0"

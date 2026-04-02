@@ -30,7 +30,10 @@ def test_alembic_ini_uses_os_path_separator():
 def test_alembic_versions_contains_single_latest_schema_script():
     migration_files = sorted(path.name for path in _migration_dir().glob("*.py"))
 
-    assert migration_files == ["20260330_0002_latest_schema_snapshot.py"]
+    assert migration_files == [
+        "20260330_0002_latest_schema_snapshot.py",
+        "20260402_0003_event_checkpoint_contract_columns.py",
+    ]
 
 
 def test_single_migration_is_root_snapshot(monkeypatch):
@@ -57,3 +60,12 @@ def test_single_migration_is_root_snapshot(monkeypatch):
     module.upgrade()
 
     assert "bind" in captured
+
+
+def test_followup_migration_points_to_snapshot() -> None:
+    module = _load_module(
+        "migration_event_checkpoint_contract",
+        "backend/data/db/alembic/versions/20260402_0003_event_checkpoint_contract_columns.py",
+    )
+
+    assert module.down_revision == "20260330_0002_evaluation_history"

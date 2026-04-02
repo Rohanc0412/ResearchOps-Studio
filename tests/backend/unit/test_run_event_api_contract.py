@@ -5,8 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-import db.models  # noqa: F401
-from db.models.base import Base
+from db.init_db import init_db
 from db.models.run_checkpoints import RunCheckpointRow
 from db.models.run_events import RunEventRow
 from db.models.projects import ProjectRow
@@ -29,9 +28,7 @@ _TEST_ASYNC_DATABASE_URL = _TEST_DATABASE_URL.replace(
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
     engine = create_async_engine(_TEST_ASYNC_DATABASE_URL, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+    await init_db(engine)
     session_local = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     async with session_local() as db_session:
         yield db_session
