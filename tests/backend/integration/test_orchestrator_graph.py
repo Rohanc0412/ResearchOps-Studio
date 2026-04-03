@@ -21,6 +21,7 @@ from core.orchestrator.state import (
 )
 from db.init_db import init_db_sync as init_db
 from db.models.projects import ProjectRow
+from db.models.run_checkpoints import RunCheckpointRow
 from db.models.runs import RunRow, RunStatusDb
 from cancellation import RunCancelledError, raise_if_run_cancel_requested
 from graph import create_orchestrator_graph
@@ -700,6 +701,53 @@ def test_raise_if_run_cancel_requested_bypasses_stale_identity_map(db_session, d
     assert stale_row.cancel_requested_at is None
     with pytest.raises(RunCancelledError):
         raise_if_run_cancel_requested(db_session, tenant_id, run_id)
+
+
+def test_resume_checkpoint_selector_skips_legacy_summary_rows(db_session, db_run):
+    import checkpoints as checkpoint_helpers
+
+    tenant_id, run_id = db_run
+
+    db_session.add(
+        RunCheckpointRow(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            stage="retrieval_summary",
+            payload_json={"query_count": 6, "selected_sources": 12},
+        )
+    )
+    db_session.add(
+        RunCheckpointRow(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            node_name="retriever",
+            iteration_count=1,
+            stage="retriever",
+            payload_json={
+                "tenant_id": str(tenant_id),
+                "run_id": str(run_id),
+                "user_query": "checkpoint query",
+                "max_iterations": 5,
+            },
+            summary_json={"node_name": "retriever"},
+        )
+    )
+    db_session.flush()
+
+    rows = (
+        db_session.query(RunCheckpointRow)
+        .filter(RunCheckpointRow.tenant_id == tenant_id, RunCheckpointRow.run_id == run_id)
+        .order_by(RunCheckpointRow.created_at.desc())
+        .all()
+    )
+    payload = checkpoint_helpers.select_resume_state_payload(
+        rows,
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+
+    assert payload is not None
+    assert payload["user_query"] == "checkpoint query"
 
 
 def test_repair_agent_modifies_draft(db_session, db_run):

@@ -781,13 +781,14 @@ async def test_resume_orchestrator_transitions_to_canceled_on_run_cancelled_erro
         "user_query": "checkpoint query",
         "max_iterations": 5,
     }
+    checkpoint_row = SimpleNamespace(payload_json=checkpoint_payload, node_name="retriever")
 
     class _ExecuteResult:
         def scalars(self):
             return self
 
-        def first(self):
-            return checkpoint_payload
+        def all(self):
+            return [checkpoint_row]
 
     class _SessionStub:
         async def execute(self, _stmt):
@@ -825,6 +826,70 @@ async def test_resume_orchestrator_transitions_to_canceled_on_run_cancelled_erro
 
 
 @pytest.mark.asyncio
+async def test_resume_orchestrator_skips_legacy_non_state_checkpoint_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    statuses: list[RunStatusDb] = []
+    checkpoint_rows = [
+        SimpleNamespace(
+            payload_json={
+                "query_count": 8,
+                "retrieval_backend": "scientific-papers-mcp",
+            },
+            node_name="unknown",
+        ),
+        SimpleNamespace(
+            payload_json={
+                "tenant_id": str(tenant_id),
+                "run_id": str(run_id),
+                "user_query": "checkpoint query",
+                "max_iterations": 5,
+            },
+            node_name="retriever",
+        ),
+    ]
+
+    class _ExecuteResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return checkpoint_rows
+
+    class _SessionStub:
+        async def execute(self, _stmt):
+            return _ExecuteResult()
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class _FakeGraph:
+        async def ainvoke(self, state, config=None):
+            return state
+
+    async def _fake_transition(**kwargs):
+        statuses.append(kwargs["to_status"])
+        return SimpleNamespace(status=kwargs["to_status"])
+
+    monkeypatch.setattr("services.orchestrator.runner.create_orchestrator_graph", lambda *_a, **_k: _FakeGraph())
+    monkeypatch.setattr("services.orchestrator.runner.transition_run_status_async", _fake_transition)
+
+    result = await resume_orchestrator(
+        session=_SessionStub(),
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+
+    assert result.user_query == "checkpoint query"
+    assert statuses == [RunStatusDb.succeeded]
+
+
+@pytest.mark.asyncio
 async def test_resume_orchestrator_transitions_to_failed_on_graph_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -840,13 +905,14 @@ async def test_resume_orchestrator_transitions_to_failed_on_graph_error(
         "user_query": "checkpoint query",
         "max_iterations": 5,
     }
+    checkpoint_row = SimpleNamespace(payload_json=checkpoint_payload, node_name="retriever")
 
     class _ExecuteResult:
         def scalars(self):
             return self
 
-        def first(self):
-            return checkpoint_payload
+        def all(self):
+            return [checkpoint_row]
 
     class _SessionStub:
         async def execute(self, _stmt):

@@ -1,184 +1,134 @@
 """
-Checkpoint storage for LangGraph using PostgreSQL.
+Async checkpoint helpers for orchestrator resume.
 
-Stores graph state snapshots for replay/resume functionality.
+The async runtime writes checkpoints to `run_checkpoints`. Resume should only
+hydrate from rows that contain a full orchestrator state payload.
 """
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
+from collections.abc import Sequence
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from sqlalchemy import Column, DateTime, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Session, declarative_base
-
-Base = declarative_base()
+from db.models.run_checkpoints import RunCheckpointRow
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class CheckpointRow(Base):
-    """Database model for checkpoints."""
-
-    __tablename__ = "orchestrator_checkpoints"
-
-    checkpoint_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    tenant_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    run_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    thread_id = Column(String(255), nullable=False, index=True)
-    checkpoint_ns = Column(String(255), nullable=False, default="")
-    step = Column(String(255), nullable=False)
-    state_data = Column(Text, nullable=False)  # JSON
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
-
-    def __repr__(self) -> str:
-        return f"<Checkpoint {self.checkpoint_id} run={self.run_id} step={self.step}>"
+def _coerce_uuid(value: object) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
-class PostgresCheckpointSaver(BaseCheckpointSaver):
+def _has_state_identity(payload: dict[str, Any], *, tenant_id: UUID, run_id: UUID) -> bool:
+    payload_tenant_id = _coerce_uuid(payload.get("tenant_id"))
+    payload_run_id = _coerce_uuid(payload.get("run_id"))
+    if payload_tenant_id is None or payload_run_id is None:
+        return False
+    return payload_tenant_id == tenant_id and payload_run_id == run_id
+
+
+def _looks_like_resume_state_payload(payload: object, *, tenant_id: UUID, run_id: UUID) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    user_query = payload.get("user_query")
+    if not isinstance(user_query, str) or not user_query.strip():
+        return False
+    return _has_state_identity(payload, tenant_id=tenant_id, run_id=run_id)
+
+
+def _is_runtime_checkpoint_row(row: object) -> bool:
+    node_name = getattr(row, "node_name", None)
+    return isinstance(node_name, str) and node_name not in {"", "unknown"}
+
+
+def select_resume_state_payload(
+    rows: Sequence[object],
+    *,
+    tenant_id: UUID,
+    run_id: UUID,
+) -> dict[str, Any] | None:
     """
-    Checkpoint saver using PostgreSQL.
+    Select the best checkpoint payload for resume.
 
-    Stores graph state in database for replay/resume.
+    Priority:
+    1. Runtime-managed checkpoints (`node_name` is a concrete orchestrator node).
+    2. Any other checkpoint row that still contains a full state payload.
     """
 
-    def __init__(self, session: Session, tenant_id: UUID, run_id: UUID):
-        """
-        Initialize checkpoint saver.
+    runtime_rows: list[object] = []
+    fallback_rows: list[object] = []
+    for row in rows:
+        if _is_runtime_checkpoint_row(row):
+            runtime_rows.append(row)
+        else:
+            fallback_rows.append(row)
 
-        Args:
-            session: SQLAlchemy session
-            tenant_id: Tenant ID
-            run_id: Run ID
-        """
-        self.session = session
-        self.tenant_id = tenant_id
-        self.run_id = run_id
+    for row in [*runtime_rows, *fallback_rows]:
+        payload = getattr(row, "payload_json", None)
+        if _looks_like_resume_state_payload(payload, tenant_id=tenant_id, run_id=run_id):
+            return payload
+    return None
 
-    def put(
-        self,
-        config: dict[str, Any],
-        checkpoint: dict[str, Any],
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        """
-        Save a checkpoint.
 
-        Args:
-            config: Configuration (contains thread_id)
-            checkpoint: State snapshot
-            metadata: Additional metadata
+async def load_resume_state_payload(
+    *,
+    session: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+    limit: int = 50,
+) -> dict[str, Any] | None:
+    """
+    Load the latest resume-ready checkpoint payload for a run.
 
-        Returns:
-            Saved configuration
-        """
-        thread_id = config.get("configurable", {}).get("thread_id", "default")
-        checkpoint_ns = config.get("configurable", {}).get("checkpoint_ns", "")
+    `created_at` alone is not a reliable selector because multiple checkpoints can
+    share the same transaction timestamp. We fetch a bounded recent window, then
+    select the first runtime-compatible state payload.
+    """
 
-        # Serialize state
-        state_data = json.dumps(checkpoint)
-
-        # Create checkpoint record
-        checkpoint_record = CheckpointRow(
-            tenant_id=self.tenant_id,
-            run_id=self.run_id,
-            thread_id=thread_id,
-            checkpoint_ns=checkpoint_ns,
-            step=metadata.get("step", "unknown"),
-            state_data=state_data,
-        )
-
-        self.session.add(checkpoint_record)
-        self.session.flush()
-
-        return config
-
-    def get(
-        self, config: dict[str, Any]
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        """
-        Retrieve the latest checkpoint.
-
-        Args:
-            config: Configuration (contains thread_id)
-
-        Returns:
-            Tuple of (checkpoint, metadata) or (None, None)
-        """
-        thread_id = config.get("configurable", {}).get("thread_id", "default")
-        checkpoint_ns = config.get("configurable", {}).get("checkpoint_ns", "")
-
-        # Get latest checkpoint
-        checkpoint_record = (
-            self.session.query(CheckpointRow)
-            .filter(
-                CheckpointRow.tenant_id == self.tenant_id,
-                CheckpointRow.run_id == self.run_id,
-                CheckpointRow.thread_id == thread_id,
-                CheckpointRow.checkpoint_ns == checkpoint_ns,
+    rows = (
+        (
+            await session.execute(
+                select(RunCheckpointRow)
+                .where(RunCheckpointRow.tenant_id == tenant_id, RunCheckpointRow.run_id == run_id)
+                .order_by(
+                    RunCheckpointRow.created_at.desc(),
+                    RunCheckpointRow.iteration_count.desc(),
+                )
+                .limit(limit)
             )
-            .order_by(CheckpointRow.created_at.desc())
-            .first()
+        )
+        .scalars()
+        .all()
+    )
+    return select_resume_state_payload(rows, tenant_id=tenant_id, run_id=run_id)
+
+
+class PostgresCheckpointSaver:
+    """Legacy sync saver removed in async runtime refactor."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        raise RuntimeError(
+            "PostgresCheckpointSaver is obsolete. Use checkpoint_store.write_checkpoint "
+            "and checkpoints.load_resume_state_payload instead."
         )
 
-        if not checkpoint_record:
-            return (None, None)
 
-        # Deserialize state
-        checkpoint = json.loads(checkpoint_record.state_data)
-        metadata = {
-            "step": checkpoint_record.step,
-            "created_at": checkpoint_record.created_at.isoformat(),
-        }
-
-        return (checkpoint, metadata)
-
-    def list(
-        self, config: dict[str, Any], limit: int = 10
-    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-        """
-        List recent checkpoints.
-
-        Args:
-            config: Configuration (contains thread_id)
-            limit: Maximum number to return
-
-        Returns:
-            List of (checkpoint, metadata) tuples
-        """
-        thread_id = config.get("configurable", {}).get("thread_id", "default")
-
-        checkpoint_records = (
-            self.session.query(CheckpointRow)
-            .filter(
-                CheckpointRow.tenant_id == self.tenant_id,
-                CheckpointRow.run_id == self.run_id,
-                CheckpointRow.thread_id == thread_id,
-            )
-            .order_by(CheckpointRow.created_at.desc())
-            .limit(limit)
-            .all()
-        )
-
-        results = []
-        for record in checkpoint_records:
-            checkpoint = json.loads(record.state_data)
-            metadata = {
-                "step": record.step,
-                "created_at": record.created_at.isoformat(),
-            }
-            results.append((checkpoint, metadata))
-
-        return results
+def init_checkpoint_table(_engine) -> None:
+    raise RuntimeError(
+        "init_checkpoint_table is obsolete. Checkpoint schema is managed by "
+        "run_checkpoints migrations."
+    )
 
 
-def init_checkpoint_table(engine):
-    """
-    Initialize checkpoint table.
-
-    Args:
-        engine: SQLAlchemy engine
-    """
-    Base.metadata.create_all(engine, tables=[CheckpointRow.__table__])
+__all__ = [
+    "PostgresCheckpointSaver",
+    "init_checkpoint_table",
+    "load_resume_state_payload",
+    "select_resume_state_payload",
+]

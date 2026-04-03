@@ -587,6 +587,35 @@ def test_orchestrator_cancel_check_renders_asyncpg_url_with_password():
     fake_url.render_as_string.assert_called_once_with(hide_password=False)
 
 
+def test_resume_checkpoint_selector_prefers_runtime_state_payload():
+    import services.orchestrator.checkpoints as checkpoints
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    legacy_row = SimpleNamespace(
+        payload_json={"query_count": 6, "retrieval_backend": "scientific-papers-mcp"},
+        node_name="unknown",
+    )
+    runtime_row = SimpleNamespace(
+        payload_json={
+            "tenant_id": str(tenant_id),
+            "run_id": str(run_id),
+            "user_query": "checkpoint query",
+            "max_iterations": 5,
+        },
+        node_name="retriever",
+    )
+
+    payload = checkpoints.select_resume_state_payload(
+        [legacy_row, runtime_row],
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+
+    assert payload is runtime_row.payload_json
+
+
 # ── Issue 9: get_last_action timestamps must not swap when created_at is None ──
 
 

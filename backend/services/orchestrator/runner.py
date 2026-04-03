@@ -14,11 +14,11 @@ from typing import Any
 from uuid import UUID
 
 from cancellation import RunCancelledError
+from checkpoints import load_resume_state_payload
 from checkpoint_store import write_checkpoint
 from core.env import env_int
 from core.orchestrator.state import OrchestratorState
 from core.runs.lifecycle import is_run_cancel_requested_async, transition_run_status_async
-from db.models.run_checkpoints import RunCheckpointRow
 from db.models.runs import RunRow, RunStatusDb
 from db.repositories.artifacts import create_artifact, list_artifacts
 from graph import create_orchestrator_graph
@@ -416,7 +416,10 @@ async def run_orchestrator(
 
 
 async def resume_orchestrator(
-    session: AsyncSession, tenant_id: UUID, run_id: UUID
+    session: AsyncSession,
+    tenant_id: UUID,
+    run_id: UUID,
+    runtime: Any | None = None,
 ) -> OrchestratorState:
     """
     Resume orchestrator from last checkpoint.
@@ -432,23 +435,16 @@ async def resume_orchestrator(
     Raises:
         Exception: If no checkpoint found or execution fails
     """
-    checkpoint = (
-        (
-            await session.execute(
-                select(RunCheckpointRow.payload_json)
-                .where(RunCheckpointRow.tenant_id == tenant_id, RunCheckpointRow.run_id == run_id)
-                .order_by(RunCheckpointRow.created_at.desc())
-                .limit(1)
-            )
-        )
-        .scalars()
-        .first()
+    checkpoint_payload = await load_resume_state_payload(
+        session=session,
+        tenant_id=tenant_id,
+        run_id=run_id,
     )
-    if checkpoint is None:
+    if checkpoint_payload is None:
         raise ValueError(f"No checkpoint found for run {run_id}")
 
-    checkpoint_state = OrchestratorState(**checkpoint)
-    runtime_obj = _RunnerRuntimeAdapter(
+    checkpoint_state = OrchestratorState(**checkpoint_payload)
+    runtime_obj = runtime or _RunnerRuntimeAdapter(
         session=session,
         tenant_id=tenant_id,
         run_id=run_id,
