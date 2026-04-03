@@ -436,10 +436,11 @@ async def password_reset_request(
     user = await get_user_by_email(session, email=email)
     if user is None or not user.is_active:
         logger.info(
-            "Password reset request ignored (user not found/inactive)",
+            "Password reset request ignored",
             extra={
                 "event": "auth.password_reset.request.ignored",
                 "email_domain": _email_domain(email),
+                "reason": "user_not_found_or_inactive",
             },
         )
         return PasswordResetRequestOut(status="ok")
@@ -459,7 +460,7 @@ async def password_reset_request(
     try:
         send_password_reset_otp(to_email=user.email, otp=reset_token)
         logger.info(
-            "Password reset OTP email sent",
+            "Sent password reset code",
             extra={
                 "event": "auth.password_reset.otp.sent",
                 "email_domain": _email_domain(user.email),
@@ -468,7 +469,7 @@ async def password_reset_request(
         )
     except RuntimeError as e:
         logger.exception(
-            "Password reset OTP email failed",
+            "Failed to send password reset code",
             extra={
                 "event": "auth.password_reset.otp.failed",
                 "email_domain": _email_domain(user.email),
@@ -479,7 +480,7 @@ async def password_reset_request(
         raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
         logger.exception(
-            "Password reset OTP email failed",
+            "Failed to send password reset code",
             extra={
                 "event": "auth.password_reset.otp.failed",
                 "email_domain": _email_domain(user.email),
@@ -499,7 +500,7 @@ async def password_reset_confirm(request: Request, body: PasswordResetConfirmIn,
 
     token_hash = hash_password_reset_token(body.token, secret=secret)
     logger.info(
-        "Password reset confirm attempted",
+        "Password reset confirmation received",
         extra={
             "event": "auth.password_reset.confirm",
             "token_len": len(body.token or ""),
@@ -515,7 +516,7 @@ async def password_reset_confirm(request: Request, body: PasswordResetConfirmIn,
         or _utc(reset_row.expires_at) <= now
     ):
         logger.warning(
-            "Password reset confirm rejected (invalid/expired token)",
+            "Password reset confirmation rejected",
             extra={
                 "event": "auth.password_reset.confirm.rejected",
                 "token_hash_prefix": token_hash[:8],
@@ -527,7 +528,7 @@ async def password_reset_confirm(request: Request, body: PasswordResetConfirmIn,
     user = await get_user_by_id(session, tenant_id=reset_row.tenant_id, user_id=reset_row.user_id)
     if user is None or not user.is_active:
         logger.warning(
-            "Password reset confirm rejected (invalid user)",
+            "Password reset confirmation rejected",
             extra={
                 "event": "auth.password_reset.confirm.rejected",
                 "token_hash_prefix": token_hash[:8],

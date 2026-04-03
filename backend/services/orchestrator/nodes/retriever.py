@@ -249,7 +249,7 @@ def _build_query_plan_with_llm(
         )
     except LLMError as exc:
         logger.warning(
-            "LLM client unavailable for query generation",
+            "Could not prepare query generation LLM client",
             extra={
                 "event": "pipeline.llm.error",
                 "stage": "retrieve",
@@ -262,7 +262,7 @@ def _build_query_plan_with_llm(
 
     if llm_client is None:
         logger.warning(
-            "LLM client disabled for query generation",
+            "Query generation skipped because the LLM client is disabled",
             extra={
                 "event": "pipeline.llm.error",
                 "stage": "retrieve",
@@ -302,7 +302,7 @@ def _build_query_plan_with_llm(
         )
     except LLMError as exc:
         logger.warning(
-            "LLM query generation request failed",
+            "LLM query generation failed",
             extra={
                 "event": "pipeline.llm.error",
                 "stage": "retrieve",
@@ -330,13 +330,13 @@ def _build_query_plan_with_llm(
                 "reason": "invalid_response",
                 "llm_provider": llm_provider,
                 "llm_model": llm_model,
-                "response_preview": response[:600] if response else "",
+                "preview": response[:600] if response else "",
             },
         )
         fallback = _fallback_query_plan_from_text(response or "", max_queries)
         if fallback:
             logger.info(
-                "Fallback query parsing recovered queries",
+                "Recovered queries from fallback parsing",
                 extra={
                     "event": "pipeline.llm.fallback",
                     "stage": "retrieve",

@@ -292,7 +292,7 @@ async def run_orchestrator(
         )
         await session.commit()
         logger.info(
-            "Run transitioned to running",
+            "Run moved to running state",
             extra={
                 "event": "pipeline.run.transitioned",
                 "run_id": str(run_id),
@@ -342,7 +342,7 @@ async def run_orchestrator(
     # Create graph
     graph = create_orchestrator_graph(runtime_obj)
     logger.info(
-        "Orchestrator graph compiled",
+        "Orchestrator ready",
         extra={
             "event": "pipeline.run.graph_ready",
             "run_id": str(run_id),
@@ -360,20 +360,22 @@ async def run_orchestrator(
 
     try:
         logger.info(
-            "Invoking orchestrator graph",
+            "Orchestrator execution started",
             extra={
                 "event": "pipeline.run.graph_invoke",
                 "run_id": str(run_id),
                 "tenant_id": str(tenant_id),
+                "current_stage": "retrieve",
             },
         )
         final_state_dict = await graph.ainvoke(initial_state.model_dump(), config=config)
         logger.info(
-            "Orchestrator graph returned",
+            "Orchestrator execution finished",
             extra={
                 "event": "pipeline.run.graph_return",
                 "run_id": str(run_id),
                 "tenant_id": str(tenant_id),
+                "current_stage": "export",
             },
         )
 
@@ -393,7 +395,17 @@ async def run_orchestrator(
             select(RunRow).where(RunRow.id == run_id)
         )).scalar_one_or_none()
         if run_row:
-            await _persist_artifacts(session, run_row, final_state.artifacts or {})
+            artifacts_saved = await _persist_artifacts(session, run_row, final_state.artifacts or {})
+            if artifacts_saved:
+                logger.info(
+                    "Saved run artifacts",
+                    extra={
+                        "event": "pipeline.run.artifacts_saved",
+                        "run_id": str(run_id),
+                        "tenant_id": str(tenant_id),
+                        "artifact_count": artifacts_saved,
+                    },
+                )
 
         await terminal_lifecycle.mark_succeeded(current_stage="export")
 
@@ -403,12 +415,28 @@ async def run_orchestrator(
 
     except RunCancelledError:
         await session.rollback()
+        logger.info(
+            "Research run canceled",
+            extra={
+                "event": "pipeline.run.canceled",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+            },
+        )
         await terminal_lifecycle.mark_canceled()
         await session.commit()
         return initial_state
 
     except Exception as e:
         await session.rollback()
+        logger.exception(
+            "Research run failed during orchestrator execution",
+            extra={
+                "event": "pipeline.run.error",
+                "run_id": str(run_id),
+                "tenant_id": str(tenant_id),
+            },
+        )
         await terminal_lifecycle.mark_failed(failure_reason=str(e))
         await session.commit()
 

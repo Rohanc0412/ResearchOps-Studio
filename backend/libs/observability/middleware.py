@@ -19,7 +19,7 @@ def request_id_middleware(app_name: str) -> Callable:
         start = time.perf_counter()
         query = request.url.query or None
         logger.info(
-            "Request started",
+            f"Request started: {request.method} {request.url.path}",
             extra={
                 "event": "http.request",
                 "method": request.method,
@@ -38,7 +38,7 @@ def request_id_middleware(app_name: str) -> Callable:
             _bind_optional_ids(request)
             duration_ms = int((time.perf_counter() - start) * 1000)
             logger.exception(
-                "Request failed",
+                f"Request failed: {request.method} {request.url.path} -> 500 in {duration_ms}ms",
                 extra={
                     "event": "http.request",
                     "method": request.method,
@@ -64,7 +64,7 @@ def request_id_middleware(app_name: str) -> Callable:
         _bind_optional_ids(request)
         duration_ms = int((time.perf_counter() - start) * 1000)
         logger.info(
-            "Request completed",
+            f"Request finished: {request.method} {request.url.path} -> {response.status_code} in {duration_ms}ms",
             extra={
                 "event": "http.request",
                 "method": request.method,

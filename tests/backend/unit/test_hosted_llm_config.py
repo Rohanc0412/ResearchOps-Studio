@@ -18,7 +18,7 @@ def test_get_llm_client_uses_openai_env_fallbacks(monkeypatch):
     assert client is not None
     assert client.base_url == "https://api.openai.com"
     assert client.api_key == "test-openai-key"
-    assert client.model_name == "openai/gpt-4o-mini"
+    assert client.model_name == "gpt-4.1-mini"
 
 
 def test_resolve_model_for_stage_falls_back_to_default_hosted_model(monkeypatch):
@@ -29,7 +29,7 @@ def test_resolve_model_for_stage_falls_back_to_default_hosted_model(monkeypatch)
 
     from llm import resolve_model_for_stage
 
-    assert resolve_model_for_stage("draft", None, "hosted", None) == "openai/gpt-4o-mini"
+    assert resolve_model_for_stage("draft", None, "hosted", None) == "gpt-4.1-mini"
 
 
 def test_get_llm_client_uses_bedrock_defaults(monkeypatch):

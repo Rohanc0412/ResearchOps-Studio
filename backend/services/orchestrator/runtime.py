@@ -259,7 +259,7 @@ class ResearchRuntime:
                 )
             except Exception:
                 logger.debug(
-                    "runtime event queue suppressed append error",
+                    "Skipped runtime event after append error",
                     extra={
                         "event_type": event.event_type,
                         "run_id": str(event.run_id),
@@ -301,7 +301,7 @@ class ResearchRuntime:
                     await self.session.commit()
             except Exception:
                 logger.exception(
-                    "failed to persist queued node events after node exception",
+                    "Failed to save queued node events after node error",
                     extra={
                         "node_name": node_name,
                         "run_id": str(self.run_id),

@@ -73,6 +73,15 @@ def _parse_max_iterations(value: object, *, default: int = 5) -> int:
     return default
 
 
+def _preview_query(text: str | None, limit: int = 120) -> str | None:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[:limit].rstrip()}..."
+
+
 async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id: UUID) -> None:
     """Process a full research run using the LangGraph pipeline."""
     if not isinstance(session, AsyncSession):
@@ -112,27 +121,27 @@ async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id
 
     bind(tenant_id=str(tenant_id), run_id=str(run_id))
     logger.info(
-        "Starting research pipeline run",
+        "Research run started",
         extra={
             "event": "pipeline.run.start",
             "run_id": str(run_id),
             "tenant_id": str(tenant_id),
-            "user_query": user_query,
+            "preview": _preview_query(user_query),
             "research_goal": research_goal,
             "llm_provider": llm_provider,
             "llm_model": llm_model,
-            "stage_models": run_inputs.stage_models,
             "max_iterations": run_inputs.max_iterations,
         },
     )
     try:
         _warm_local_embed_pool(llm_provider=run_inputs.llm_provider)
         logger.info(
-            "Research pipeline invoking orchestrator",
+            "Starting orchestrator",
             extra={
                 "event": "pipeline.run.invoke",
                 "run_id": str(run_id),
                 "tenant_id": str(tenant_id),
+                "current_stage": "retrieve",
             },
         )
         await run_research_orchestrator(
@@ -142,16 +151,17 @@ async def process_research_run(*, session: AsyncSession, run_id: UUID, tenant_id
             inputs=run_inputs,
         )
         logger.info(
-            "Research pipeline run finished",
+            "Research run finished",
             extra={
                 "event": "pipeline.run.finish",
                 "run_id": str(run_id),
                 "tenant_id": str(tenant_id),
+                "current_stage": "export",
             },
         )
     except Exception:
         logger.exception(
-            "Research pipeline run failed",
+            "Research run failed",
             extra={
                 "event": "pipeline.run.error",
                 "run_id": str(run_id),

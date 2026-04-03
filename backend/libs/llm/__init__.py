@@ -29,7 +29,7 @@ class LLMError(RuntimeError):
 
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com"
-DEFAULT_HOSTED_MODEL = "openai/gpt-4o-mini"
+DEFAULT_HOSTED_MODEL = "gpt-4.1-mini"
 DEFAULT_BEDROCK_MODEL = "amazon.nova-lite-v1:0"
 
 
@@ -203,6 +203,23 @@ class OpenAICompatibleClient:
             return model.split("/", 1)[1]
         return model
 
+    def _uses_max_completion_tokens(self) -> bool:
+        """Some newer OpenAI models require max_completion_tokens instead of max_tokens."""
+        model = self.model_name.strip().lower()
+        return model.startswith("gpt-5") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4")
+
+    def _build_base_payload(self, messages: list[dict], max_tokens: int, temperature: float) -> dict:
+        payload: dict = {
+            "model": self._request_model_name(),
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if self._uses_max_completion_tokens():
+            payload["max_completion_tokens"] = max_tokens
+        else:
+            payload["max_tokens"] = max_tokens
+        return payload
+
     def generate(
         self,
         prompt: str,
@@ -221,12 +238,7 @@ class OpenAICompatibleClient:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        payload = {
-            "model": self._request_model_name(),
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        payload = self._build_base_payload(messages, max_tokens, temperature)
         if response_format:
             if isinstance(response_format, str):
                 if response_format == "json":
@@ -294,6 +306,7 @@ class OpenAICompatibleClient:
         *,
         max_tokens: int = 512,
         temperature: float = 0.4,
+        tool_choice: str = "auto",
     ) -> dict:
         """Call the LLM with tool definitions. Returns the raw message dict from choices[0].
 
@@ -306,13 +319,9 @@ class OpenAICompatibleClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        payload: dict = {
-            "model": self._request_model_name(),
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "tools": tools,
-        }
+        payload = self._build_base_payload(messages, max_tokens, temperature)
+        payload["tools"] = tools
+        payload["tool_choice"] = tool_choice
         try:
             response = httpx.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
             response.raise_for_status()
@@ -610,23 +619,26 @@ def log_llm_exchange(
     if not content:
         return
     _logger = logger or logging.getLogger(__name__)
-    verb = "sent" if label == "request" else "received"
-    message = f"LLM {label} {verb} for {stage}"
+    message = (
+        f"Prepared LLM request for {stage}"
+        if label == "request"
+        else f"Received LLM response for {stage}"
+    )
     log_full = os.getenv("LLM_LOG_FULL", "").strip().lower() in {"1", "true", "yes", "on"}
     extra: dict = {
         "event": "pipeline.llm",
         "stage": stage,
-        "label": label,
         "chars": len(content),
+        "preview": content,
     }
     if section_id is not None:
         extra["section_id"] = section_id
     if log_full:
-        suffix = f" (section={section_id})" if section_id else ""
-        _logger.info(f"{message}{suffix}\n{content}")
         _logger.info(message, extra=extra)
+        _logger.info("LLM content follows", extra={"event": "pipeline.llm.full", "stage": stage})
+        _logger.info(content)
         return
-    _logger.info(message, extra={**extra, "content": content})
+    _logger.info(message, extra=extra)
 
 
 def extract_json_payload(text: str) -> dict | list | None:

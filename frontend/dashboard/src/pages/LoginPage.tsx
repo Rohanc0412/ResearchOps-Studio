@@ -26,7 +26,6 @@ export function LoginPage() {
   const loc = useLocation();
   const from = (loc.state as { from?: string } | null)?.from ?? "/projects";
   const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">("login");
-  const [suppressRedirect, setSuppressRedirect] = useState(false);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -53,7 +52,7 @@ export function LoginPage() {
     }
   }, []);
 
-  if (auth.isAuthenticated && !suppressRedirect) return <Navigate to={from} replace />;
+  if (auth.isAuthenticated) return <Navigate to={from} replace />;
 
   const isRegister = mode === "register";
   const isForgot   = mode === "forgot";
@@ -68,7 +67,6 @@ export function LoginPage() {
     setIsSubmitting(true);
     try {
       if (mode === "register") {
-        setSuppressRedirect(true);
         if (password.length < 8) throw new Error("Password must be at least 8 characters.");
         if (password !== confirmPassword) throw new Error("Passwords do not match.");
         await auth.register(username, email, password);
@@ -78,9 +76,8 @@ export function LoginPage() {
             "Account created successfully! You can now sign in."
           );
         } catch { /* ignore */ }
-        await auth.logout({ redirect: false });
-        setSuppressRedirect(false);
         setMode("login");
+        setEmail("");
         setPassword("");
         setConfirmPassword("");
         setSuccess("Account created successfully! You can now sign in.");
@@ -100,7 +97,6 @@ export function LoginPage() {
             ? "Sign up failed. Try again."
             : "Login failed. Try again.";
       setError(message);
-      setSuppressRedirect(false);
     } finally {
       setIsSubmitting(false);
     }

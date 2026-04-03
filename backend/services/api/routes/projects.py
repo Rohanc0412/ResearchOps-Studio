@@ -124,11 +124,11 @@ async def post_run_for_project(
 
     question = (body.question or body.prompt or "").strip()
     logger.info(
-        "Research pipeline request received",
+        "Research run requested",
         extra={
             "event": "pipeline.request",
             "project_id": str(project_id),
-            "question": question,
+            "preview": question,
             "client_request_id": body.client_request_id,
             "budget_override": body.budget_override,
             "llm_provider": body.llm_provider,
@@ -148,7 +148,7 @@ async def post_run_for_project(
         llm_model=body.llm_model,
     )
     logger.info(
-        "Research pipeline response sent",
+        "Research run queued",
         extra={
             "event": "pipeline.response",
             "project_id": str(project_id),

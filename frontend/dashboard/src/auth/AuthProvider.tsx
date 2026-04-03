@@ -85,7 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loggingOutRef = React.useRef(false);
   const [accessToken, setAccessToken] = useState<string | null>(() => {
     try {
-      return window.localStorage.getItem(STORAGE_KEY);
+      return window.sessionStorage.getItem(STORAGE_KEY);
     } catch {
       return null;
     }
@@ -99,10 +99,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccessTokenGetter(() => accessToken);
     try {
       if (accessToken) {
-        window.localStorage.setItem(STORAGE_KEY, accessToken);
+        window.sessionStorage.setItem(STORAGE_KEY, accessToken);
       } else {
-        window.localStorage.removeItem(STORAGE_KEY);
+        window.sessionStorage.removeItem(STORAGE_KEY);
       }
+      window.localStorage.removeItem(STORAGE_KEY);
     } catch {
       // ignore storage failures
     }
@@ -200,10 +201,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         typeof payload["detail"] === "string" ? payload["detail"] : "Sign up failed. Try again.";
       throw new Error(message);
     }
-    const token = typeof payload["access_token"] === "string" ? payload["access_token"] : "";
-    if (!token) throw new Error("Missing access token");
-    setAccessToken(token);
-    setUser(mapAuthUser(payload));
+    await clearSession();
   }
 
   async function requestPasswordReset(username: string): Promise<{ resetToken?: string }> {

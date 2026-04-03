@@ -15,7 +15,18 @@ vi.mock("../api/auth", () => ({
 
 function Probe() {
   const auth = useContext(AuthContext);
-  return <div>{auth?.isLoading ? "loading" : "ready"}</div>;
+  return (
+    <div>
+      <div>{auth?.isLoading ? "loading" : "ready"}</div>
+      <div>{auth?.isAuthenticated ? "authenticated" : "anonymous"}</div>
+      <button
+        type="button"
+        onClick={() => void auth?.register("alice", "alice@example.com", "password123")}
+      >
+        register
+      </button>
+    </div>
+  );
 }
 
 describe("AuthProvider", () => {
@@ -24,6 +35,7 @@ describe("AuthProvider", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     window.localStorage.clear();
+    window.sessionStorage.clear();
     fetchMock.mockReset();
   });
 
@@ -45,8 +57,8 @@ describe("AuthProvider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes the session on boot when an access token is stored", async () => {
-    window.localStorage.setItem("researchops_access_token", "cached-token");
+  it("refreshes the session on boot when a session token is stored", async () => {
+    window.sessionStorage.setItem("researchops_access_token", "cached-token");
     fetchMock.mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -75,5 +87,67 @@ describe("AuthProvider", () => {
 
     expect(fetchMock).toHaveBeenCalled();
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/auth/refresh");
+  });
+
+  it("ignores a stale localStorage token on boot", async () => {
+    window.localStorage.setItem("researchops_access_token", "stale-token");
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("ready")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("anonymous")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("researchops_access_token")).toBeNull();
+  });
+
+  it("does not authenticate or persist tokens after successful registration", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: "signup-token",
+          user_id: "user-1",
+          username: "alice",
+          tenant_id: "tenant-1",
+          roles: ["owner"],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("ready")).toBeInTheDocument();
+    });
+
+    screen.getByRole("button", { name: "register" }).click();
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/auth/register",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("anonymous")).toBeInTheDocument();
+    });
+
+    expect(window.sessionStorage.getItem("researchops_access_token")).toBeNull();
+    expect(window.localStorage.getItem("researchops_access_token")).toBeNull();
   });
 });

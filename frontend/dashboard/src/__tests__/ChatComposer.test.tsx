@@ -21,12 +21,12 @@ const defaultProps = {
 };
 
 describe("ChatComposer", () => {
-  it("uses Qwen as the default hosted model", () => {
-    expect(DEFAULT_HOSTED_MODEL).toBe("qwen/qwen3.6-plus:free");
+  it("uses GPT-4.1 Mini as the default hosted model", () => {
+    expect(DEFAULT_HOSTED_MODEL).toBe("gpt-4.1-mini");
     expect(
       MODEL_OPTIONS.some(
         (option) =>
-          option.value === DEFAULT_HOSTED_MODEL && option.label === "Qwen 3.6 Plus (free)",
+          option.value === DEFAULT_HOSTED_MODEL && option.label === "GPT-4.1 Mini",
       ),
     ).toBe(true);
   });

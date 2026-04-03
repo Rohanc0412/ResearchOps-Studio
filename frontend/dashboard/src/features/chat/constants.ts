@@ -1,9 +1,10 @@
 import type { Report } from "./types";
 
-export const DEFAULT_HOSTED_MODEL = "qwen/qwen3.6-plus:free";
+export const DEFAULT_HOSTED_MODEL = "gpt-4.1-mini";
 export const CUSTOM_MODEL_VALUE = "__custom__";
 
 export const MODEL_OPTIONS = [
+  { value: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
   { value: "qwen/qwen3.6-plus:free", label: "Qwen 3.6 Plus (free)" },
   { value: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
   { value: "openai/gpt-4o", label: "GPT-4o" },

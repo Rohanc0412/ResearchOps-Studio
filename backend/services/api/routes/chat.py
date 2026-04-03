@@ -123,12 +123,11 @@ def _truncate_for_log(text: str, limit: int = 400) -> str:
 def _log_llm_exchange(label: str, conversation_id: UUID, content: str) -> None:
     if not content:
         return
-    message = "LLM request prepared" if label == "request" else "LLM response received"
+    message = "Prepared LLM request for chat" if label == "request" else "Received LLM response for chat"
     logger.info(
         message,
         extra={
             "event": "chat.llm",
-            "label": label,
             "conversation_id": str(conversation_id),
             "chars": len(content),
             "preview": _truncate_for_log(content),
@@ -137,11 +136,16 @@ def _log_llm_exchange(label: str, conversation_id: UUID, content: str) -> None:
 
 
 def _log_step(state: str, *, conversation_id: UUID, step: str, extra: dict | None = None) -> None:
+    state_label = {
+        "start": "started",
+        "finish": "finished",
+        "skip": "skipped",
+    }.get(state, state.replace("_", " "))
     payload = {"conversation_id": str(conversation_id), "step": step, "state": state}
     if extra:
         payload.update(extra)
     logger.info(
-        f"Chat step {state}: {step.replace('_', ' ')}",
+        f"Chat step {state_label}: {step.replace('_', ' ')}",
         extra={"event": "chat.step", **payload},
     )
 
@@ -267,13 +271,13 @@ def _generate_quick_answer(
 
     try:
         if use_tools:
-            yield ("status", "Searching the web…")
             messages = [{"role": "user", "content": prompt}]
             first_message = client.generate_with_tools(
                 messages, [WEB_SEARCH_TOOL], max_tokens=512, temperature=0.4
             )
             tool_calls = first_message.get("tool_calls") or []
             if tool_calls:
+                yield ("status", "Searching the web…")
                 tool_call = tool_calls[0]
                 fn_args = tool_call.get("function", {})
                 query = fn_args.get("arguments", {})
@@ -309,7 +313,8 @@ def _generate_quick_answer(
                     }
                 )
                 final_message = client.generate_with_tools(
-                    messages, [WEB_SEARCH_TOOL], max_tokens=512, temperature=0.4
+                    messages, [WEB_SEARCH_TOOL], max_tokens=512, temperature=0.4,
+                    tool_choice="none",
                 )
                 response_text = (final_message.get("content") or "").strip()
             else:

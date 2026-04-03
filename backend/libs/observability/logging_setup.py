@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import pathlib
+import re
 import sys
-from datetime import UTC, datetime
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from observability.context import request_id, run_id, service, tenant_id
-
-
-def _utc_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _local_time_short() -> str:
@@ -124,39 +120,105 @@ LOGRECORD_BUILTIN_KEYS = {
     "message",
 }
 
+VISIBLE_EXTRA_KEYS = (
+    "method",
+    "path",
+    "query",
+    "status_code",
+    "duration_ms",
+    "stage",
+    "step",
+    "section_id",
+    "current_stage",
+    "max_iterations",
+    "provider",
+    "llm_provider",
+    "llm_model",
+    "model_name",
+    "chars",
+    "workers",
+    "response_bytes",
+    "query_count",
+    "preview",
+    "research_goal",
+    "artifact_count",
+    "reason",
+    "status",
+    "email_domain",
+    "environment",
+    "token_hash_prefix",
+)
+_CONTEXT_KEYS = ("service", "request_id", "run_id", "tenant_id")
+_SHORT_ENABLE_RE = re.compile(r"[^a-zA-Z0-9]+")
 
-class JsonFormatter(logging.Formatter):
-    """
-    JSON formatter (best for production).
-    """
 
-    def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, Any] = {
-            "ts": _utc_iso(),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-            "service": getattr(record, "service", None),
-            "request_id": getattr(record, "request_id", None),
-            "tenant_id": getattr(record, "tenant_id", None),
-            "run_id": getattr(record, "run_id", None),
-        }
+def _short_id(value: Any, *, limit: int = 8) -> str | None:
+    if value is None:
+        return None
+    cleaned = _SHORT_ENABLE_RE.sub("", str(value))
+    if not cleaned:
+        return None
+    return cleaned[:limit]
 
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
 
-        extras: dict[str, Any] = {}
-        for k, v in record.__dict__.items():
-            if k in LOGRECORD_BUILTIN_KEYS:
-                continue
-            if k in ("request_id", "tenant_id", "run_id", "service"):
-                continue
-            extras[k] = _to_jsonable(_redact_key_value(k, v))
+def _iter_visible_extras(record: logging.LogRecord) -> list[tuple[str, Any]]:
+    extras: list[tuple[str, Any]] = []
+    for key in VISIBLE_EXTRA_KEYS:
+        if key in _CONTEXT_KEYS:
+            continue
+        if key not in record.__dict__:
+            continue
+        value = _to_jsonable(_redact_key_value(key, record.__dict__[key]))
+        if value in (None, "", [], {}):
+            continue
+        extras.append((key, value))
+    return extras
 
-        if extras:
-            payload["extra"] = extras
 
-        return json.dumps(payload, ensure_ascii=False)
+def _build_context_block(record: logging.LogRecord) -> str:
+    parts: list[str] = []
+    service_name = getattr(record, "service", None)
+    if service_name:
+        parts.append(f"svc:{service_name}")
+    request_ref = _short_id(getattr(record, "request_id", None))
+    if request_ref:
+        parts.append(f"req:{request_ref}")
+    run_ref = _short_id(getattr(record, "run_id", None))
+    if run_ref:
+        parts.append(f"run:{run_ref}")
+    tenant_ref = _short_id(getattr(record, "tenant_id", None))
+    if tenant_ref:
+        parts.append(f"tenant:{tenant_ref}")
+    return f" [{' '.join(parts)}]" if parts else ""
+
+
+def _format_extra_item(key: str, value: Any) -> str:
+    if key == "status_code":
+        return f"status={value}"
+    if key == "duration_ms":
+        return f"in {value}ms"
+    if key == "section_id":
+        return f"section={value}"
+    if key == "current_stage":
+        return f"current_stage={value}"
+    if key == "max_iterations":
+        return f"max_iterations={value}"
+    if key == "response_bytes":
+        return f"bytes={value}"
+    if key == "chars":
+        return f"chars={value}"
+    if key == "preview":
+        return f"preview={value}"
+    if key == "query_count":
+        return f"count={value}"
+    return f"{key}={value}"
+
+
+def _render_extra_suffix(record: logging.LogRecord) -> str:
+    visible = _iter_visible_extras(record)
+    if not visible:
+        return ""
+    return " " + " ".join(_format_extra_item(key, value) for key, value in visible)
 
 
 class PrettyFormatter(logging.Formatter):
@@ -167,33 +229,11 @@ class PrettyFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         ts = _local_time_short()
-
-        rid = getattr(record, "request_id", None)
-        tid = getattr(record, "tenant_id", None)
-        ruid = getattr(record, "run_id", None)
-        svc = getattr(record, "service", None)
-
-        base = (
-            f"{ts} "
-            f"[{record.levelname}] "
-            f"svc={svc} req={rid} tenant={tid} run={ruid} "
-            f"{record.name}: {record.getMessage()}"
-        )
+        message = record.getMessage().strip()
+        base = f"{ts} {record.levelname} {message}{_render_extra_suffix(record)}{_build_context_block(record)}"
 
         if record.exc_info:
             base += "\n" + self.formatException(record.exc_info)
-
-        extras: dict[str, Any] = {}
-        for k, v in record.__dict__.items():
-            if k in LOGRECORD_BUILTIN_KEYS:
-                continue
-            if k in ("request_id", "tenant_id", "run_id", "service"):
-                continue
-            extras[k] = _to_jsonable(_redact_key_value(k, v))
-
-        if extras:
-            base += f" extra={extras}"
-
         return base
 
 
@@ -203,7 +243,7 @@ def setup_logging(app_service_name: str) -> None:
     Safe to call multiple times (idempotent).
 
     Supports:
-    - Console logging (pretty or json)
+    - Human-readable console logging
     - Optional file logging (RotatingFileHandler) if LOG_FILE_PATH is set
     """
     root = logging.getLogger()
@@ -220,6 +260,8 @@ def setup_logging(app_service_name: str) -> None:
     level = getattr(logging, level_name, logging.INFO)
 
     log_format = (os.getenv("LOG_FORMAT") or "pretty").lower()
+    if log_format not in {"pretty", "text"}:
+        log_format = "pretty"
 
     root.setLevel(level)
     root.handlers.clear()
@@ -227,7 +269,7 @@ def setup_logging(app_service_name: str) -> None:
     # Console handler (stdout)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.addFilter(ContextFilter())
-    console_handler.setFormatter(JsonFormatter() if log_format == "json" else PrettyFormatter())
+    console_handler.setFormatter(PrettyFormatter())
     root.addHandler(console_handler)
 
     # Optional file handler (enabled only if LOG_FILE_PATH is set)
@@ -247,8 +289,7 @@ def setup_logging(app_service_name: str) -> None:
         )
         file_handler.addFilter(ContextFilter())
 
-        # File logs should almost always be JSON for easier analysis
-        file_handler.setFormatter(JsonFormatter())
+        file_handler.setFormatter(PrettyFormatter())
 
         root.addHandler(file_handler)
 
@@ -267,7 +308,7 @@ def setup_logging(app_service_name: str) -> None:
     root._configured_by_researchops = True  # type: ignore[attr-defined]
 
     logging.getLogger(__name__).info(
-        "Logging is initialized",
+        "Logging initialized",
         extra={
             "event": "logging.init",
             "log_level": level_name,
