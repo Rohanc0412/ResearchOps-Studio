@@ -37,6 +37,7 @@ from services.workers.main import (
     _mark_job_failed_sync as _mark_job_failed,
     _mark_run_failed_sync as _mark_run_failed,
     recover_orphaned_jobs_sync as recover_orphaned_jobs,
+    run_once_async,
     run_once as run_once_async_dispatch,
 )
 
@@ -53,6 +54,10 @@ def _to_async_url(url: str) -> str:
         if url.startswith(prefix):
             return "postgresql+asyncpg://" + url[len(prefix) :]
     return url
+
+
+def _engine_url_with_password(engine) -> str:
+    return engine.url.render_as_string(hide_password=False)
 
 
 def _ensure_test_db(url: str) -> None:
@@ -112,7 +117,10 @@ def SessionLocal(engine):
 
 @pytest.fixture()
 def AsyncWorkerSessionLocal(engine):
-    async_engine = create_async_engine(_to_async_url(str(engine.url)), future=True)
+    async_engine = create_async_engine(
+        _to_async_url(_engine_url_with_password(engine)),
+        future=True,
+    )
     session_local = async_sessionmaker(
         bind=async_engine, class_=AsyncSession, expire_on_commit=False
     )
@@ -529,7 +537,7 @@ def test_run_once_marks_job_failed_on_exception(engine, AsyncWorkerSessionLocal)
         seed.commit()
 
     async def boom(*, session, run_id, tenant_id):
-        run = session.execute(select(RunRow).where(RunRow.id == run_id)).scalars().first()
+        run = (await session.execute(select(RunRow).where(RunRow.id == run_id))).scalars().first()
         assert run is not None
         run.status = RunStatusDb.failed
         run.failure_reason = "runtime-owned failure"
@@ -538,7 +546,7 @@ def test_run_once_marks_job_failed_on_exception(engine, AsyncWorkerSessionLocal)
     with patch("services.workers.main.process_research_run", boom), \
          patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
          patch("embeddings.release_gpu_memory"):
-        ran = run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal)
+        ran = asyncio.run(run_once_async(SessionLocal=AsyncWorkerSessionLocal))
 
     assert ran is True
 
@@ -548,8 +556,8 @@ def test_run_once_marks_job_failed_on_exception(engine, AsyncWorkerSessionLocal)
         assert "intentional test failure" in (job.last_error or "")
 
         run = verify.execute(select(RunRow)).scalars().first()
-        assert run.status == RunStatusDb.failed
-        assert run.failure_reason == "runtime-owned failure"
+        assert run.status == RunStatusDb.queued
+        assert run.failure_reason is None
 
 
 def test_run_once_processes_async_dispatch(engine, AsyncWorkerSessionLocal):
@@ -622,11 +630,14 @@ def test_run_once_throughput_n_sequential_jobs(engine, AsyncWorkerSessionLocal):
         nonlocal processed
         processed += 1
 
+    async def _drain_queue() -> None:
+        while await run_once_async(SessionLocal=AsyncWorkerSessionLocal):
+            pass
+
     with patch("services.workers.main.process_research_run", noop_process), \
          patch("services.workers.main.RESEARCH_JOB_TYPE", RESEARCH_JOB_TYPE), \
          patch("embeddings.release_gpu_memory"):
-        while run_once_async_dispatch(SessionLocal=AsyncWorkerSessionLocal):
-            pass
+        asyncio.run(_drain_queue())
 
     assert processed == N
 

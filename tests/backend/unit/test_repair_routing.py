@@ -17,6 +17,36 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
+class _RuntimeSessionProxy:
+    def __init__(self, session):
+        self._session = session
+        self.queued_events: list[dict] = []
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def enqueue_runtime_event(
+        self,
+        *,
+        tenant_id,
+        run_id,
+        event_type,
+        stage=None,
+        message=None,
+        data=None,
+    ) -> None:
+        self.queued_events.append(
+            {
+                "tenant_id": tenant_id,
+                "run_id": run_id,
+                "event_type": event_type,
+                "stage": stage,
+                "message": message,
+                "data": data or {},
+            }
+        )
+
+
 @pytest.fixture()
 def db_session():
     import os
@@ -130,7 +160,6 @@ def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):
             return next(responses)
 
     monkeypatch.setattr(evaluator_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
-    monkeypatch.setattr(evaluator_module, "emit_run_event", lambda **_kwargs: None)
     _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
     _make_snippet(db_session, tenant_id=tenant_id, snippet_id="22222222-2222-2222-2222-222222222222")
 
@@ -199,7 +228,7 @@ def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):
         },
     )
 
-    result = evaluator_node.__wrapped__(state, db_session)
+    result = evaluator_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
 
     assert result.evaluator_decision == EvaluatorDecision.CONTINUE_REPAIR
 
@@ -229,7 +258,6 @@ def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatc
             return json.dumps({"claims": ["Intro sentence."]})
 
     monkeypatch.setattr(evaluator_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
-    monkeypatch.setattr(evaluator_module, "emit_run_event", lambda **_kwargs: None)
     _make_snippet(db_session, tenant_id=tenant_id, snippet_id=snippet_id)
 
     outline = OutlineModel(
@@ -272,7 +300,7 @@ def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatc
         },
     )
 
-    evaluator_node.__wrapped__(state, db_session)
+    evaluator_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
 
     history = list_evaluation_pass_history(
         session=db_session,
@@ -377,7 +405,7 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, monk
         },
     )
 
-    result = repair_agent_node.__wrapped__(state, db_session)
+    result = repair_agent_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
 
     repaired_row = (
         db_session.query(DraftSectionRow)
@@ -512,4 +540,4 @@ def test_repair_agent_requires_next_section_patch_for_non_final_section(db_sessi
     )
 
     with pytest.raises(ValueError, match="must include a next-section continuity patch"):
-        repair_agent_node.__wrapped__(state, db_session)
+        repair_agent_node.__wrapped__(state, _RuntimeSessionProxy(db_session))

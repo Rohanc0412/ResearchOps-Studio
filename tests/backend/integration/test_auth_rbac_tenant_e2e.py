@@ -20,7 +20,7 @@ def test_auth_rbac_and_tenant_isolation_end_to_end(tmp_path) -> None:
 
     os.environ["AUTH_REQUIRED"] = "true"
     os.environ["DEV_BYPASS_AUTH"] = "false"
-    os.environ["AUTH_JWT_SECRET"] = "test-secret"
+    os.environ["AUTH_JWT_SECRET"] = "test-secret-with-sufficient-length-32"
     os.environ["AUTH_JWT_ISSUER"] = "researchops-api"
 
     get_settings.cache_clear()
@@ -88,7 +88,7 @@ def test_register_duplicate_email_returns_email_specific_error() -> None:
     os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
     os.environ["AUTH_REQUIRED"] = "true"
     os.environ["DEV_BYPASS_AUTH"] = "false"
-    os.environ["AUTH_JWT_SECRET"] = "test-secret"
+    os.environ["AUTH_JWT_SECRET"] = "test-secret-with-sufficient-length-32"
     os.environ["AUTH_JWT_ISSUER"] = "researchops-api"
 
     get_settings.cache_clear()

@@ -179,14 +179,14 @@ def test_tavily_error_falls_back_gracefully():
 
 
 def test_llm_error_returns_fallback_string():
-    """When LLM raises LLMError, the function returns the standard fallback string."""
+    """When LLM raises LLMError, the function surfaces the normalized explanation."""
     from llm import LLMError
     client = mock.MagicMock()
     client.generate_with_tools.side_effect = LLMError("API down")
 
     result = _call_generate_quick_answer(client)
 
-    assert "trouble" in result
+    assert result == "API down"
 
 
 # ---------------------------------------------------------------------------

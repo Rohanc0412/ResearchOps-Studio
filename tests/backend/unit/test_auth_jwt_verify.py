@@ -10,7 +10,7 @@ from core.auth.tokens import issue_access_token, verify_access_token
 
 
 def test_access_token_round_trip() -> None:
-    secret = "secret"
+    secret = "secret-with-sufficient-length-32"
     token = issue_access_token(
         username="alice",
         tenant_id="tenant-1",
@@ -28,32 +28,40 @@ def test_access_token_round_trip() -> None:
 
 
 def test_access_token_wrong_secret() -> None:
+    secret = "secret-with-sufficient-length-32"
     token = issue_access_token(
         username="alice",
         tenant_id="tenant-1",
         roles=["viewer"],
-        secret="secret",
+        secret=secret,
         issuer="issuer",
         expires_minutes=5,
     )
     with pytest.raises(AuthInvalidTokenError):
-        verify_access_token(token=token, secret="wrong", issuer="issuer", clock_skew_seconds=0)
+        verify_access_token(
+            token=token,
+            secret="wrong-secret-with-sufficient-length",
+            issuer="issuer",
+            clock_skew_seconds=0,
+        )
 
 
 def test_access_token_wrong_issuer() -> None:
+    secret = "secret-with-sufficient-length-32"
     token = issue_access_token(
         username="alice",
         tenant_id="tenant-1",
         roles=["viewer"],
-        secret="secret",
+        secret=secret,
         issuer="issuer",
         expires_minutes=5,
     )
     with pytest.raises(AuthIssuerError):
-        verify_access_token(token=token, secret="secret", issuer="other", clock_skew_seconds=0)
+        verify_access_token(token=token, secret=secret, issuer="other", clock_skew_seconds=0)
 
 
 def test_access_token_expired() -> None:
+    secret = "secret-with-sufficient-length-32"
     now = datetime.now(timezone.utc)
     expired = now - timedelta(minutes=5)
     payload = {
@@ -62,6 +70,6 @@ def test_access_token_expired() -> None:
         "iat": int(expired.timestamp()),
         "exp": int((expired + timedelta(minutes=1)).timestamp()),
     }
-    token = jwt.encode(payload, "secret", algorithm="HS256")
+    token = jwt.encode(payload, secret, algorithm="HS256")
     with pytest.raises(AuthExpiredError):
-        verify_access_token(token=token, secret="secret", issuer="issuer", clock_skew_seconds=0)
+        verify_access_token(token=token, secret=secret, issuer="issuer", clock_skew_seconds=0)

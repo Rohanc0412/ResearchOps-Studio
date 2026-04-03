@@ -200,7 +200,9 @@ async def test_create_or_get_source_returns_existing_on_integrity_error():
     existing.metadata_json = {}
     existing.updated_at = None
 
-    mock_session = mock.AsyncMock()
+    mock_session = mock.MagicMock()
+    mock_session.flush = mock.AsyncMock()
+    mock_session.rollback = mock.AsyncMock()
     # flush raises IntegrityError (concurrent insert from another worker)
     mock_session.flush.side_effect = SAIntegrityError(
         "UNIQUE constraint failed", orig=Exception("unique"), params={}
@@ -484,20 +486,24 @@ async def test_process_research_run_loads_usage_metrics_without_async_lazy_load(
         def scalar_one_or_none(self):
             return LazyRun()
 
-    session = mock.MagicMock()
-
     async def fake_execute(*args, **kwargs):
         return ExecuteResult()
 
+    class FakeAsyncSession:
+        pass
+
+    session = FakeAsyncSession()
     session.execute = mock.AsyncMock(side_effect=fake_execute)
 
     async def fake_run_orchestrator(**kwargs):
-        assert kwargs["user_query"] == "What are the latest advancements in LLM?"
-        assert kwargs["llm_model"] == "gpt-5.4"
+        inputs = kwargs["inputs"]
+        assert inputs.user_query == "What are the latest advancements in LLM?"
+        assert inputs.llm_model == "gpt-5.4"
 
     with (
+        mock.patch.object(research, "AsyncSession", FakeAsyncSession),
         mock.patch.object(research, "get_run", new=mock.AsyncMock(return_value=EagerRun()), create=True),
-        mock.patch.object(research, "run_orchestrator", side_effect=fake_run_orchestrator),
+        mock.patch.object(research, "run_research_orchestrator", side_effect=fake_run_orchestrator),
         mock.patch.object(research, "_warm_local_embed_pool"),
     ):
         await research.process_research_run(
@@ -519,6 +525,7 @@ def test_pipeline_emit_run_event_reuses_current_session_for_asyncpg_sessions():
     )
     fake_session = mock.MagicMock()
     fake_session.get_bind.return_value = fake_bind
+    fake_session.enqueue_runtime_event = None
 
     with (
         mock.patch.object(

@@ -20,6 +20,36 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
+class _RuntimeSessionProxy:
+    def __init__(self, session):
+        self._session = session
+        self.queued_events: list[dict] = []
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def enqueue_runtime_event(
+        self,
+        *,
+        tenant_id,
+        run_id,
+        event_type,
+        stage=None,
+        message=None,
+        data=None,
+    ) -> None:
+        self.queued_events.append(
+            {
+                "tenant_id": tenant_id,
+                "run_id": run_id,
+                "event_type": event_type,
+                "stage": stage,
+                "message": message,
+                "data": data or {},
+            }
+        )
+
+
 @pytest.fixture
 def db_session():
     import os
@@ -168,7 +198,7 @@ def test_retriever_ingests_selected_papers(db_session, monkeypatch):
         user_query="retrieval augmented generation",
     )
 
-    result = retriever_module.retriever_node(state, db_session)
+    result = retriever_module.retriever_node(state, _RuntimeSessionProxy(db_session))
 
     assert len(result.retrieved_sources) == 1
     assert db_session.query(SourceEmbeddingRow).count() == 1
@@ -177,7 +207,7 @@ def test_retriever_ingests_selected_papers(db_session, monkeypatch):
     assert db_session.query(SnippetEmbeddingRow).count() == db_session.query(SnippetRow).count()
 
     # Re-running with identical content should not create a second snapshot.
-    result = retriever_module.retriever_node(state, db_session)
+    result = retriever_module.retriever_node(state, _RuntimeSessionProxy(db_session))
     assert len(result.retrieved_sources) == 1
     assert db_session.query(SnapshotRow).count() == 1
 
@@ -242,7 +272,7 @@ def test_retriever_updates_authors_without_duplicate_order_conflict(
         user_query="retrieval augmented generation",
     )
 
-    result = retriever_module.retriever_node(state, db_session)
+    result = retriever_module.retriever_node(state, _RuntimeSessionProxy(db_session))
 
     assert len(result.retrieved_sources) == 1
     authors = (
@@ -311,7 +341,7 @@ def test_retriever_continues_when_selected_ingestion_fails(db_session, monkeypat
         user_query="retrieval augmented generation",
     )
 
-    result = retriever_module.retriever_node(state, db_session)
+    result = retriever_module.retriever_node(state, _RuntimeSessionProxy(db_session))
 
     assert len(result.retrieved_sources) == 2
     assert db_session.query(SnapshotRow).count() == 2
@@ -376,4 +406,4 @@ def test_retriever_stops_when_cancel_requested_during_search(db_session, monkeyp
     )
 
     with pytest.raises(RunCancelledError):
-        retriever_module.retriever_node(state, db_session)
+        retriever_module.retriever_node(state, _RuntimeSessionProxy(db_session))

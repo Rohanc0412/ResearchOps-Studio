@@ -7,6 +7,7 @@ def test_get_llm_client_uses_openai_env_fallbacks(monkeypatch):
     monkeypatch.delenv("HOSTED_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("HOSTED_LLM_API_KEY", raising=False)
     monkeypatch.delenv("HOSTED_LLM_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com")
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 

@@ -29,6 +29,36 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
+class _RuntimeSessionProxy:
+    def __init__(self, session):
+        self._session = session
+        self.queued_events: list[dict] = []
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def enqueue_runtime_event(
+        self,
+        *,
+        tenant_id,
+        run_id,
+        event_type,
+        stage=None,
+        message=None,
+        data=None,
+    ) -> None:
+        self.queued_events.append(
+            {
+                "tenant_id": tenant_id,
+                "run_id": run_id,
+                "event_type": event_type,
+                "stage": stage,
+                "message": message,
+                "data": data or {},
+            }
+        )
+
+
 def _make_snippet(db_session, *, tenant_id: UUID, snippet_id: str) -> None:
     """Create SourceRow → SnapshotRow → SnippetRow for the given snippet_id.
 
@@ -230,7 +260,7 @@ def test_outliner_creates_structure(db_session, db_run, monkeypatch):
         vetted_sources=[],
     )
 
-    result = outliner_node(state, db_session)
+    result = outliner_node(state, _RuntimeSessionProxy(db_session))
 
     assert result.outline is not None
     assert len(result.outline.sections) >= 4
@@ -298,7 +328,7 @@ def test_evaluator_stops_on_success(db_session, db_run):
 
     evaluator_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
-    result = evaluator_node(state, db_session)
+    result = evaluator_node(state, _RuntimeSessionProxy(db_session))
 
     assert result.evaluator_decision == EvaluatorDecision.STOP_SUCCESS
 
@@ -374,7 +404,7 @@ def test_evaluator_continues_on_errors(db_session, db_run):
 
     evaluator_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
-    result = evaluator_node(state, db_session)
+    result = evaluator_node(state, _RuntimeSessionProxy(db_session))
 
     assert result.evaluator_decision == EvaluatorDecision.CONTINUE_REPAIR
 
@@ -491,7 +521,7 @@ def test_evaluator_repairs_on_any_failed_section(db_session, db_run):
 
     evaluator_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
-    result = evaluator_node(state, db_session)
+    result = evaluator_node(state, _RuntimeSessionProxy(db_session))
 
     assert result.evaluator_decision == EvaluatorDecision.CONTINUE_REPAIR
 
@@ -593,7 +623,7 @@ def test_exporter_generates_three_artifacts(db_session, test_run):
         evidence_snippets=[],
     )
 
-    result = exporter_node(state, db_session)
+    result = exporter_node(state, _RuntimeSessionProxy(db_session))
 
     # Check artifacts
     assert "report.md" in result.artifacts
@@ -923,7 +953,7 @@ def test_repair_agent_modifies_draft(db_session, db_run):
 
     repair_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
-    result = repair_agent_node(state, db_session)
+    result = repair_agent_node(state, _RuntimeSessionProxy(db_session))
 
     # Verify repair was attempted
     assert result.repair_attempts == 1
@@ -1025,7 +1055,7 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, db_r
 
     repair_module.get_llm_client_for_stage = lambda *_args, **_kwargs: StubLLM()
 
-    result = repair_agent_node(state, db_session)
+    result = repair_agent_node(state, _RuntimeSessionProxy(db_session))
 
     repaired_row = (
         db_session.query(DraftSectionRow)
