@@ -60,25 +60,19 @@ def env_optional_int(name: str, *, min_value: int | None = None) -> int | None:
     return value
 
 
+def _find_repo_root(start: Path) -> Path | None:
+    for base in (start, *start.parents):
+        if (base / ".git").exists() or (base / "requirements.txt").exists():
+            return base
+    return None
+
+
 def resolve_env_files() -> tuple[str, ...]:
-    candidates: list[str] = []
-    seen: set[str] = set()
-
-    def add(path: Path) -> None:
-        resolved = str(path.resolve())
-        if resolved in seen or not path.exists():
-            return
-        seen.add(resolved)
-        candidates.append(resolved)
-
-    cwd = Path.cwd().resolve()
-    parent_candidates = [cwd, *cwd.parents]
-    for base in reversed(parent_candidates):
-        add(base / ".env")
-
-    module_parents = list(Path(__file__).resolve().parents)
-    for base in reversed(module_parents):
-        add(base / ".env")
-
-    return tuple(candidates)
+    repo_root = _find_repo_root(Path(__file__).resolve())
+    if repo_root is None:
+        return ()
+    env_file = repo_root / ".env"
+    if not env_file.exists():
+        return ()
+    return (str(env_file.resolve()),)
 

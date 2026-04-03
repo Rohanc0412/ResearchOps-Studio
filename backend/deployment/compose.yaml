@@ -39,8 +39,6 @@ services:
       context: ../..
       dockerfile: backend/deployment/docker/api.Dockerfile
     env_file:
-      - path: ../.env
-        required: false
       - ../../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
@@ -70,8 +68,6 @@ services:
       dockerfile: backend/deployment/docker/worker.Dockerfile
     gpus: all
     env_file:
-      - path: ../.env
-        required: false
       - ../../.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
