@@ -924,7 +924,7 @@ async def test_resume_orchestrator_requires_runtime() -> None:
         async def execute(self, _stmt):
             return _ExecuteResult()
 
-    with pytest.raises(RuntimeError, match="runtime-backed async execution path"):
+    with pytest.raises(TypeError, match="runtime-backed async execution path"):
         await resume_orchestrator(
             session=_SessionStub(),
             tenant_id=tenant_id,

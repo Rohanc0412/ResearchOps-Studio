@@ -419,7 +419,7 @@ async def resume_orchestrator(
     session: AsyncSession,
     tenant_id: UUID,
     run_id: UUID,
-    runtime: Any | None = None,
+    runtime: Any,
 ) -> OrchestratorState:
     """
     Resume orchestrator from last checkpoint.
@@ -443,13 +443,11 @@ async def resume_orchestrator(
     )
     if checkpoint_payload is None:
         raise ValueError(f"No checkpoint found for run {run_id}")
-    if runtime is None:
-        raise RuntimeError(
-            "resume_orchestrator requires a runtime-backed async execution path; "
-            "sync resume fallback has been removed."
-        )
     if not callable(getattr(runtime, "execute_node", None)):
-        raise TypeError("resume_orchestrator runtime must implement execute_node")
+        raise TypeError(
+            "resume_orchestrator requires a runtime-backed async execution path; "
+            "runtime must implement execute_node."
+        )
 
     checkpoint_state = OrchestratorState(**checkpoint_payload)
     runtime_obj = runtime

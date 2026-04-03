@@ -629,7 +629,7 @@ def test_resume_checkpoint_selector_rejects_non_runtime_state_like_rows():
             "user_query": "legacy state",
             "max_iterations": 5,
         },
-        node_name="unknown",
+        node_name="retrieval_summary",
     )
 
     payload = checkpoints.select_resume_state_payload(

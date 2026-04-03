@@ -758,7 +758,7 @@ def test_resume_checkpoint_selector_rejects_legacy_state_like_rows(db_session, d
         RunCheckpointRow(
             tenant_id=tenant_id,
             run_id=run_id,
-            node_name="unknown",
+            node_name="retrieval_summary",
             stage="retrieval_summary",
             payload_json={
                 "tenant_id": str(tenant_id),

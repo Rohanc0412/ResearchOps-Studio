@@ -15,6 +15,18 @@ from db.models.run_checkpoints import RunCheckpointRow
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+RUNTIME_CHECKPOINT_NODE_NAMES = frozenset(
+    {
+        "retriever",
+        "outliner",
+        "evidence_pack",
+        "writer",
+        "evaluator",
+        "repair_agent",
+        "exporter",
+    }
+)
+
 
 def _coerce_uuid(value: object) -> UUID | None:
     if value is None:
@@ -44,7 +56,7 @@ def _looks_like_resume_state_payload(payload: object, *, tenant_id: UUID, run_id
 
 def _is_runtime_checkpoint_row(row: object) -> bool:
     node_name = getattr(row, "node_name", None)
-    return isinstance(node_name, str) and node_name not in {"", "unknown"}
+    return isinstance(node_name, str) and node_name in RUNTIME_CHECKPOINT_NODE_NAMES
 
 
 def select_resume_state_payload(
