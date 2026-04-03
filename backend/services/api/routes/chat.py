@@ -286,7 +286,7 @@ def _generate_quick_answer(
                 try:
                     results = search(query_text, max_results=3)
                     snippets = [
-                        f"[{i+1}] {r.get('title','')}: {r.get('content','')[:300]}"
+                        f"[{i+1}] {r.title}: {r.snippet[:300]}"
                         for i, r in enumerate(results)
                     ]
                     tool_result = "\n\n".join(snippets) or "No results found."
