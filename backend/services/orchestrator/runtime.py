@@ -30,6 +30,7 @@ class _QueuedNodeEvent:
     stage: str | None
     message: str
     payload: dict | None
+    audience: RunEventAudienceDb = RunEventAudienceDb.progress
 
 
 class _RuntimeNodeSessionProxy:
@@ -221,6 +222,7 @@ class ResearchRuntime:
         stage: str | None = None,
         message: str | None = None,
         data: dict | None = None,
+        audience: RunEventAudienceDb = RunEventAudienceDb.progress,
     ) -> None:
         self._pending_node_events.append(
             _QueuedNodeEvent(
@@ -230,6 +232,7 @@ class ResearchRuntime:
                 stage=stage,
                 message=message or f"{event_type}: {stage or 'unknown'}",
                 payload=data or {},
+                audience=audience,
             )
         )
 
@@ -244,7 +247,7 @@ class ResearchRuntime:
                 await self.event_store.append(
                     tenant_id=event.tenant_id,
                     run_id=event.run_id,
-                    audience=RunEventAudienceDb.diagnostic,
+                    audience=event.audience,
                     event_type=event.event_type,
                     level=RunEventLevelDb.info,
                     stage=event.stage,

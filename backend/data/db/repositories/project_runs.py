@@ -366,6 +366,7 @@ def append_run_event_sync(
     run_id: UUID,
     level: RunEventLevelDb,
     message: str,
+    audience: RunEventAudienceDb = RunEventAudienceDb.progress,
     stage: str | None = None,
     event_type: str = "log",
     payload_json: dict | None = None,
@@ -399,6 +400,7 @@ def append_run_event_sync(
     row = RunEventRow(
         tenant_id=tenant_id,
         run_id=run_id,
+        audience=audience,
         event_number=int(next_event_number),
         ts=now,
         stage=stage,
