@@ -1,10 +1,10 @@
 import type { Report } from "./types";
 
-export const DEFAULT_HOSTED_MODEL = "qwen/qwen3.6-plus-preview:free";
+export const DEFAULT_HOSTED_MODEL = "qwen/qwen3.6-plus:free";
 export const CUSTOM_MODEL_VALUE = "__custom__";
 
 export const MODEL_OPTIONS = [
-  { value: "qwen/qwen3.6-plus-preview:free", label: "Qwen 3.6 Plus (free)" },
+  { value: "qwen/qwen3.6-plus:free", label: "Qwen 3.6 Plus (free)" },
   { value: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
   { value: "openai/gpt-4o", label: "GPT-4o" },
   { value: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet" },

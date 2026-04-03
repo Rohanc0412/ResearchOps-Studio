@@ -22,7 +22,7 @@ const defaultProps = {
 
 describe("ChatComposer", () => {
   it("uses Qwen as the default hosted model", () => {
-    expect(DEFAULT_HOSTED_MODEL).toBe("qwen/qwen3.6-plus-preview:free");
+    expect(DEFAULT_HOSTED_MODEL).toBe("qwen/qwen3.6-plus:free");
     expect(
       MODEL_OPTIONS.some(
         (option) =>

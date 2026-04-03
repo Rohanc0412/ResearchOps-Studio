@@ -101,9 +101,9 @@ class _QuickAnswerContext:
 
 
 def _resolve_chat_model(llm_model: str | None) -> str | None:
-    """Return CHAT_SEARCH_MODEL if set, else fall back to llm_model."""
+    """Prefer the explicit request model, otherwise fall back to CHAT_SEARCH_MODEL."""
     override = os.getenv("CHAT_SEARCH_MODEL", "").strip()
-    return override or llm_model or None
+    return llm_model or override or None
 
 
 ACTION_PREFIX = "__ACTION__:"

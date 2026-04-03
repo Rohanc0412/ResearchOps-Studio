@@ -231,3 +231,17 @@ def test_generator_emits_status_then_answer_with_search():
     assert types == ["status", "answer"]
     assert events[0][1] == "Searching the web\u2026"
     mock_search.assert_called_once_with("weather today", max_results=3)
+
+
+def test_explicit_llm_model_takes_precedence_over_chat_search_override():
+    import routes.chat as chat_mod
+
+    with mock.patch.dict(os.environ, {"CHAT_SEARCH_MODEL": "qwen/qwen3.6-plus:free"}):
+        assert chat_mod._resolve_chat_model("openai/gpt-4o-mini") == "openai/gpt-4o-mini"
+
+
+def test_chat_search_override_applies_when_no_explicit_model_is_provided():
+    import routes.chat as chat_mod
+
+    with mock.patch.dict(os.environ, {"CHAT_SEARCH_MODEL": "qwen/qwen3.6-plus:free"}):
+        assert chat_mod._resolve_chat_model(None) == "qwen/qwen3.6-plus:free"
