@@ -10,7 +10,6 @@ import sys
 import asyncio
 import unittest.mock as mock
 from uuid import uuid4
-from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend", "services", "orchestrator"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend", "data"))
@@ -83,7 +82,6 @@ def test_queued_node_events_are_flushed_with_progress_audience():
 def test_append_run_event_sync_defaults_to_progress_audience():
     """append_run_event_sync must default audience to progress."""
     import inspect
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend", "data"))
     from db.repositories.project_runs import append_run_event_sync
     sig = inspect.signature(append_run_event_sync)
     audience_param = sig.parameters.get("audience")

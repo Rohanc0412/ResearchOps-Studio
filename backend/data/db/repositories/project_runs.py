@@ -295,7 +295,7 @@ async def append_run_event(
     run_id: UUID,
     level: RunEventLevelDb,
     message: str,
-    audience: RunEventAudienceDb = RunEventAudienceDb.diagnostic,
+    audience: RunEventAudienceDb = RunEventAudienceDb.progress,
     stage: str | None = None,
     event_type: str = "log",
     payload_json: dict | None = None,

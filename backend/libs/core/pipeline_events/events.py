@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from db.models.run_events import RunEventLevelDb, RunEventRow
+from db.models.run_events import RunEventAudienceDb, RunEventLevelDb, RunEventRow
 from db.models.runs import RunRow
 from db.repositories.project_runs import append_run_event_sync as append_run_event
 from sqlalchemy import select, update
@@ -299,6 +299,7 @@ def emit_run_event(
             message=resolved_message,
             payload_json=data or {},
             ts=datetime.now(UTC),
+            audience=RunEventAudienceDb.progress,
         )
 
         event_session.add(event)

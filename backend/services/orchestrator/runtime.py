@@ -54,6 +54,7 @@ class _RuntimeNodeSessionProxy:
         stage: str | None = None,
         message: str | None = None,
         data: dict | None = None,
+        audience: RunEventAudienceDb = RunEventAudienceDb.progress,
     ) -> None:
         self._runtime.queue_node_event(
             tenant_id=tenant_id,
@@ -62,6 +63,7 @@ class _RuntimeNodeSessionProxy:
             stage=stage,
             message=message,
             data=data,
+            audience=audience,
         )
 
 
