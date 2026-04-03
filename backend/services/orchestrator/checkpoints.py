@@ -56,20 +56,14 @@ def select_resume_state_payload(
     """
     Select the best checkpoint payload for resume.
 
-    Priority:
-    1. Runtime-managed checkpoints (`node_name` is a concrete orchestrator node).
-    2. Any other checkpoint row that still contains a full state payload.
+    Resume only accepts runtime-managed checkpoint rows (`node_name` is a
+    concrete orchestrator node). Legacy non-runtime rows are intentionally
+    ignored.
     """
 
-    runtime_rows: list[object] = []
-    fallback_rows: list[object] = []
     for row in rows:
-        if _is_runtime_checkpoint_row(row):
-            runtime_rows.append(row)
-        else:
-            fallback_rows.append(row)
-
-    for row in [*runtime_rows, *fallback_rows]:
+        if not _is_runtime_checkpoint_row(row):
+            continue
         payload = getattr(row, "payload_json", None)
         if _looks_like_resume_state_payload(payload, tenant_id=tenant_id, run_id=run_id):
             return payload

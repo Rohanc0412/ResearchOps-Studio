@@ -428,6 +428,7 @@ async def resume_orchestrator(
         session: Database session
         tenant_id: Tenant ID
         run_id: Run ID
+        runtime: Async runtime that owns node execution
 
     Returns:
         Final orchestrator state
@@ -442,19 +443,16 @@ async def resume_orchestrator(
     )
     if checkpoint_payload is None:
         raise ValueError(f"No checkpoint found for run {run_id}")
+    if runtime is None:
+        raise RuntimeError(
+            "resume_orchestrator requires a runtime-backed async execution path; "
+            "sync resume fallback has been removed."
+        )
+    if not callable(getattr(runtime, "execute_node", None)):
+        raise TypeError("resume_orchestrator runtime must implement execute_node")
 
     checkpoint_state = OrchestratorState(**checkpoint_payload)
-    runtime_obj = runtime or _RunnerRuntimeAdapter(
-        session=session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        user_query=checkpoint_state.user_query,
-        research_goal=checkpoint_state.research_goal,
-        llm_provider=checkpoint_state.llm_provider,
-        llm_model=checkpoint_state.llm_model,
-        stage_models=checkpoint_state.stage_models,
-        max_iterations=checkpoint_state.max_iterations,
-    )
+    runtime_obj = runtime
     terminal_lifecycle = _resolve_terminal_lifecycle_owner(
         runtime_obj,
         session=session,

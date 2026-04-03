@@ -750,6 +750,41 @@ def test_resume_checkpoint_selector_skips_legacy_summary_rows(db_session, db_run
     assert payload["user_query"] == "checkpoint query"
 
 
+def test_resume_checkpoint_selector_rejects_legacy_state_like_rows(db_session, db_run):
+    import checkpoints as checkpoint_helpers
+
+    tenant_id, run_id = db_run
+    db_session.add(
+        RunCheckpointRow(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            node_name="unknown",
+            stage="retrieval_summary",
+            payload_json={
+                "tenant_id": str(tenant_id),
+                "run_id": str(run_id),
+                "user_query": "legacy state",
+                "max_iterations": 5,
+            },
+        )
+    )
+    db_session.flush()
+
+    rows = (
+        db_session.query(RunCheckpointRow)
+        .filter(RunCheckpointRow.tenant_id == tenant_id, RunCheckpointRow.run_id == run_id)
+        .order_by(RunCheckpointRow.created_at.desc())
+        .all()
+    )
+    payload = checkpoint_helpers.select_resume_state_payload(
+        rows,
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+
+    assert payload is None
+
+
 def test_repair_agent_modifies_draft(db_session, db_run):
     """Test that repair agent makes targeted edits."""
     from core.orchestrator.state import EvidenceSnippetRef, OutlineModel, OutlineSection

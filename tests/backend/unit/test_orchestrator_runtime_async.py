@@ -766,6 +766,14 @@ async def test_run_orchestrator_no_longer_uses_sync_session(
     assert final_state.user_query == "q"
 
 
+def _resume_runtime_stub():
+    class _RuntimeStub:
+        async def execute_node(self, *, node_name: str, node_func, state: OrchestratorState):
+            return state
+
+    return _RuntimeStub()
+
+
 @pytest.mark.asyncio
 async def test_resume_orchestrator_transitions_to_canceled_on_run_cancelled_error(
     monkeypatch: pytest.MonkeyPatch,
@@ -817,6 +825,7 @@ async def test_resume_orchestrator_transitions_to_canceled_on_run_cancelled_erro
         session=_SessionStub(),
         tenant_id=tenant_id,
         run_id=run_id,
+        runtime=_resume_runtime_stub(),
     )
 
     assert result.user_query == "checkpoint query"
@@ -883,10 +892,45 @@ async def test_resume_orchestrator_skips_legacy_non_state_checkpoint_payloads(
         session=_SessionStub(),
         tenant_id=tenant_id,
         run_id=run_id,
+        runtime=_resume_runtime_stub(),
     )
 
     assert result.user_query == "checkpoint query"
     assert statuses == [RunStatusDb.succeeded]
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestrator_requires_runtime() -> None:
+    tenant_id = uuid4()
+    run_id = uuid4()
+    checkpoint_row = SimpleNamespace(
+        payload_json={
+            "tenant_id": str(tenant_id),
+            "run_id": str(run_id),
+            "user_query": "checkpoint query",
+            "max_iterations": 5,
+        },
+        node_name="retriever",
+    )
+
+    class _ExecuteResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [checkpoint_row]
+
+    class _SessionStub:
+        async def execute(self, _stmt):
+            return _ExecuteResult()
+
+    with pytest.raises(RuntimeError, match="runtime-backed async execution path"):
+        await resume_orchestrator(
+            session=_SessionStub(),
+            tenant_id=tenant_id,
+            run_id=run_id,
+            runtime=None,
+        )
 
 
 @pytest.mark.asyncio
@@ -943,6 +987,7 @@ async def test_resume_orchestrator_transitions_to_failed_on_graph_error(
             session=_SessionStub(),
             tenant_id=tenant_id,
             run_id=run_id,
+            runtime=_resume_runtime_stub(),
         )
 
     assert statuses == [RunStatusDb.failed]

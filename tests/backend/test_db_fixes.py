@@ -616,6 +616,31 @@ def test_resume_checkpoint_selector_prefers_runtime_state_payload():
     assert payload is runtime_row.payload_json
 
 
+def test_resume_checkpoint_selector_rejects_non_runtime_state_like_rows():
+    import services.orchestrator.checkpoints as checkpoints
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    legacy_state_like_row = SimpleNamespace(
+        payload_json={
+            "tenant_id": str(tenant_id),
+            "run_id": str(run_id),
+            "user_query": "legacy state",
+            "max_iterations": 5,
+        },
+        node_name="unknown",
+    )
+
+    payload = checkpoints.select_resume_state_payload(
+        [legacy_state_like_row],
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+
+    assert payload is None
+
+
 # ── Issue 9: get_last_action timestamps must not swap when created_at is None ──
 
 
