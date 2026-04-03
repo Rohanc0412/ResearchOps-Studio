@@ -53,7 +53,7 @@ from embeddings import (
 )
 from langfuse.decorators import observe
 from retrieval.search import search_snippets
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -568,7 +568,9 @@ async def evidence_pack_node(
     await runtime.session.commit()
 
     # Parallel search: each section gets its own AsyncSession
-    async_engine = runtime.session.get_bind()
+    # AsyncSession.get_bind() delegates to the underlying sync Session and returns
+    # a plain Engine, not an AsyncEngine. Wrap it so AsyncSession() accepts it.
+    async_engine = AsyncEngine(runtime.session.get_bind())
     search_inputs = [
         (section.section_id, query_embeddings)
         for section, query_embeddings in section_vector_lists
