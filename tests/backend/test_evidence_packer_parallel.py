@@ -1,59 +1,81 @@
-import sys
+"""
+Regression test: _parallel_search_sections_async runs search_snippets for all
+sections concurrently via asyncio.gather, not OS threads.
+
+Run from repo root:
+    cd backend && python -m pytest ../tests/backend/test_evidence_packer_parallel.py -v
+"""
+import asyncio
 import os
-import threading
+import sys
 import time
 import unittest.mock as mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
-def test_section_searches_run_in_parallel():
-    """_parallel_search_sections runs search_snippets for all sections concurrently."""
-    call_times: list[float] = []
-    call_lock = threading.Lock()
-
-    def fake_search_snippets(**kwargs):
-        with call_lock:
-            call_times.append(time.monotonic())
-        time.sleep(0.10)  # simulate pgvector query latency
-        # Return min_required results to avoid triggering relaxed-search path
-        return [{"snippet_id": f"s{i}", "similarity": 0.9 - i * 0.1} for i in range(5)]
-
+async def _run_parallel_search(section_queries, call_times):
+    """Helper that patches AsyncSession and search_snippets, then calls the async helper."""
     import services.orchestrator.nodes.evidence_packer as ep
 
-    fake_engine = mock.MagicMock()
-    fake_session_instance = mock.MagicMock()
-    # Make Session(engine) work as a context manager
-    fake_session_ctx = mock.MagicMock()
-    fake_session_ctx.__enter__ = mock.Mock(return_value=fake_session_instance)
-    fake_session_ctx.__exit__ = mock.Mock(return_value=False)
+    async def mock_run_sync(fn):
+        # Record when this section's search starts
+        call_times.append(time.monotonic())
+        # Simulate pgvector query latency
+        await asyncio.sleep(0.10)
+        # Call fn with a fake sync session; return min_required results
+        fake_session = mock.MagicMock()
+        return fn(fake_session)
 
-    # Each section now receives a list of query embeddings (one per search angle)
-    section_queries = [(f"s{i}", [[0.1 * i] * 10]) for i in range(4)]
+    mock_async_session = mock.MagicMock()
+    mock_async_session.run_sync = mock_run_sync
+    mock_async_session.__aenter__ = mock.AsyncMock(return_value=mock_async_session)
+    mock_async_session.__aexit__ = mock.AsyncMock(return_value=False)
 
-    with mock.patch("services.orchestrator.nodes.evidence_packer.search_snippets", side_effect=fake_search_snippets):
-        with mock.patch("services.orchestrator.nodes.evidence_packer.Session", return_value=fake_session_ctx):
+    fake_results = [
+        {"snippet_id": f"snip{i}", "similarity": 0.9 - i * 0.1,
+         "source_id": "src1", "snippet_text": "text", "char_start": 0, "char_end": 4}
+        for i in range(5)
+    ]
+
+    with mock.patch(
+        "services.orchestrator.nodes.evidence_packer.search_snippets",
+        return_value=fake_results,
+    ):
+        with mock.patch(
+            "services.orchestrator.nodes.evidence_packer.AsyncSession",
+            return_value=mock_async_session,
+        ):
             with mock.patch.dict(os.environ, {"EVIDENCE_PACK_PARALLEL_SECTIONS": "4"}):
-                start = time.monotonic()
-                results = ep._parallel_search_sections(
+                return await ep._parallel_search_sections_async(
                     section_queries=section_queries,
-                    engine=fake_engine,
-                    tenant_id="t1",
+                    async_engine=mock.MagicMock(),
+                    tenant_id="tenant-1",
                     embedding_model="test-model",
-                    source_ids=["s1"],
+                    source_ids=["source-1"],
                     search_limit=60,
                     min_similarity=0.35,
                     min_required=5,
                 )
-                elapsed = time.monotonic() - start
 
-    # Parallelism check: total elapsed is far less than sequential would take
-    # 4 sections * 0.10s = 0.40s sequentially; parallel should be much faster
-    # All 4 calls must start within 1.5× the sleep window (well under sequential spread of 0.30s)
+
+def test_section_searches_run_concurrently_async():
+    """_parallel_search_sections_async launches all sections concurrently."""
+    section_queries = [(f"section-{i}", [[0.1 * i] * 10]) for i in range(4)]
+    call_times: list[float] = []
+
+    results = asyncio.run(_run_parallel_search(section_queries, call_times))
+
+    # Concurrency check: all 4 sections should start within a narrow window
+    # (well under the 0.10s sleep, which would be the sequential gap)
     call_times.sort()
-    assert call_times[-1] - call_times[0] < 0.15, (
-        f"Calls did not start concurrently: spread={call_times[-1]-call_times[0]:.3f}s"
+    spread = call_times[-1] - call_times[0]
+    assert spread < 0.08, (
+        f"Sections did not start concurrently: spread={spread:.3f}s "
+        f"(expected < 0.08s; if sequential, spread would be ~0.30s)"
     )
-    assert elapsed < 0.70, f"Sections took too long: elapsed={elapsed:.3f}s"
+
+    # All 4 sections must be present in results
     assert len(results) == 4
-    assert all(section_id in results for section_id, _ in section_queries)
+    for section_id, _ in section_queries:
+        assert section_id in results, f"Missing result for {section_id}"

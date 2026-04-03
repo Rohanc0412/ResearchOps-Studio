@@ -7,20 +7,23 @@ in section_evidence to gate what the writer can cite.
 
 from __future__ import annotations
 
-import concurrent.futures
+import asyncio
 import hashlib
 import logging
 import os
 from collections.abc import Iterable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from runtime import ResearchRuntime
 
 from core.orchestrator.state import (
     EvidenceSnippetRef,
     OrchestratorState,
     OutlineSection,
 )
-from core.pipeline_events import instrument_node
 from core.pipeline_events.events import emit_node_progress
+from db.models.run_events import RunEventAudienceDb, RunEventLevelDb
 from db.models.section_evidence import SectionEvidenceRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
@@ -50,7 +53,7 @@ from embeddings import (
 )
 from langfuse.decorators import observe
 from retrieval.search import search_snippets
-from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -201,9 +204,9 @@ def _embed_texts_batched(
     return embeddings
 
 
-def _parallel_search_sections(
+async def _parallel_search_sections_async(
     section_queries: list[tuple[str, list[list[float]]]],
-    engine,
+    async_engine,
     *,
     tenant_id,
     embedding_model: str,
@@ -213,67 +216,61 @@ def _parallel_search_sections(
     min_required: int,
 ) -> dict[str, list[dict]]:
     """
-    Run search_snippets for each section in parallel.
+    Run search_snippets for each section concurrently using asyncio.gather.
 
-    Each section receives a list of query embeddings (one per search angle).
-    All angles are searched, results merged, and duplicates removed keeping the
-    highest similarity score per snippet.
-
-    Each thread creates its own SQLAlchemy session (sessions are not thread-safe).
+    Each section gets its own AsyncSession. Inside each task, session.run_sync
+    provides the greenlet context that asyncpg requires — no OS threads involved.
     Returns a dict mapping section_id → raw search results.
+
+    Fail-fast: any section error propagates out of gather, aborting the evidence
+    pack. A pgvector error on one section likely indicates a systemic issue and
+    proceeding with partial evidence would silently produce an under-evidenced report.
     """
     parallel = _env_int("EVIDENCE_PACK_PARALLEL_SECTIONS", 4, min_value=1)
+    semaphore = asyncio.Semaphore(parallel)
 
-    def _search_one(
+    async def _search_one(
         section_id: str, query_embeddings: list[list[float]]
     ) -> tuple[str, list[dict]]:
-        with Session(engine) as s:
-            all_results: list[dict] = []
-            for qe in query_embeddings:
-                all_results.extend(
-                    search_snippets(
-                        session=s,
-                        tenant_id=tenant_id,
-                        query_embedding=qe,
-                        embedding_model=embedding_model,
-                        limit=search_limit,
-                        min_similarity=min_similarity,
-                        source_ids=source_ids or None,
-                    )
-                )
-            merged = _dedupe_results(all_results)
-            if len(merged) < min_required:
-                relaxed: list[dict] = []
-                for qe in query_embeddings:
-                    relaxed.extend(
-                        search_snippets(
-                            session=s,
-                            tenant_id=tenant_id,
-                            query_embedding=qe,
-                            embedding_model=embedding_model,
-                            limit=search_limit + 30,
-                            min_similarity=max(0.0, min_similarity - 0.15),
-                            source_ids=source_ids or None,
+        async with semaphore:
+            async with AsyncSession(async_engine, expire_on_commit=False) as s:
+                def _sync(sync_session) -> tuple[str, list[dict]]:
+                    all_results: list[dict] = []
+                    for qe in query_embeddings:
+                        all_results.extend(
+                            search_snippets(
+                                session=sync_session,
+                                tenant_id=tenant_id,
+                                query_embedding=qe,
+                                embedding_model=embedding_model,
+                                limit=search_limit,
+                                min_similarity=min_similarity,
+                                source_ids=source_ids or None,
+                            )
                         )
-                    )
-                merged = _dedupe_results(merged + relaxed)
-        return section_id, merged
+                    merged = _dedupe_results(all_results)
+                    if len(merged) < min_required:
+                        relaxed: list[dict] = []
+                        for qe in query_embeddings:
+                            relaxed.extend(
+                                search_snippets(
+                                    session=sync_session,
+                                    tenant_id=tenant_id,
+                                    query_embedding=qe,
+                                    embedding_model=embedding_model,
+                                    limit=search_limit + 30,
+                                    min_similarity=max(0.0, min_similarity - 0.15),
+                                    source_ids=source_ids or None,
+                                )
+                            )
+                        merged = _dedupe_results(merged + relaxed)
+                    return section_id, merged
 
-    out: dict[str, list[dict]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as executor:
-        futures = {
-            executor.submit(_search_one, section_id, query_embeddings): section_id
-            for section_id, query_embeddings in section_queries
-        }
-        # Fail-fast: any thread exception re-raises here, aborting the entire evidence pack.
-        # This is intentional — a pgvector error on one section likely indicates a systemic issue
-        # (e.g., the embedding model or DB is unavailable) and proceeding with partial evidence
-        # would silently produce an under-evidenced report. Unlike retrieval (Task 4), there is no
-        # graceful degradation path here.
-        for future in concurrent.futures.as_completed(futures):
-            section_id, results = future.result()
-            out[section_id] = results
-    return out
+                return await s.run_sync(_sync)
+
+    tasks = [_search_one(sid, qe) for sid, qe in section_queries]
+    pairs = await asyncio.gather(*tasks)
+    return dict(pairs)
 
 
 def _sha256_hex(text: str) -> str:
@@ -495,21 +492,37 @@ def _persist_section_evidence(
 
 
 @observe(name="evidence_packer")
-@instrument_node("evidence_pack")
-def evidence_pack_node(state: OrchestratorState, session: Session) -> OrchestratorState:
+async def evidence_pack_node(
+    state: OrchestratorState, runtime: "ResearchRuntime"
+) -> OrchestratorState:
     outline = state.outline
     if outline is None or not outline.sections:
         raise ValueError("Outline is required before building evidence packs.")
 
+    # Emit stage_start
+    await runtime.event_store.append(
+        tenant_id=state.tenant_id,
+        run_id=state.run_id,
+        audience=RunEventAudienceDb.progress,
+        event_type="stage_start",
+        level=RunEventLevelDb.info,
+        stage="evidence_pack",
+        message="Starting stage: evidence_pack",
+        payload={"iteration": state.iteration_count},
+    )
+
     embed_client = _get_embed_client()
     embedding_model = embed_client.model_name
 
-    _ensure_snippets_from_abstracts(
-        session,
-        tenant_id=state.tenant_id,
-        vetted_sources=state.vetted_sources,
-        embed_client=embed_client,
-        embedding_model=embedding_model,
+    # Abstract-fallback: write via run_sync (sync ORM helper)
+    await runtime.session.run_sync(
+        lambda s: _ensure_snippets_from_abstracts(
+            s,
+            tenant_id=state.tenant_id,
+            vetted_sources=state.vetted_sources,
+            embed_client=embed_client,
+            embedding_model=embedding_model,
+        )
     )
 
     source_ids = [source.source_id for source in state.vetted_sources]
@@ -551,27 +564,18 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
         section_vector_lists.append((section, all_query_vectors[idx : idx + n]))
         idx += n
 
-    # Commit all pending work (retriever snippets/embeddings + abstract fallback) so that
-    # the per-thread sessions spawned by _parallel_search_sections can see the data.
-    # Without this commit, newly ingested embeddings from the current run are invisible
-    # to the new sessions because they are in an uncommitted transaction.
-    session.commit()
+    # Commit abstract-fallback work so per-section sessions can see the new embeddings.
+    await runtime.session.commit()
 
-    # Parallel: run all section searches concurrently (each thread gets its own session)
-    _bind = session.get_bind()
-    if not isinstance(_bind, Engine):
-        raise TypeError(
-            f"evidence_pack_node requires a session bound to an Engine, got {type(_bind).__name__}. "
-            "Parallel section search requires per-thread sessions constructed from an Engine."
-        )
-    engine = _bind
+    # Parallel search: each section gets its own AsyncSession
+    async_engine = runtime.session.get_bind()
     search_inputs = [
         (section.section_id, query_embeddings)
         for section, query_embeddings in section_vector_lists
     ]
-    section_raw_results = _parallel_search_sections(
+    section_raw_results = await _parallel_search_sections_async(
         search_inputs,
-        engine,
+        async_engine,
         tenant_id=state.tenant_id,
         embedding_model=embedding_model,
         source_ids=source_ids,
@@ -580,7 +584,7 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
         min_required=min_required,
     )
 
-    # Sequential: post-process and persist (DB writes use main session)
+    # Post-process and persist (uses main session)
     for section, _ in section_vector_lists:
         results = section_raw_results.get(section.section_id, [])
         results = sorted(results, key=lambda item: item["similarity"], reverse=True)
@@ -598,12 +602,14 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
             )
 
         snippet_ids = [item["snippet_id"] for item in selected]
-        _persist_section_evidence(
-            session,
-            tenant_id=state.tenant_id,
-            run_id=state.run_id,
-            section_id=section.section_id,
-            snippet_ids=snippet_ids,
+        await runtime.session.run_sync(
+            lambda s, _sid=section.section_id, _snips=snippet_ids: _persist_section_evidence(
+                s,
+                tenant_id=state.tenant_id,
+                run_id=state.run_id,
+                section_id=_sid,
+                snippet_ids=_snips,
+            )
         )
 
         section_refs: list[EvidenceSnippetRef] = []
@@ -629,13 +635,16 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
             section_refs.append(ref)
         section_snippet_refs[section.section_id] = section_refs
 
-        emit_node_progress(
-            session=session,
+        # Emit per-section progress event
+        await runtime.event_store.append(
             tenant_id=state.tenant_id,
             run_id=state.run_id,
+            audience=RunEventAudienceDb.progress,
             event_type="evidence_pack.created",
+            level=RunEventLevelDb.info,
             stage="evidence_pack",
-            data={
+            message="evidence_pack.created: evidence_pack",
+            payload={
                 "section_id": section.section_id,
                 "snippet_count": len(snippet_ids),
             },
@@ -643,4 +652,17 @@ def evidence_pack_node(state: OrchestratorState, session: Session) -> Orchestrat
 
     state.evidence_snippets = list(evidence_refs.values())
     state.section_evidence_snippets = section_snippet_refs
+
+    # Emit stage_finish
+    await runtime.event_store.append(
+        tenant_id=state.tenant_id,
+        run_id=state.run_id,
+        audience=RunEventAudienceDb.progress,
+        event_type="stage_finish",
+        level=RunEventLevelDb.info,
+        stage="evidence_pack",
+        message="Finished stage: evidence_pack",
+        payload={"success": True, "iteration": state.iteration_count},
+    )
+
     return state
