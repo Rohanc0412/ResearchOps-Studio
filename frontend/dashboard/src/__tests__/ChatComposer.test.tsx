@@ -21,6 +21,16 @@ const defaultProps = {
 };
 
 describe("ChatComposer", () => {
+  it("uses Qwen as the default hosted model", () => {
+    expect(DEFAULT_HOSTED_MODEL).toBe("qwen/qwen3.6-plus-preview:free");
+    expect(
+      MODEL_OPTIONS.some(
+        (option) =>
+          option.value === DEFAULT_HOSTED_MODEL && option.label === "Qwen 3.6 Plus (free)",
+      ),
+    ).toBe(true);
+  });
+
   it("renders the message textarea with label", () => {
     render(<ChatComposer {...defaultProps} />);
     expect(screen.getByRole("textbox", { name: "Message input" })).toBeInTheDocument();
