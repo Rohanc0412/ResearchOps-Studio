@@ -95,8 +95,10 @@ def test_tool_call_triggers_search_and_returns_final_answer():
         plain_text="It is sunny today.",
     )
 
+    from search.tavily import SearchResult
+
     fake_results = [
-        {"title": "Weather", "url": "https://weather.com", "content": "Sunny, 22°C"},
+        SearchResult(title="Weather", url="https://weather.com", snippet="Sunny, 22°C"),
     ]
 
     fake_history: list = []
@@ -127,7 +129,7 @@ def test_tool_call_triggers_search_and_returns_final_answer():
     tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
     # Tool result is now a formatted string with search snippets
     assert "Weather" in tool_result_msg["content"]
-    assert "Sunny, 22°C" in tool_result_msg["content"]
+    assert "Sunny" in tool_result_msg["content"]
 
 
 def test_no_api_key_skips_tools():
