@@ -326,7 +326,7 @@ export function ChatViewPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 bg-slate-950 text-slate-200">
+    <div className="flex flex-1 min-h-0 bg-slate-950 text-slate-200">
       {/* Left Panel - Chat */}
       <div className="flex w-[45%] min-h-0 flex-col border-r border-slate-800">
         <ChatViewHeader
