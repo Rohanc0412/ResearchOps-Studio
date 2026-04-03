@@ -38,6 +38,7 @@ services:
     build:
       context: ../..
       dockerfile: backend/deployment/docker/api.Dockerfile
+      target: production
     env_file:
       - ../../.env
     environment:
@@ -46,7 +47,7 @@ services:
       API_PORT: 8000
       AUTH_REQUIRED: "true"
       DEV_BYPASS_AUTH: "false"
-      AUTH_JWT_SECRET: "dev-insecure-secret"
+      AUTH_JWT_SECRET: "${AUTH_JWT_SECRET:-dev-insecure-secret}"
     ports:
       - "8000:8000"
     depends_on:
@@ -58,7 +59,7 @@ services:
           "CMD-SHELL",
           "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\"",
         ]
-      interval: 5m
+      interval: 5s
       timeout: 3s
       retries: 30
 
@@ -66,6 +67,7 @@ services:
     build:
       context: ../..
       dockerfile: backend/deployment/docker/worker.Dockerfile
+      target: production
     gpus: all
     env_file:
       - ../../.env
@@ -87,7 +89,7 @@ services:
       postgres:
         condition: service_healthy
       api:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - hf_cache:/app/.cache/huggingface
       - st_cache:/app/.cache/sentence-transformers

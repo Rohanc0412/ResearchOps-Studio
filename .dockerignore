@@ -12,9 +12,8 @@ coverage-backend
 frontend
 docs
 tests
-test_tmp.db
-test_tmp2.db
-tmp_project_runs_debug.db
+*.db
+*.log
 .coverage
 .env
 **/__pycache__

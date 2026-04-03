@@ -38,6 +38,7 @@ dist/
 coverage.xml
 htmlcov/
 coverage/
+coverage-backend/
 
 # Type checker / tooling caches
 .mypy_cache/

@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
@@ -9,14 +9,24 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+FROM base AS prod-deps
+COPY requirements.prod.txt .
+RUN pip install --no-cache-dir -r requirements.prod.txt
 
+FROM prod-deps AS dev-deps
+COPY requirements.dev.txt .
+RUN pip install --no-cache-dir -r requirements.dev.txt
+
+FROM prod-deps AS production
 COPY backend/. /app
-
 ENV PYTHONPATH=/app/services/api:/app/services/orchestrator:/app/services/workers:/app/libs:/app/libs/research_rules:/app/data
 ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
-
 EXPOSE 8000
+CMD ["python", "-m", "main"]
 
+FROM dev-deps AS dev
+COPY backend/. /app
+ENV PYTHONPATH=/app/services/api:/app/services/orchestrator:/app/services/workers:/app/libs:/app/libs/research_rules:/app/data
+ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
+EXPOSE 8000
 CMD ["python", "-m", "main"]

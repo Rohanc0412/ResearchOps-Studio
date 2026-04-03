@@ -1,0 +1,7 @@
+services:
+  api:
+    build:
+      target: dev
+  worker:
+    build:
+      target: dev
