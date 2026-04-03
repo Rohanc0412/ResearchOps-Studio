@@ -290,7 +290,7 @@ export function ChatViewPage() {
   // ── Loading / error states ─────────────────────────────────────────────────
   if (project.isLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex flex-1 items-center justify-center">
         <Spinner label="Loading..." />
       </div>
     );
@@ -311,7 +311,7 @@ export function ChatViewPage() {
 
   if (conversations.isLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex flex-1 items-center justify-center">
         <Spinner label="Loading conversation..." />
       </div>
     );
@@ -319,7 +319,7 @@ export function ChatViewPage() {
 
   if (!chat) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex flex-1 items-center justify-center">
         <div className="text-slate-400">Chat not found</div>
       </div>
     );
