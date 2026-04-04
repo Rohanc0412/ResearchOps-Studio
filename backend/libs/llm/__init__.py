@@ -208,6 +208,11 @@ class OpenAICompatibleClient:
         model = self.model_name.strip().lower()
         return model.startswith("gpt-5") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4")
 
+    def _temperature_unsupported(self) -> bool:
+        """Models that only accept the default temperature (1) and reject any other value."""
+        model = self.model_name.strip().lower()
+        return self._uses_max_completion_tokens() or "nano" in model
+
     def _build_base_payload(self, messages: list[dict], max_tokens: int, temperature: float) -> dict:
         payload: dict = {
             "model": self._request_model_name(),
@@ -217,6 +222,7 @@ class OpenAICompatibleClient:
             payload["max_completion_tokens"] = max_tokens
         else:
             payload["max_tokens"] = max_tokens
+        if not self._temperature_unsupported():
             payload["temperature"] = temperature
         return payload
 
