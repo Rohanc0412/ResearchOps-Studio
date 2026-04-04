@@ -122,4 +122,98 @@ describe("buildResearchProgressCardModel", () => {
 
     expect(queryTickRows).toHaveLength(2);
   });
+
+  it("fallback step labels show outline first, then search", () => {
+    const model = buildResearchProgressCardModel({
+      activeRun: { status: "running", primaryText: "Running" },
+      chatTitle: null,
+      messages: [],
+      events: [],
+    });
+    expect(model.steps[0].label.toLowerCase()).toContain("plan");
+    expect(model.steps[1].label.toLowerCase()).toContain("search");
+  });
+
+  it("outline step is current when outline stage event arrives", () => {
+    const model = buildResearchProgressCardModel({
+      activeRun: { status: "running", primaryText: "Running" },
+      chatTitle: null,
+      messages: [],
+      events: [
+        {
+          ts: "2026-01-01T00:00:00Z",
+          level: "info",
+          stage: "outline",
+          audience: "progress",
+          event_type: "stage_start",
+          message: "Starting stage: outline",
+          payload: {},
+        },
+      ],
+    });
+    expect(model.steps[0].state).toBe("current");
+    expect(model.steps[1].state).toBe("pending");
+  });
+
+  it("retrieve step is current when retrieve stage event arrives", () => {
+    const model = buildResearchProgressCardModel({
+      activeRun: { status: "running", primaryText: "Running" },
+      chatTitle: null,
+      messages: [],
+      events: [
+        {
+          ts: "2026-01-01T00:00:00Z",
+          level: "info",
+          stage: "retrieve",
+          audience: "progress",
+          event_type: "stage_start",
+          message: "Starting stage: retrieve",
+          payload: {},
+        },
+      ],
+    });
+    expect(model.steps[0].state).toBe("complete");
+    expect(model.steps[1].state).toBe("current");
+  });
+
+  it("step_labels are read from outline.created event", () => {
+    const labels = ["a", "b", "c", "d", "e", "f"];
+    const model = buildResearchProgressCardModel({
+      activeRun: { status: "running", primaryText: "Running" },
+      chatTitle: null,
+      messages: [],
+      events: [
+        {
+          ts: "2026-01-01T00:00:00Z",
+          level: "info",
+          stage: "outline",
+          audience: "progress",
+          event_type: "outline.created",
+          message: "outline.created",
+          payload: { step_labels: labels, section_count: 5 },
+        },
+      ],
+    });
+    expect(model.steps.map((s) => s.label)).toEqual(labels);
+  });
+
+  it("step_labels fall back to hardcoded when outline.created has none", () => {
+    const model = buildResearchProgressCardModel({
+      activeRun: { status: "running", primaryText: "Running" },
+      chatTitle: null,
+      messages: [],
+      events: [
+        {
+          ts: "2026-01-01T00:00:00Z",
+          level: "info",
+          stage: "outline",
+          audience: "progress",
+          event_type: "outline.created",
+          message: "outline.created",
+          payload: { section_count: 5 },
+        },
+      ],
+    });
+    expect(model.steps[0].label.toLowerCase()).toContain("plan");
+  });
 });

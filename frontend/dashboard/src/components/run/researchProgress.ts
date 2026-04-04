@@ -45,8 +45,8 @@ type BuildResearchProgressCardModelArgs = {
 };
 
 const STAGE_TO_STEP_INDEX: Record<string, number> = {
-  retrieve: 0,
-  outline: 1,
+  outline: 0,
+  retrieve: 1,
   evidence_pack: 2,
   draft: 3,
   repair: 3,
@@ -57,8 +57,8 @@ const STAGE_TO_STEP_INDEX: Record<string, number> = {
 };
 
 const FALLBACK_STEP_LABELS: string[] = [
-  "Search papers and rank the best sources.",
   "Plan the report structure and sections.",
+  "Search papers and rank the best sources.",
   "Find supporting snippets for each section.",
   "Write each section with citations.",
   "Check quality and fix weak sections.",
@@ -127,8 +127,8 @@ export function buildResearchProgressCardModel({
   const contractEvents = filterProgressContractEvents(events);
   const title = deriveResearchTitle(activeRun?.question, messages, chatTitle);
 
-  // Read LLM-planned labels from the first retrieve.plan_created progress event.
-  const planEvent = contractEvents.find((e) => e.event_type === "retrieve.plan_created");
+  // Read LLM-planned labels from the outline.created event (outliner runs first).
+  const planEvent = contractEvents.find((e) => e.event_type === "outline.created");
   const rawLabels = planEvent?.payload?.["step_labels"];
   const stepLabels: string[] = (
     Array.isArray(rawLabels) &&
