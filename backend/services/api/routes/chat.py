@@ -273,7 +273,7 @@ def _generate_quick_answer(
         if use_tools:
             messages = [{"role": "user", "content": prompt}]
             first_message = client.generate_with_tools(
-                messages, [WEB_SEARCH_TOOL], max_tokens=512, temperature=0.4
+                messages, [WEB_SEARCH_TOOL], max_tokens=10000, temperature=0.4
             )
             tool_calls = first_message.get("tool_calls") or []
             if tool_calls:
@@ -313,17 +313,25 @@ def _generate_quick_answer(
                     }
                 )
                 final_message = client.generate_with_tools(
-                    messages, [WEB_SEARCH_TOOL], max_tokens=512, temperature=0.4,
+                    messages, [WEB_SEARCH_TOOL], max_tokens=10000, temperature=0.4,
                     tool_choice="none",
                 )
                 response_text = (final_message.get("content") or "").strip()
             else:
                 response_text = (first_message.get("content") or "").strip()
+            # Fall back to direct generate if tools path yielded no content
+            if not response_text:
+                response_text = client.generate(
+                    prompt,
+                    system="You are a helpful research assistant. Answer concisely and helpfully.",
+                    max_tokens=10000,
+                    temperature=0.4,
+                ).strip()
         else:
             response_text = client.generate(
                 prompt,
                 system="You are a helpful research assistant. Answer concisely and helpfully.",
-                max_tokens=512,
+                max_tokens=10000,
                 temperature=0.4,
             ).strip()
 
