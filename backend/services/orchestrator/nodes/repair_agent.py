@@ -42,20 +42,21 @@ REPAIR_SCHEMA = {
         "section_id": {"type": "string"},
         "revised_text": {"type": "string"},
         "revised_summary": {"type": "string"},
-        "next_section_id": {"type": "string"},
-        "patched_next_text": {"type": "string"},
-        "patched_next_summary": {"type": "string"},
-        "edits_json": {"type": "object"},
+        "self_check": {
+            "type": "object",
+            "properties": {
+                "factual_sentence_count": {"type": "integer"},
+                "supported_sentence_count": {"type": "integer"},
+                "estimated_grounding_pct": {"type": "integer"},
+            },
+            "required": [
+                "factual_sentence_count",
+                "supported_sentence_count",
+                "estimated_grounding_pct",
+            ],
+        },
     },
-    "required": [
-        "section_id",
-        "revised_text",
-        "revised_summary",
-        "next_section_id",
-        "patched_next_text",
-        "patched_next_summary",
-        "edits_json",
-    ],
+    "required": ["section_id", "revised_text", "revised_summary", "self_check"],
     "additionalProperties": False,
 }
 
@@ -372,89 +373,43 @@ def _repair_with_llm(
     prior_summary: str | None,
     issues: list[dict],
     evidence_snippets: list[EvidenceSnippetRef],
-    next_section: OutlineSection | None,
-    next_section_text: str | None,
-    next_section_summary: str | None,
-    next_section_snippets: list[EvidenceSnippetRef] | None,
 ) -> dict:
-    if next_section is not None and next_section_text is not None:
-        next_section_context = (
-            f"Next Section ID: {next_section.section_id}\n"
-            f"Next Section Title: {next_section.title}\n"
-            f"Next Section Text:\n{next_section_text}\n\n"
-            f"Next Section Summary:\n{next_section_summary or ''}\n\n"
-            "Evidence pack snippets for next section:\n"
-            + json.dumps(
-                _build_snippet_payload(next_section_snippets or []),
-                indent=2,
-                ensure_ascii=True,
-            )
-            + "\n\n"
-            "Continuity patch rules (next section):\n"
-            "- ALWAYS patch the first two sentences only.\n"
-            "- Keep every character after sentence 1 identical to the original next_section_text.\n"
-            "- Do NOT introduce new claims.\n"
-            "- If patched sentences are factual, cite using next section evidence pack.\n"
-            "- Narrative transitions may be uncited.\n"
-            "- Update patched_next_summary only if needed for consistency.\n"
-        )
-    else:
-        next_section_context = (
-            "There is no eligible next section to patch. Repair only the current section.\n"
-            'Return "" for next_section_id, patched_next_text, and patched_next_summary.\n'
-            'Set edits_json.continuity_patch to null.\n\n'
-        )
-
     prompt = (
-        "Repair the current section and, if an eligible next section exists, apply a continuity patch to it.\n"
-        "Return ONLY JSON with this schema:\n"
-        "{\n"
-        '  "section_id": "...",\n'
-        '  "revised_text": "...",\n'
-        '  "revised_summary": "...",\n'
-        '  "next_section_id": "...",\n'
-        '  "patched_next_text": "...",\n'
-        '  "patched_next_summary": "...",\n'
-        '  "edits_json": {\n'
-        '    "repaired_section_edits": [\n'
-        '      { "sentence_index": 0, "before": "...", "after": "...", "change_type": "..." }\n'
-        "    ],\n"
-        '    "continuity_patch": {\n'
-        '      "next_section_id": "...",\n'
-        '      "before_first_two_sentences": "...",\n'
-        '      "after_first_two_sentences": "..."\n'
-        "    }\n"
-        "  }\n"
-        "}\n\n"
-        f"Current Section ID: {section.section_id}\n"
-        f"Current Section Title: {section.title}\n"
-        f"Current Section Text:\n{section_text}\n\n"
-        f"Current Section Summary:\n{section_summary}\n\n"
-        "Prior Section Summary (if any):\n"
+        "This section FAILED a 70% grounding evaluation. Rewrite it entirely so that it PASSES.\n\n"
+        "GROUNDING RULE (same definition the evaluator uses):\n"
+        "  grounding_score = supported_factual_sentences / total_factual_sentences \u00d7 100\n"
+        "  You MUST achieve grounding_score > 70.\n"
+        "  Transitional sentences with no factual claim are excluded from the count.\n\n"
+        f"Section ID: {section.section_id}\n"
+        f"Section Title: {section.title}\n"
+        f"Section Goal: {section.goal}\n"
+        "Prior Section Summary (for narrative transitions only, not as a fact source):\n"
         f"{prior_summary or 'NONE'}\n\n"
-        "Evaluator Issues:\n"
+        "Evaluator found these issues (use as guidance):\n"
         + json.dumps(issues, indent=2, ensure_ascii=True)
         + "\n\n"
-        "Evidence pack snippets for current section:\n"
+        "Current section text:\n"
+        + section_text
+        + "\n\n"
+        "Evidence snippets (the ONLY source of facts you may use):\n"
         + json.dumps(_build_snippet_payload(evidence_snippets), indent=2, ensure_ascii=True)
         + "\n\n"
-        + next_section_context
-        + "Rules:\n"
-        + "- Fix ONLY sentences referenced by sentence_index.\n"
-        + "- Do NOT modify sentences outside those indexes.\n"
-        + "- Do NOT add new claims not present in the original section text.\n"
-        + "- If unsupported: remove or rewrite to match evidence.\n"
-        + "- If overstated: soften language and add citations if factual.\n"
-        + "- If missing_citation: add citation tokens at the end.\n"
-        + "- If invalid_citation or not_in_pack: replace with valid snippet_id or remove.\n"
-        + "- Every factual sentence must end with citation token(s).\n"
-        + "- Citations only at the end of sentences.\n"
-        + "- No headings, bullet lists, or markdown.\n\n"
-        + "Micro-summary rules:\n"
-        + "- Provide 1 to 3 sentences as plain text.\n"
-        + "- No citations.\n"
-        + "- No new facts not in revised_text.\n\n"
-        + "- Do NOT include commentary outside JSON.\n"
+        "Rules:\n"
+        "- Every factual sentence MUST be supported by at least one snippet and end with [CITE:snippet_id].\n"
+        "- If a claim cannot be supported by any snippet, remove the sentence.\n"
+        "- You MAY restructure, combine, or reorder sentences.\n"
+        "- Do NOT invent facts not present in the snippets.\n"
+        "- Narrative transitions (no facts, no names, no numbers) may be uncited.\n"
+        "- No headings, bullet lists, or markdown in revised_text.\n"
+        "- Use the exact snippet_id values from the evidence list.\n"
+        "- Multiple citations: separate tokens [CITE:id1] [CITE:id2].\n"
+        "- Citations at the very end of the sentence, after final punctuation.\n\n"
+        "Self-check (REQUIRED before returning):\n"
+        "1. Count every factual sentence in your revised_text.\n"
+        "2. Verify each one is supported by a provided snippet.\n"
+        "3. Compute: supported / total \u00d7 100.\n"
+        "4. If the result is \u2264 70, revise again until it exceeds 70.\n"
+        "5. Report the final counts in self_check.\n"
     )
     system = "You repair evidence-grounded drafts and return strict JSON only."
     log_llm_exchange("request", prompt, stage="repair", section_id=section.section_id, logger=logger)
@@ -563,24 +518,13 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
         if section_index > 0:
             prior_summary = section_summaries.get(ordered_ids[section_index - 1], "")
 
-        next_section_id: str | None = None
-        next_section: OutlineSection | None = None
-        next_text: str | None = None
-        next_summary: str | None = None
-        if section_index + 1 < len(ordered_ids):
-            next_section_id = ordered_ids[section_index + 1]
-            next_section = outline_by_id[next_section_id]
-            next_text = section_texts.get(next_section_id, "")
-            next_summary = section_summaries.get(next_section_id, "")
-            if not next_text:
-                raise ValueError(f"Draft section missing for {next_section_id}")
-        should_patch_next = (
-            next_section_id is not None and next_section_id not in failing_section_ids
-        )
-        patch_target_section_id = next_section_id if should_patch_next else None
-        patch_target_section = next_section if should_patch_next else None
-        patch_target_text = next_text if should_patch_next else None
-        patch_target_summary = next_summary if should_patch_next else None
+        # Continuity patch is disabled: modifying passing sections risks reducing their
+        # grounding score. Repairs go directly to re-evaluation without touching
+        # any section that was not itself failing.
+        patch_target_section_id: str | None = None
+        patch_target_section: OutlineSection | None = None
+        patch_target_text: str | None = None
+        patch_target_summary: str | None = None
 
         section_snippets = _load_section_snippets(
             session,
@@ -590,14 +534,6 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             state_snippets=state.section_evidence_snippets,
         )
         next_snippets: list[EvidenceSnippetRef] = []
-        if patch_target_section_id is not None:
-            next_snippets = _load_section_snippets(
-                session,
-                tenant_id=state.tenant_id,
-                run_id=state.run_id,
-                section_id=patch_target_section_id,
-                state_snippets=state.section_evidence_snippets,
-            )
 
         sentence_count = len(_split_into_sentences(original_text))
         has_invalid_indexes = any(
@@ -608,24 +544,11 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             revised_text, edits = _remove_issue_sentences(original_text, issue_indices)
             revised_text = _strip_citations(revised_text).replace("  ", " ").strip()
             revised_summary = _summary_from_text(revised_text)
-            patched_next_text = ""
-            patched_next_summary = ""
-            patch_log = None
-            if (
-                patch_target_section_id is not None
-                and patch_target_text is not None
-                and patch_target_section is not None
-            ):
-                patched_next_text, patched_next_summary, patch_log = _patch_next_section_narrative(
-                    next_section_id=patch_target_section_id,
-                    next_section_text=patch_target_text,
-                    revised_summary=revised_summary,
-                    next_section_title=patch_target_section.title,
-                )
-            edits_json = {
-                "repaired_section_edits": edits,
-                "continuity_patch": patch_log,
-            }
+            if has_invalid_indexes:
+                revised_text = original_text
+                if original_summary:
+                    revised_summary = original_summary
+            log_entry: dict = {"repaired_section_edits": edits}
         else:
             repair_payload = _repair_with_llm(
                 llm_client,
@@ -635,39 +558,21 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
                 prior_summary=prior_summary,
                 issues=issues,
                 evidence_snippets=section_snippets,
-                next_section=patch_target_section,
-                next_section_text=patch_target_text,
-                next_section_summary=patch_target_summary,
-                next_section_snippets=next_snippets,
             )
-
             repaired_id = str(repair_payload.get("section_id", "")).strip()
             if repaired_id and repaired_id != section_id:
                 raise ValueError(f"Repair response section_id mismatch for {section_id}")
             revised_text = str(repair_payload.get("revised_text", "")).strip()
             revised_summary = str(repair_payload.get("revised_summary", "")).strip()
-            patched_next_id = str(repair_payload.get("next_section_id", "")).strip()
-            if patch_target_section_id is None:
-                if patched_next_id:
-                    raise ValueError(
-                        "Repair response returned next_section_id without an eligible continuity target."
-                    )
-            patched_next_text = str(repair_payload.get("patched_next_text", "")).strip()
-            patched_next_summary = str(repair_payload.get("patched_next_summary", "")).strip()
-            if patch_target_section_id is not None:
-                if patched_next_id != patch_target_section_id or not patched_next_text:
-                    raise ValueError(
-                        "Repair response must include a next-section continuity patch "
-                        "for sections with an eligible continuity target."
-                    )
-            edits_json = (
-                repair_payload.get("edits_json") if isinstance(repair_payload, dict) else None
-            )
-
-        if has_invalid_indexes:
-            revised_text = original_text
-            if original_summary:
-                revised_summary = original_summary
+            self_check = repair_payload.get("self_check") or {}
+            estimated_pct = self_check.get("estimated_grounding_pct", 100)
+            if isinstance(estimated_pct, int) and estimated_pct <= 70:
+                logger.warning(
+                    "Repair self-check below threshold for %s: estimated %d%%",
+                    section_id,
+                    estimated_pct,
+                )
+            log_entry = self_check if isinstance(self_check, dict) else {}
 
         _persist_draft_section(
             session,
@@ -677,24 +582,10 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             text=revised_text,
             summary=revised_summary,
         )
-        if patch_target_section_id is not None:
-            _persist_draft_section(
-                session,
-                tenant_id=state.tenant_id,
-                run_id=state.run_id,
-                section_id=patch_target_section_id,
-                text=patched_next_text,
-                summary=patched_next_summary,
-            )
-
         section_texts[section_id] = revised_text
         section_summaries[section_id] = revised_summary
-        if patch_target_section_id is not None:
-            section_texts[patch_target_section_id] = patched_next_text
-            section_summaries[patch_target_section_id] = patched_next_summary
-
-        if isinstance(edits_json, dict):
-            repair_logs.append(edits_json)
+        if log_entry:
+            repair_logs.append(log_entry)
 
     report_title = (state.outline and state.outline.report_title) or f"Research Report: {state.user_query}"
     draft_lines: list[str] = [f"# {report_title}", ""]

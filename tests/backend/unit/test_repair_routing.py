@@ -327,19 +327,10 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, monk
                     "section_id": "conclusion",
                     "revised_text": "Conclusion fixed with evidence [CITE:11111111-1111-1111-1111-111111111111].",
                     "revised_summary": "Fixed conclusion.\nStill concise.",
-                    "next_section_id": "",
-                    "patched_next_text": "",
-                    "patched_next_summary": "",
-                    "edits_json": {
-                        "repaired_section_edits": [
-                            {
-                                "sentence_index": 0,
-                                "before": "Unsupported conclusion sentence.",
-                                "after": "Conclusion fixed with evidence [CITE:11111111-1111-1111-1111-111111111111].",
-                                "change_type": "replace",
-                            }
-                        ],
-                        "continuity_patch": None,
+                    "self_check": {
+                        "factual_sentence_count": 1,
+                        "supported_sentence_count": 1,
+                        "estimated_grounding_pct": 100,
                     },
                 }
             )
@@ -436,7 +427,7 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
     class StubLLM:
         def generate(self, prompt, **_kwargs):
             prompts.append(prompt)
-            if "Current Section ID: intro" in prompt:
+            if "Section ID: intro" in prompt:
                 return json.dumps(
                     {
                         "section_id": "intro",
@@ -445,22 +436,10 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
                             "[CITE:11111111-1111-1111-1111-111111111111]."
                         ),
                         "revised_summary": "Fixed intro.\nStill concise.",
-                        "next_section_id": "",
-                        "patched_next_text": "",
-                        "patched_next_summary": "",
-                        "edits_json": {
-                            "repaired_section_edits": [
-                                {
-                                    "sentence_index": 0,
-                                    "before": "Unsupported intro sentence.",
-                                    "after": (
-                                        "Intro fixed with evidence "
-                                        "[CITE:11111111-1111-1111-1111-111111111111]."
-                                    ),
-                                    "change_type": "replace",
-                                }
-                            ],
-                            "continuity_patch": None,
+                        "self_check": {
+                            "factual_sentence_count": 1,
+                            "supported_sentence_count": 1,
+                            "estimated_grounding_pct": 100,
                         },
                     }
                 )
@@ -472,22 +451,10 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
                         "[CITE:22222222-2222-2222-2222-222222222222]."
                     ),
                     "revised_summary": "Fixed methods.\nStill concise.",
-                    "next_section_id": "",
-                    "patched_next_text": "",
-                    "patched_next_summary": "",
-                    "edits_json": {
-                        "repaired_section_edits": [
-                            {
-                                "sentence_index": 0,
-                                "before": "Unsupported methods sentence.",
-                                "after": (
-                                    "Methods fixed with evidence "
-                                    "[CITE:22222222-2222-2222-2222-222222222222]."
-                                ),
-                                "change_type": "replace",
-                            }
-                        ],
-                        "continuity_patch": None,
+                    "self_check": {
+                        "factual_sentence_count": 1,
+                        "supported_sentence_count": 1,
+                        "estimated_grounding_pct": 100,
                     },
                 }
             )
@@ -616,15 +583,15 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
 
     assert result.repair_attempts == 1
     assert len(prompts) == 2
-    assert "There is no eligible next section to patch." in prompts[0]
-    assert "Next Section ID: methods" not in prompts[0]
+    assert "FAILED a 70% grounding evaluation" in prompts[0]
+    assert "Section ID: intro" in prompts[0]
     assert "Intro fixed with evidence" in repaired_intro.text
     assert repaired_methods.text == (
         "Methods fixed with evidence [CITE:22222222-2222-2222-2222-222222222222]."
     )
 
 
-def test_repair_agent_requires_next_section_patch_for_non_final_section(db_session, monkeypatch):
+def test_repair_agent_does_not_modify_passing_section_after_failing_section(db_session, monkeypatch):
     from nodes.repair_agent import repair_agent_node
     import nodes.repair_agent as repair_module
 
@@ -639,19 +606,10 @@ def test_repair_agent_requires_next_section_patch_for_non_final_section(db_sessi
                     "section_id": "intro",
                     "revised_text": "Intro fixed with evidence [CITE:11111111-1111-1111-1111-111111111111].",
                     "revised_summary": "Fixed intro.\nStill concise.",
-                    "next_section_id": "",
-                    "patched_next_text": "",
-                    "patched_next_summary": "",
-                    "edits_json": {
-                        "repaired_section_edits": [
-                            {
-                                "sentence_index": 0,
-                                "before": "Unsupported intro sentence.",
-                                "after": "Intro fixed with evidence [CITE:11111111-1111-1111-1111-111111111111].",
-                                "change_type": "replace",
-                            }
-                        ],
-                        "continuity_patch": None,
+                    "self_check": {
+                        "factual_sentence_count": 1,
+                        "supported_sentence_count": 1,
+                        "estimated_grounding_pct": 100,
                     },
                 }
             )
@@ -742,5 +700,30 @@ def test_repair_agent_requires_next_section_patch_for_non_final_section(db_sessi
         },
     )
 
-    with pytest.raises(ValueError, match="must include a next-section continuity patch"):
-        repair_agent_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
+    # Continuity patch is disabled: the passing "next" section must not be touched.
+    result = repair_agent_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
+
+    assert result.repair_attempts == 1
+
+    repaired_intro = (
+        db_session.query(DraftSectionRow)
+        .filter(
+            DraftSectionRow.tenant_id == tenant_id,
+            DraftSectionRow.run_id == run_id,
+            DraftSectionRow.section_id == "intro",
+        )
+        .one()
+    )
+    untouched_next = (
+        db_session.query(DraftSectionRow)
+        .filter(
+            DraftSectionRow.tenant_id == tenant_id,
+            DraftSectionRow.run_id == run_id,
+            DraftSectionRow.section_id == "next",
+        )
+        .one()
+    )
+
+    assert "Intro fixed with evidence" in repaired_intro.text
+    # Passing section must be byte-for-byte identical to the original draft.
+    assert untouched_next.text == "Next section opening. Next section detail."
