@@ -98,3 +98,17 @@ def test_build_query_plan_with_llm_no_outline_uses_question_only_prompt():
 
     prompt = mock_client.generate.call_args[0][0]
     assert "section:" not in prompt
+
+
+from unittest.mock import MagicMock as _MagicMock
+from graph import create_orchestrator_graph
+
+
+def test_graph_outliner_connects_to_retriever():
+    mock_runtime = _MagicMock()
+    graph = create_orchestrator_graph(mock_runtime)
+    drawn = graph.get_graph()
+    edge_pairs = [(e.source, e.target) for e in drawn.edges]
+    assert ("outliner", "retriever") in edge_pairs
+    assert ("retriever", "evidence_pack") in edge_pairs
+    assert ("retriever", "outliner") not in edge_pairs

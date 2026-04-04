@@ -37,8 +37,8 @@ def create_orchestrator_graph(runtime) -> StateGraph:
     Create the orchestrator StateGraph.
 
     Graph structure:
-    1. Retriever
-    2. Outliner
+    1. Outliner
+    2. Retriever
     3. EvidencePack
     4. Writer
     5. Evaluator -> (STOP_SUCCESS -> Exporter -> END)
@@ -77,11 +77,11 @@ def create_orchestrator_graph(runtime) -> StateGraph:
     workflow.add_node("exporter", wrap_node("exporter", exporter_node))
 
     # Set entry point
-    workflow.set_entry_point("retriever")
+    workflow.set_entry_point("outliner")
 
-    # Linear flow: retriever -> outliner -> evidence_pack -> writer
-    workflow.add_edge("retriever", "outliner")
-    workflow.add_edge("outliner", "evidence_pack")
+    # Linear flow: outliner -> retriever -> evidence_pack -> writer
+    workflow.add_edge("outliner", "retriever")
+    workflow.add_edge("retriever", "evidence_pack")
     workflow.add_edge("evidence_pack", "writer")
 
     # Evaluation pipeline: writer -> evaluator
