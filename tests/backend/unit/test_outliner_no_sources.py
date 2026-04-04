@@ -24,6 +24,47 @@ def test_collect_keywords_no_sources_uses_fallback_text():
     assert any(w in all_words for w in ["transformer", "attention", "neural", "mechanism"])
 
 
+def test_outliner_llm_response_includes_step_labels():
+    mock_client = MagicMock()
+    mock_client.generate.return_value = (
+        '{"report_title": "NLP Advances", '
+        '"step_labels": ["Plan report structure", "Search relevant papers", '
+        '"Extract evidence per section", "Draft each section", '
+        '"Check quality", "Export final report"], '
+        '"sections": [{"section_id": "intro", "title": "Introduction", '
+        '"goal": "Set context", "key_points": ["a"], '
+        '"suggested_evidence_themes": ["b"], "section_order": 1}]}'
+    )
+    result = _generate_outline_with_llm(
+        user_query="What are the latest NLP advances?",
+        vetted_sources=[],
+        llm_client=mock_client,
+        run_id="test-run",
+    )
+    assert result is not None
+    assert result.step_labels is not None
+    assert len(result.step_labels) == 6
+    assert result.step_labels[0] == "Plan report structure"
+
+
+def test_outliner_prompt_asks_for_step_labels():
+    mock_client = MagicMock()
+    mock_client.generate.return_value = (
+        '{"report_title": "Test", "step_labels": ["a","b","c","d","e","f"], '
+        '"sections": [{"section_id": "intro", "title": "Intro", "goal": "g", '
+        '"key_points": [], "suggested_evidence_themes": [], "section_order": 1}]}'
+    )
+    _generate_outline_with_llm(
+        user_query="Test question",
+        vetted_sources=[],
+        llm_client=mock_client,
+        run_id="test-run",
+    )
+    prompt = mock_client.generate.call_args[0][0]
+    assert "step_labels" in prompt
+    assert "6" in prompt
+
+
 def test_generate_outline_prompt_question_only_when_no_sources():
     mock_client = MagicMock()
     mock_client.generate.return_value = (

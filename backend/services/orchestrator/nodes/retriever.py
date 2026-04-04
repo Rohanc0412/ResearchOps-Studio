@@ -1222,61 +1222,6 @@ def _create_run_checkpoint(
     session.flush()
 
 
-def _plan_step_labels(
-    question: str,
-    llm_provider: str | None,
-    llm_model: str | None,
-    stage_models: dict[str, str | None] | None = None,
-) -> list[str] | None:
-    """Return 6 LLM-planned step labels tailored to the research question.
-
-    Returns None on any error so the caller can fall back to hardcoded labels.
-    Never raises.
-    """
-    try:
-        llm_client = get_llm_client_for_stage(
-            "retrieve", llm_provider, llm_model, stage_models=stage_models
-        )
-        if llm_client is None:
-            return None
-
-        system = (
-            "You are a research pipeline planner. Write exactly 6 short action phrases "
-            "(max 10 words each) describing the steps of a research pipeline for the given "
-            "question. The 6 steps are always: (1) search papers, (2) outline the report, "
-            "(3) package evidence per section, (4) draft each section, (5) evaluate quality, "
-            "(6) export the report. Tailor each phrase to the specific question. "
-            "Return a JSON array of exactly 6 strings. No other output."
-        )
-        response = llm_client.generate(
-            question,
-            system=system,
-            max_tokens=300,
-            temperature=0.3,
-        )
-        payload = extract_json_payload(response)
-        if (
-            isinstance(payload, list)
-            and len(payload) == 6
-            and all(isinstance(s, str) for s in payload)
-        ):
-            return [s.strip() for s in payload]
-        logger.warning(
-            "Step label planning returned unexpected shape",
-            extra={
-                "event": "pipeline.llm.step_labels",
-                "payload_type": type(payload).__name__,
-            },
-        )
-        return None
-    except Exception as exc:
-        logger.warning(
-            "Step label planning failed, using fallback labels",
-            extra={"event": "pipeline.llm.step_labels", "reason": str(exc)},
-        )
-        return None
-
-
 def _parallel_mcp_search(
     query_plan: list,
     connector,
@@ -1319,12 +1264,6 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
 
     _cancel_check()
     question = state.user_query
-    state.step_labels = _plan_step_labels(
-        question=question,
-        llm_provider=state.llm_provider,
-        llm_model=state.llm_model,
-        stage_models=state.stage_models,
-    )
 
     query_plan, llm_used = _build_query_plan(
         question=question,
@@ -1345,7 +1284,6 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         data={
             "query_count": len(query_plan),
             "queries": [{"intent": p.intent, "query": p.query} for p in query_plan],
-            "step_labels": state.step_labels,
             "llm_used": llm_used,
         },
     )

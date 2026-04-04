@@ -35,6 +35,12 @@ OUTLINE_SCHEMA = {
     "type": "object",
     "properties": {
         "report_title": {"type": "string"},
+        "step_labels": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 6,
+            "maxItems": 6,
+        },
         "sections": {
             "type": "array",
             "minItems": 1,
@@ -63,7 +69,7 @@ OUTLINE_SCHEMA = {
             },
         }
     },
-    "required": ["report_title", "sections"],
+    "required": ["report_title", "step_labels", "sections"],
     "additionalProperties": False,
 }
 
@@ -94,16 +100,24 @@ def outliner_node(state: OrchestratorState, session: Session) -> OrchestratorSta
     outline = _normalize_outline(outline)
     _persist_outline(session, state.tenant_id, state.run_id, outline)
 
+    step_labels = outline.step_labels if outline.step_labels and len(outline.step_labels) == 6 else None
+
     emit_node_progress(
         session=session,
         tenant_id=state.tenant_id,
         run_id=state.run_id,
         event_type="outline.created",
         stage="outline",
-        data={"run_id": str(state.run_id), "section_count": len(outline.sections)},
+        data={
+            "run_id": str(state.run_id),
+            "section_count": len(outline.sections),
+            "step_labels": step_labels,
+        },
     )
 
     state.outline = outline
+    if step_labels:
+        state.step_labels = step_labels
     return state
 
 

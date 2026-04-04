@@ -63,6 +63,7 @@ class OutlineModel(BaseModel):
     sections: list[OutlineSection]
     total_estimated_words: int | None = None
     report_title: str | None = None
+    step_labels: list[str] | None = None
 
 
 class Claim(BaseModel):
