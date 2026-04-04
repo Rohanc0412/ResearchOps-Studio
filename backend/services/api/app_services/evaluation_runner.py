@@ -8,6 +8,7 @@ Computes three quality metrics independently of the LangGraph pipeline:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -241,19 +242,29 @@ class EvaluationRunner:
             snippets = [{"snippet_id": str(row.id), "text": _truncate(row.text or "", 800)} for row in snippet_rows]
             allowed_ids = {snippet["snippet_id"] for snippet in snippets}
 
+            yield {
+                "type": "evaluation.section_started",
+                "section_id": section_id,
+                "section_title": section_titles.get(section_id, section_id),
+            }
+
             verdict = "pass"
             issues: list[dict] = []
             grounding_score = 100
 
             if llm_client is not None:
                 try:
-                    grounding_score, verdict, issues = self._grade_section(
-                        llm_client,
-                        section_id=section_id,
-                        section_title=section_titles.get(section_id, section_id),
-                        section_text=section_text,
-                        snippets=snippets,
-                        allowed_ids=allowed_ids,
+                    _section_id = section_id
+                    _section_title = section_titles.get(section_id, section_id)
+                    grounding_score, verdict, issues = await asyncio.to_thread(
+                        lambda: self._grade_section(
+                            llm_client,
+                            section_id=_section_id,
+                            section_title=_section_title,
+                            section_text=section_text,
+                            snippets=snippets,
+                            allowed_ids=allowed_ids,
+                        )
                     )
                 except Exception:
                     logger.warning("LLM grading failed for section %s; defaulting to pass.", section_id, exc_info=True)
@@ -593,11 +604,20 @@ class EvaluationRunner:
             if not section_text.strip():
                 continue
 
+            yield {
+                "type": "evaluation.faithfulness_section_started",
+                "section_id": section_id,
+                "section_title": section_title,
+            }
+
+            _section_title = section_title
             try:
-                claims = self._extract_section_claims(
-                    llm_client=llm_client,
-                    section_title=section_title,
-                    section_text=section_text,
+                claims = await asyncio.to_thread(
+                    lambda: self._extract_section_claims(
+                        llm_client=llm_client,
+                        section_title=_section_title,
+                        section_text=section_text,
+                    )
                 )
             except Exception:
                 logger.warning(
@@ -634,11 +654,15 @@ class EvaluationRunner:
                 seen_snippet_ids.add(snippet_id_str)
                 snippets_payload.append({"snippet_id": snippet_id_str, "text": _truncate(row.text or "", 600)})
 
+            _claims = claims
+            _snippets_payload = snippets_payload
             try:
-                supported_count += self._verify_section_claims(
-                    llm_client=llm_client,
-                    claims=claims,
-                    snippets_payload=snippets_payload,
+                supported_count += await asyncio.to_thread(
+                    lambda: self._verify_section_claims(
+                        llm_client=llm_client,
+                        claims=_claims,
+                        snippets_payload=_snippets_payload,
+                    )
                 )
             except Exception:
                 logger.warning(
