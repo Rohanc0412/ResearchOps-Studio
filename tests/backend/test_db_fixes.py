@@ -648,6 +648,65 @@ def test_resume_checkpoint_selector_rejects_non_runtime_state_like_rows():
     assert payload is None
 
 
+@pytest.mark.asyncio
+async def test_run_orchestrator_uses_sidecar_sync_session_for_asyncpg_graph_work():
+    import services.orchestrator.runner as runner
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+
+    fake_sync_bind = SimpleNamespace(
+        dialect=SimpleNamespace(name="postgresql", driver="asyncpg"),
+        url="postgresql+asyncpg://postgres:postgres@localhost:5432/researchops_test",
+    )
+    fake_sync_session = mock.MagicMock()
+    fake_sync_session.get_bind.return_value = fake_sync_bind
+
+    fake_async_session = mock.MagicMock()
+    fake_async_session.sync_session = fake_sync_session
+    fake_async_session.commit = mock.AsyncMock()
+    fake_async_session.rollback = mock.AsyncMock()
+
+    class ExecuteResult:
+        def scalar_one_or_none(self):
+            return None
+
+    fake_async_session.execute = mock.AsyncMock(return_value=ExecuteResult())
+
+    sidecar_session = mock.MagicMock()
+    sidecar_cm = mock.MagicMock()
+    sidecar_cm.__enter__.return_value = sidecar_session
+    sidecar_cm.__exit__.return_value = None
+
+    fake_graph = mock.MagicMock()
+    fake_graph.invoke.side_effect = lambda state, config=None: state
+
+    with (
+        mock.patch.object(runner, "transition_run_status_async", new=mock.AsyncMock()),
+        mock.patch.object(runner, "langfuse_enabled", return_value=False),
+        mock.patch.object(runner, "_graph_sidecar_engine", return_value=object()),
+        mock.patch.object(runner, "Session", return_value=sidecar_cm) as session_cls,
+        mock.patch.object(runner, "PostgresCheckpointSaver") as saver_cls,
+        mock.patch.object(runner, "create_orchestrator_graph", return_value=fake_graph) as graph_factory,
+    ):
+        final_state = await runner.run_orchestrator(
+            session=fake_async_session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            user_query="debug the missing greenlet error",
+        )
+
+    session_cls.assert_called_once()
+    saver_cls.assert_called_once_with(
+        session=sidecar_session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+    )
+    graph_factory.assert_called_once_with(sidecar_session)
+    sidecar_session.commit.assert_called_once()
+    assert final_state.user_query == "debug the missing greenlet error"
+
+
 # ── Issue 9: get_last_action timestamps must not swap when created_at is None ──
 
 
