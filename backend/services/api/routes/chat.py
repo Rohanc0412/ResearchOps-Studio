@@ -276,10 +276,11 @@ def _generate_quick_answer(
                     "role": "system",
                     "content": (
                         "You are a helpful research assistant with access to a web search tool. "
-                        "Always use the web_search tool to find current, up-to-date information "
-                        "before answering — especially for questions about recent events, trends, "
-                        "research, technology, or anything that may have changed. "
-                        "Never rely solely on training data for current topics."
+                        "Use the web_search tool to find current information, then answer the "
+                        "user's question by synthesizing what you found. "
+                        "When you have search results, base your answer on them — do not say "
+                        "you lack live sources or fall back to general knowledge when results "
+                        "are available. Cite or reference what you found naturally in your response."
                     ),
                 },
                 {"role": "user", "content": prompt},
