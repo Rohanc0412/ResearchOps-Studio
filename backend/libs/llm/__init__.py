@@ -220,7 +220,6 @@ class OpenAICompatibleClient:
         }
         if self._uses_max_completion_tokens():
             payload["max_completion_tokens"] = max_tokens
-            payload["reasoning_effort"] = "low"
         else:
             payload["max_tokens"] = max_tokens
         if not self._temperature_unsupported():
