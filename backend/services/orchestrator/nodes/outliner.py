@@ -111,23 +111,31 @@ def _generate_outline_with_llm(
     user_query: str, vetted_sources: list, llm_client, run_id
 ) -> OutlineModel | None:
     min_sections, max_sections = _section_count_bounds(vetted_sources)
-    source_lines = []
-    for source in vetted_sources[:12]:
-        title = source.title or "Untitled"
-        year = source.year or "n.d."
-        abstract = (source.abstract or "").strip().replace("\n", " ")
-        if len(abstract) > 220:
-            abstract = abstract[:220].rstrip() + "..."
-        line = f"- {title} ({year})"
-        if abstract:
-            line += f": {abstract}"
-        source_lines.append(line)
+
+    if vetted_sources:
+        source_lines = []
+        for source in vetted_sources[:12]:
+            title = source.title or "Untitled"
+            year = source.year or "n.d."
+            abstract = (source.abstract or "").strip().replace("\n", " ")
+            if len(abstract) > 220:
+                abstract = abstract[:220].rstrip() + "..."
+            line = f"- {title} ({year})"
+            if abstract:
+                line += f": {abstract}"
+            source_lines.append(line)
+        sources_section = "Sources:\n" + "\n".join(source_lines) + "\n\n"
+        directive = "Create a structured report outline grounded in the sources below."
+    else:
+        sources_section = ""
+        directive = "Design a structured research report outline for the following question."
 
     prompt = (
-        "Create a structured report outline grounded in the sources below.\n"
+        f"{directive}\n"
         "Return ONLY valid JSON with this schema:\n"
         "{\n"
         '  "report_title": "A concise, descriptive title for the report (not the raw question)",\n'
+        '  "step_labels": ["<6 short action phrases describing the pipeline steps tailored to this question>"],\n'
         '  "run_id": "...",\n'
         '  "sections": [\n'
         "    {\n"
@@ -142,15 +150,13 @@ def _generate_outline_with_llm(
         "}\n\n"
         f"Run ID: {run_id}\n"
         f"Question: {user_query}\n\n"
-        "Sources:\n"
-        + "\n".join(source_lines or ["- (no sources available)"])
-        + "\n\n"
-        "Rules:\n"
+        + sources_section
+        + "Rules:\n"
         "- report_title must be a short, noun-phrase title (≤12 words) that captures the research topic; do NOT copy the question verbatim\n"
         f"- Total sections should be {min_sections} to {max_sections}\n"
         "- Section titles must be unique\n"
         "- section_id values should be short stable slugs derived from the section title\n"
-        "- suggested_evidence_themes should be keywords/topics\n"
+        "- suggested_evidence_themes should be keywords/topics relevant to each section\n"
         "- The outline MUST read as a connected narrative from opening "
         "context through final synthesis\n"
         "- Each section goal should connect naturally to the surrounding sections\n"
@@ -158,7 +164,9 @@ def _generate_outline_with_llm(
         "evidence -> implications/risks -> synthesis\n"
         "- Avoid random or disconnected section titles; ensure continuity "
         "between adjacent sections\n"
-        "- If too few sources, use fewer sections while keeping a coherent beginning and ending\n"
+        "- step_labels must be exactly 6 short phrases (max 10 words each) describing: "
+        "(1) plan report structure, (2) search papers, (3) extract evidence per section, "
+        "(4) draft sections, (5) check quality, (6) export report — tailored to the specific question\n"
         "- Do not include markdown, no backticks, no commentary\n"
     )
     system = "You design grounded report outlines as strict JSON."
@@ -213,6 +221,8 @@ def _generate_outline_with_llm(
 
 
 def _section_count_bounds(vetted_sources: list) -> tuple[int, int]:
+    if not vetted_sources:
+        return 5, 8
     if len(vetted_sources) < 10:
         return 4, 6
     return 6, 10
@@ -342,7 +352,7 @@ def _fallback_outline_from_text(
             titles.extend(_default_section_titles(min_sections)[len(titles) :])
         titles = titles[:target_count]
 
-    keywords = _collect_keywords(vetted_sources, limit=8)
+    keywords = _collect_keywords(vetted_sources, limit=8, fallback_text=user_query)
     sections: list[OutlineSection] = []
     for idx, title in enumerate(titles, start=1):
         section_id = _section_id_from_title(title, idx)
@@ -468,7 +478,7 @@ def _section_themes(keywords: list[str], *, count: int) -> list[str]:
     return keywords[:count]
 
 
-def _collect_keywords(vetted_sources: list, limit: int = 8) -> list[str]:
+def _collect_keywords(vetted_sources: list, limit: int = 8, fallback_text: str = "") -> list[str]:
     text = " ".join(
         [
             str(getattr(source, "title", "") or "")
@@ -481,6 +491,8 @@ def _collect_keywords(vetted_sources: list, limit: int = 8) -> list[str]:
             for source in vetted_sources or []
         ]
     )
+    if not text.strip() and fallback_text:
+        text = fallback_text
     tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9\-]{2,}", text.lower())
     stop = {
         "the",
