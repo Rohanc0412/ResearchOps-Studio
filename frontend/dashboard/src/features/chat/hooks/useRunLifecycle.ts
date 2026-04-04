@@ -5,6 +5,7 @@ import { useSSE } from "../../../hooks/useSSE";
 import { buildResearchProgressCardModel } from "../../../components/run/researchProgress";
 import { deriveRunUpdate } from "../lib/runUpdates";
 import { CUSTOM_MODEL_VALUE } from "../constants";
+import { getClearedRunId } from "../lib/reportStorage";
 import type { ActiveRun, ActiveRunStatus } from "../types";
 import type { ChatMessage } from "../../../types/dto";
 import { RunSchema } from "../../../types/dto";
@@ -257,6 +258,8 @@ export function useRunLifecycle({
       if (!run) return;
 
       if (run.status === "succeeded") {
+        // Skip rehydration if the user explicitly cleared this run's report.
+        if (chatId && getClearedRunId(chatId) === latestRunId) return;
         await hydrateReportFromArtifacts(latestRunId, chatId);
         return;
       }

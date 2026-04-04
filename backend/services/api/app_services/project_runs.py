@@ -434,7 +434,7 @@ async def list_user_run_snippets(
             SnapshotRow.tenant_id == tenant_id,
             SourceRow.tenant_id == tenant_id,
         )
-        .distinct(SnippetRow.id)
+        .group_by(SnippetRow.id, SnippetRow.text, SourceRow.id, SourceRow.title, SourceRow.url)
     )).all()
 
     return [

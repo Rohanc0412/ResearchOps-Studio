@@ -973,7 +973,7 @@ def test_repair_agent_skips_continuity_patch_for_adjacent_failed_sections(db_ses
     class StubLLM:
         def generate(self, prompt, **_kwargs):
             prompts.append(prompt)
-            if "Current Section ID: intro" in prompt:
+            if "Section ID: intro" in prompt:
                 return json.dumps(
                     {
                         "section_id": "intro",
@@ -982,22 +982,10 @@ def test_repair_agent_skips_continuity_patch_for_adjacent_failed_sections(db_ses
                             "[CITE:11111111-1111-1111-1111-111111111111]."
                         ),
                         "revised_summary": "Fixed intro.\nStill concise.",
-                        "next_section_id": "",
-                        "patched_next_text": "",
-                        "patched_next_summary": "",
-                        "edits_json": {
-                            "repaired_section_edits": [
-                                {
-                                    "sentence_index": 0,
-                                    "before": "Unsupported intro sentence.",
-                                    "after": (
-                                        "Intro fixed with evidence "
-                                        "[CITE:11111111-1111-1111-1111-111111111111]."
-                                    ),
-                                    "change_type": "replace",
-                                }
-                            ],
-                            "continuity_patch": None,
+                        "self_check": {
+                            "factual_sentence_count": 1,
+                            "supported_sentence_count": 1,
+                            "estimated_grounding_pct": 100,
                         },
                     }
                 )
@@ -1009,22 +997,10 @@ def test_repair_agent_skips_continuity_patch_for_adjacent_failed_sections(db_ses
                         "[CITE:22222222-2222-2222-2222-222222222222]."
                     ),
                     "revised_summary": "Fixed methods.\nStill concise.",
-                    "next_section_id": "",
-                    "patched_next_text": "",
-                    "patched_next_summary": "",
-                    "edits_json": {
-                        "repaired_section_edits": [
-                            {
-                                "sentence_index": 0,
-                                "before": "Unsupported methods sentence.",
-                                "after": (
-                                    "Methods fixed with evidence "
-                                    "[CITE:22222222-2222-2222-2222-222222222222]."
-                                ),
-                                "change_type": "replace",
-                            }
-                        ],
-                        "continuity_patch": None,
+                    "self_check": {
+                        "factual_sentence_count": 1,
+                        "supported_sentence_count": 1,
+                        "estimated_grounding_pct": 100,
                     },
                 }
             )
@@ -1153,7 +1129,7 @@ def test_repair_agent_skips_continuity_patch_for_adjacent_failed_sections(db_ses
 
     assert result.repair_attempts == 1
     assert len(prompts) == 2
-    assert "There is no eligible next section to patch." in prompts[0]
+    assert "Section ID: intro" in prompts[0]
     assert "Next Section ID: methods" not in prompts[0]
     assert repaired_intro.text == (
         "Intro fixed with evidence [CITE:11111111-1111-1111-1111-111111111111]."

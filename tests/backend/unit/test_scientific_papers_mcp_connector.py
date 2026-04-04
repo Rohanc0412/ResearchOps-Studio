@@ -134,6 +134,9 @@ def test_get_by_id_falls_back_to_pdf_extraction(monkeypatch):
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
 
     class FakePage:
+        def extract_words(self, **_kwargs):
+            return [{"text": "PDF"}, {"text": "first"}, {"text": "page"}, {"text": "text."}]
+
         def extract_text(self):
             return "PDF first page text."
 

@@ -37,6 +37,7 @@ from db.repositories.evaluation_history import (
 from llm import LLMError, get_llm_client_for_stage, json_response_format
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -373,11 +374,13 @@ class EvaluationRunner:
     async def _persist_section_review(self, *, section_id: str, verdict: str, issues: list[dict]) -> None:
         session = self.session
         result = await session.execute(
-            select(SectionReviewRow).where(
+            select(SectionReviewRow)
+            .where(
                 SectionReviewRow.tenant_id == self.tenant_id,
                 SectionReviewRow.run_id == self.run_id,
                 SectionReviewRow.section_id == section_id,
             )
+            .options(selectinload(SectionReviewRow.issues))
         )
         row = result.scalar_one_or_none()
         now = datetime.now(UTC)
@@ -611,6 +614,7 @@ class EvaluationRunner:
 
             snippet_result = await session.execute(
                 select(SnippetRow.id, SnippetRow.text)
+                .join(SnapshotRow, SnapshotRow.id == SnippetRow.snapshot_id)
                 .join(
                     SectionEvidenceRow,
                     (SectionEvidenceRow.snippet_id == SnippetRow.id)
@@ -694,10 +698,15 @@ class EvaluationRunner:
         tenant_id = self.tenant_id
         run_id = self.run_id
 
+        from db.models.section_review_issues import SectionReviewIssueRow
         reviews_result = await session.execute(
-            select(SectionReviewRow).where(
+            select(SectionReviewRow)
+            .where(
                 SectionReviewRow.tenant_id == tenant_id,
                 SectionReviewRow.run_id == run_id,
+            )
+            .options(
+                selectinload(SectionReviewRow.issues).selectinload(SectionReviewIssueRow.citations)
             )
         )
         reviews = list(reviews_result.scalars().all())

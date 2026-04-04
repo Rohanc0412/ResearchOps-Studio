@@ -74,33 +74,42 @@ function SectionRow({ section }: { section: EvaluationSection }) {
   const [open, setOpen] = useState(false);
   const isFail = section.verdict === "fail";
 
+  const headerContent = (
+    <>
+      <span className={cx("text-[13px]", isFail ? "font-semibold text-obsidian-text" : "text-obsidian-muted")}>
+        {section.title}
+      </span>
+      <div className="flex items-center gap-2.5">
+        <span
+          className={cx(
+            "rounded px-2 py-0.5 font-mono text-[10px] font-bold",
+            isFail ? "bg-red-500/10 text-red-400" : "bg-green-500/10 text-green-400"
+          )}
+        >
+          {section.verdict}
+        </span>
+        {isFail && (
+          <span className="text-[10px] text-obsidian-border">{open ? "▲" : "▼"}</span>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div className={cx("overflow-hidden rounded-[10px] border", isFail ? "border-red-500/20" : "border-obsidian-border")}>
-      <button
-        type="button"
-        onClick={() => isFail && setOpen((v) => !v)}
-        className={cx(
-          "flex w-full items-center justify-between bg-obsidian-surface-elevated px-4 py-2.5",
-          isFail ? "cursor-pointer" : "cursor-default"
-        )}
-      >
-        <span className={cx("text-[13px]", isFail ? "font-semibold text-obsidian-text" : "text-obsidian-muted")}>
-          {section.title}
-        </span>
-        <div className="flex items-center gap-2.5">
-          <span
-            className={cx(
-              "rounded px-2 py-0.5 font-mono text-[10px] font-bold",
-              isFail ? "bg-red-500/10 text-red-400" : "bg-green-500/10 text-green-400"
-            )}
-          >
-            {section.verdict}
-          </span>
-          {isFail && (
-            <span className="text-[10px] text-obsidian-border">{open ? "▲" : "▼"}</span>
-          )}
+      {isFail ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between bg-obsidian-surface-elevated px-4 py-2.5 cursor-pointer"
+        >
+          {headerContent}
+        </button>
+      ) : (
+        <div className="flex w-full items-center justify-between bg-obsidian-surface-elevated px-4 py-2.5">
+          {headerContent}
         </div>
-      </button>
+      )}
 
       {isFail && open && section.issues.length > 0 && (
         <div className="flex flex-col gap-3 border-t border-obsidian-border bg-obsidian-bg px-4 py-3">

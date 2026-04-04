@@ -27,6 +27,24 @@ export function loadStoredReport(chatId: string): Report | null {
   }
 }
 
+function clearedRunStorageKey(chatId: string): string {
+  return `researchops_cleared_run:${chatId}`;
+}
+
+/** Record that the user explicitly cleared the report for a given run. */
+export function markReportCleared(chatId: string, runId: string): void {
+  try {
+    window.localStorage.setItem(clearedRunStorageKey(chatId), runId);
+  } catch { /* ignore */ }
+}
+
+/** Return the runId the user last cleared, or null if they haven't. */
+export function getClearedRunId(chatId: string): string | null {
+  try {
+    return window.localStorage.getItem(clearedRunStorageKey(chatId));
+  } catch { return null; }
+}
+
 export function persistReport(chatId: string, report: Report): void {
   try {
     const key = reportStorageKey(chatId);

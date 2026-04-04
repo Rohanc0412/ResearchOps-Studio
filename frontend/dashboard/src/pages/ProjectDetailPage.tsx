@@ -122,7 +122,7 @@ export function ProjectDetailPage() {
         {/* Textarea — its own element, background = page bg */}
         <textarea
           className="w-full resize-none px-5 pt-5 pb-3 text-sm font-sans focus:outline-none"
-          style={{ backgroundColor: BG, color: TEXT, caretColor: ACCENT, display: "block" }}
+          style={{ backgroundColor: BG, color: TEXT, caretColor: ACCENT, display: "block", minHeight: "96px" }}
           rows={4}
           placeholder={
             runPipeline
@@ -130,7 +130,12 @@ export function ProjectDetailPage() {
               : "Ask a research question..."
           }
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            const el = e.target;
+            el.style.height = "auto";
+            el.style.height = `${el.scrollHeight}px`;
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSubmit(); }
           }}

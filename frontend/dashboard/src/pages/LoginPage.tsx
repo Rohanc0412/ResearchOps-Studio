@@ -64,6 +64,10 @@ export function LoginPage() {
     event.preventDefault();
     setError(null);
     setSuccess(null);
+
+    if (!username.trim()) { setError("Username is required."); return; }
+    if (!password.trim()) { setError("Password is required."); return; }
+
     setIsSubmitting(true);
     try {
       if (mode === "register") {

@@ -42,7 +42,7 @@ def create_orchestrator_graph(runtime) -> StateGraph:
     3. EvidencePack
     4. Writer
     5. Evaluator -> (STOP_SUCCESS -> Exporter -> END)
-                  -> (CONTINUE_REPAIR -> RepairAgent -> Writer)
+                  -> (CONTINUE_REPAIR -> RepairAgent -> Evaluator)
                   -> (CONTINUE_RETRIEVE -> Retriever)
                   -> (CONTINUE_REWRITE -> Writer)
 
@@ -115,8 +115,9 @@ def create_orchestrator_graph(runtime) -> StateGraph:
         },
     )
 
-    # Repair loop: repair_agent -> writer (re-draft)
-    workflow.add_edge("repair_agent", "writer")
+    # Repair loop: repair_agent -> evaluator (re-score repaired sections directly,
+    # without re-drafting, so the writer cannot overwrite the repairs)
+    workflow.add_edge("repair_agent", "evaluator")
 
     # Exporter is the final node
     workflow.add_edge("exporter", END)

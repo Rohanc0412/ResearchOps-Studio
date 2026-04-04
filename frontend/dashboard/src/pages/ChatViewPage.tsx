@@ -22,6 +22,7 @@ import { ReportPane } from "../features/chat/components/ReportPane";
 import { ShareModal } from "../features/chat/components/ShareModal";
 import { generateClientMessageId } from "../features/chat/lib/ids";
 import { extractAllRunIds, extractLatestRunId } from "../features/chat/lib/reportArtifacts";
+import { markReportCleared } from "../features/chat/lib/reportStorage";
 import { useReportHydration } from "../features/chat/hooks/useReportHydration";
 import { useRunLifecycle } from "../features/chat/hooks/useRunLifecycle";
 import type { ActiveRun } from "../features/chat/types";
@@ -172,7 +173,7 @@ export function ChatViewPage() {
     void sendMessage(initialMessage).catch(() => {});
   }, [initialMessage, chatId, location.pathname, navigate, runPipelineArmed]);
 
-  async function sendMessage(text: string, stageModels?: StageModels) {
+  async function sendMessage(text: string, stageModels?: StageModels, forcePipeline?: boolean) {
     const trimmed = text.trim();
     if (!trimmed || !chatId) return;
     const isAction = trimmed.startsWith("__ACTION__:");
@@ -189,7 +190,7 @@ export function ChatViewPage() {
         client_message_id: generateClientMessageId(),
         llm_provider: "hosted",
         llm_model: modelValue ? modelValue : undefined,
-        force_pipeline: runPipelineArmed && !isAction,
+        force_pipeline: forcePipeline !== undefined ? forcePipeline : (runPipelineArmed && !isAction),
         stage_models: stageModels ?? undefined,
       });
 
@@ -265,7 +266,8 @@ export function ChatViewPage() {
   }
 
   function handleClear() {
-    if (window.confirm("Are you sure you want to clear the report?")) {
+    if (window.confirm("Are you sure you want to clear the report? It will not reappear on refresh.")) {
+      if (chatId && latestRunId) markReportCleared(chatId, latestRunId);
       clearReport();
     }
   }
@@ -362,8 +364,9 @@ export function ChatViewPage() {
               void onSend();
             }}
             onQuickAction={(action) => {
-              setDraft(action);
+              setDraft("");
               setRunPipelineArmed(false);
+              void sendMessage(action, undefined, false);
             }}
             onTogglePipeline={() => setRunPipelineArmed((prev) => !prev)}
             onSelectedModelChange={setSelectedModel}

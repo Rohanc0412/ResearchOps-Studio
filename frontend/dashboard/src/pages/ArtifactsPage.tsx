@@ -35,6 +35,10 @@ export function ArtifactsPage() {
   }
 
   function onOpen(a: Artifact) {
+    if (preview?.id === a.id) {
+      setPreview(null);
+      return;
+    }
     const md = a.metadata?.["markdown"];
     if (typeof md === "string" && md.trim()) setPreview({ id: a.id, markdown: md });
     else setPreview(null);

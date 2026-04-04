@@ -381,9 +381,14 @@ async def get_evaluation(
     section_rows = list(section_result.scalars().all())
     titles = {r.section_id: r.title for r in section_rows}
 
+    from db.models.section_review_issues import SectionReviewIssueRow
+    from sqlalchemy.orm import selectinload as sa_selectinload
     reviews_result = await session.execute(
         sa_select(SectionReviewRow)
         .where(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
+        .options(
+            sa_selectinload(SectionReviewRow.issues).selectinload(SectionReviewIssueRow.citations)
+        )
     )
     reviews = list(reviews_result.scalars().all())
 

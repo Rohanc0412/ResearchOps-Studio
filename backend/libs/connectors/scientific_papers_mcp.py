@@ -315,7 +315,13 @@ class ScientificPapersMCPConnector(BaseConnector):
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page in pdf.pages:
-                    text = page.extract_text() or ""
+                    # Use extract_words() and join with spaces to prevent word-merging
+                    # that occurs with extract_text() on multi-column or kern-adjusted PDFs.
+                    words = page.extract_words(x_tolerance=3, y_tolerance=3)
+                    if words:
+                        text = " ".join(w["text"] for w in words)
+                    else:
+                        text = page.extract_text() or ""
                     if text.strip():
                         pages.append(text)
         except Exception:

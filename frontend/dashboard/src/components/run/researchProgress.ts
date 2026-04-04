@@ -373,7 +373,16 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
   // ── Step 3: draft ─────────────────────────────────────────────
   let step3: string | null = null;
   {
-    const draftedSections = events.filter(e => e.event_type === "draft.section_completed").length;
+    // Only count events from the current iteration (after the last stage_start for draft).
+    // The pipeline can re-enter the writer node after a repair loop, emitting
+    // draft.section_completed for all sections again — counting across iterations would
+    // show e.g. "12 / 6 sections".
+    const lastDraftStageStartIdx = events.reduce(
+      (acc, e, i) => (e.event_type === "stage_start" && e.stage === "draft" ? i : acc),
+      -1
+    );
+    const draftEventsThisIteration = lastDraftStageStartIdx >= 0 ? events.slice(lastDraftStageStartIdx) : events;
+    const draftedSections = draftEventsThisIteration.filter(e => e.event_type === "draft.section_completed").length;
     let totalSections: number | null = null;
     for (const e of events) {
       if (e.stage === "draft" && e.event_type === "progress") {
