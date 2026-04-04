@@ -17,3 +17,5 @@ langfuse>=4.0,<5
 beautifulsoup4>=4.14
 asyncpg>=0.31,<1
 aiosqlite>=0.22,<1
+ragas>=0.2
+deepeval>=1.0

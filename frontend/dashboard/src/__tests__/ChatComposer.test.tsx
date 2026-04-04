@@ -26,7 +26,7 @@ describe("ChatComposer", () => {
     expect(
       MODEL_OPTIONS.some(
         (option) =>
-          option.value === DEFAULT_HOSTED_MODEL && option.label === "GPT-4.1 Mini",
+          option.value === DEFAULT_HOSTED_MODEL && option.label === "GPT-5 Nano",
       ),
     ).toBe(true);
   });
