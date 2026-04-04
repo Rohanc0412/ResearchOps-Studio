@@ -278,26 +278,6 @@ def _generate_quick_answer(
             tool_calls = first_message.get("tool_calls") or []
             if tool_calls:
                 yield ("status", "Searching the web…")
-                tool_call = tool_calls[0]
-                fn_args = tool_call.get("function", {})
-                query = fn_args.get("arguments", {})
-                if isinstance(query, str):
-                    try:
-                        query = json.loads(query)
-                    except Exception:
-                        query = {}
-                query_text = query.get("query", message)
-                try:
-                    results = search(query_text, max_results=3)
-                    snippets = [
-                        f"[{i+1}] {r.title}: {r.snippet[:300]}"
-                        for i, r in enumerate(results)
-                    ]
-                    tool_result = "\n\n".join(snippets) or "No results found."
-                except Exception:
-                    tool_result = "Web search unavailable."
-
-                tool_call_id = tool_call.get("id", "call_0")
                 messages.append(
                     {
                         "role": "assistant",
@@ -305,13 +285,32 @@ def _generate_quick_answer(
                         "tool_calls": tool_calls,
                     }
                 )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": tool_result,
-                    }
-                )
+                for tool_call in tool_calls:
+                    fn_args = tool_call.get("function", {})
+                    query = fn_args.get("arguments", {})
+                    if isinstance(query, str):
+                        try:
+                            query = json.loads(query)
+                        except Exception:
+                            query = {}
+                    query_text = query.get("query", message)
+                    try:
+                        results = search(query_text, max_results=3)
+                        snippets = [
+                            f"[{i+1}] {r.title}: {r.snippet[:300]}"
+                            for i, r in enumerate(results)
+                        ]
+                        tool_result = "\n\n".join(snippets) or "No results found."
+                    except Exception:
+                        tool_result = "Web search unavailable."
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.get("id", "call_0"),
+                            "content": tool_result,
+                        }
+                    )
                 final_message = client.generate_with_tools(
                     messages, [WEB_SEARCH_TOOL], max_tokens=10000, temperature=0.4,
                     tool_choice="none",
