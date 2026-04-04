@@ -73,6 +73,10 @@ export function SecurityPage() {
     event.preventDefault();
     setError(null);
     setSuccess(null);
+    if (!disableCode.trim()) {
+      setError("Please enter your current TOTP code before disabling MFA.");
+      return;
+    }
     setIsWorking(true);
     try {
       await disableMfa(disableCode);
@@ -80,7 +84,10 @@ export function SecurityPage() {
       await statusQuery.refetch();
       setSuccess("MFA is disabled.");
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Disable failed.";
+      const raw = e instanceof Error ? e.message : "";
+      const message = raw.includes("422") || raw.includes("401")
+        ? "Invalid TOTP code. Please check your authenticator app and try again."
+        : raw || "Disable failed.";
       setError(message);
     } finally {
       setIsWorking(false);

@@ -34,6 +34,29 @@ services:
         psql -h postgres -U postgres -d postgres -c "CREATE DATABASE researchops_test"
     restart: "no"
 
+  backend-tests:
+    build:
+      context: ../..
+      dockerfile: backend/deployment/docker/api.Dockerfile
+      target: dev
+    depends_on:
+      postgres_test_db_init:
+        condition: service_completed_successfully
+    volumes:
+      - ../../tests:/app/tests
+    working_dir: /app
+    environment:
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops_test
+      PYTHONPATH: /app/services/api:/app/services/orchestrator:/app/services/workers:/app/libs:/app/libs/research_rules:/app/data
+    command: >
+      bash -c "
+        pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu &&
+        python -m pytest tests/backend/ -q --tb=short
+      "
+    restart: "no"
+    profiles:
+      - test
+
   api:
     build:
       context: ../..
