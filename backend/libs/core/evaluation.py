@@ -2,40 +2,39 @@
 
 from __future__ import annotations
 
-# Metric key constants
+# Metric key constants (stored in run_usage_metrics.metric_name)
 METRIC_EVAL_STATUS = "eval_status"
-METRIC_EVAL_GROUNDING_PCT = "eval_grounding_pct"
+METRIC_EVAL_QUALITY_PCT = "eval_quality_pct"
+METRIC_EVAL_HALLUCINATION_RATE = "eval_hallucination_rate"
+METRIC_EVAL_EVALUATED_AT = "eval_evaluated_at"
 
-ALLOWED_PROBLEMS: frozenset[str] = frozenset({
+ALLOWED_VERDICTS: frozenset[str] = frozenset({
+    "supported",
     "unsupported",
     "contradicted",
     "missing_citation",
     "invalid_citation",
-    "not_in_pack",
     "overstated",
 })
 
-GROUNDING_SCHEMA = {
+CLAIM_VERIFICATION_SCHEMA = {
     "type": "object",
     "properties": {
-        "section_id": {"type": "string"},
-        "grounding_score": {"type": "integer"},
-        "verdict": {"type": "string"},
-        "issues": {
+        "verdicts": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "sentence_index": {"type": "integer"},
-                    "problem": {"type": "string"},
-                    "notes": {"type": "string"},
+                    "claim_index": {"type": "integer"},
+                    "verdict": {"type": "string"},
                     "citations": {"type": "array", "items": {"type": "string"}},
+                    "notes": {"type": "string"},
                 },
-                "required": ["sentence_index", "problem", "notes", "citations"],
+                "required": ["claim_index", "verdict", "citations", "notes"],
                 "additionalProperties": False,
             },
-        },
+        }
     },
-    "required": ["section_id", "grounding_score", "verdict", "issues"],
+    "required": ["verdicts"],
     "additionalProperties": False,
 }

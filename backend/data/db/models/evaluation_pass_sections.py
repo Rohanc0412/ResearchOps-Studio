@@ -50,9 +50,8 @@ class EvaluationPassSectionRow(Base):
     section_id: Mapped[str] = mapped_column(String(100), nullable=False)
     section_title: Mapped[str | None] = mapped_column(Text(), nullable=True)
     section_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
-    verdict: Mapped[str] = mapped_column(String(10), nullable=False)
-    grounding_score: Mapped[int | None] = mapped_column(Integer(), nullable=True)
-    issues_json: Mapped[list] = mapped_column(
+    quality_score: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    claims_json: Mapped[list] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]"
     )
     created_at: Mapped[datetime] = mapped_column(
