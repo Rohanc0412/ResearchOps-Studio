@@ -83,9 +83,8 @@ def _event_to_sse(event) -> str:
     if level not in {"info", "warn", "error"}:
         level = "info"
 
-    stage = (event.stage or "retrieve").strip().lower() if event.stage else None
-    if stage and stage not in _ALLOWED_STAGES:
-        stage = "retrieve"
+    raw_stage = (event.stage or "").strip().lower()
+    stage = raw_stage if raw_stage in _ALLOWED_STAGES else "retrieve"
 
     payload = event.payload_json or {}
     audience = event.audience.value if hasattr(event.audience, "value") else str(event.audience)

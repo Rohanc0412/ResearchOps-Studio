@@ -278,6 +278,29 @@ class ResearchRuntime:
     ) -> OrchestratorState:
         await self.assert_not_cancelled()
 
+        # Commit a stage_start event BEFORE the node runs so SSE clients see it
+        # immediately. All proxy-queued events only flush after the node finishes
+        # (which can be minutes away for the retriever), so without this clients
+        # would see 0 events for the entire duration of the first node.
+        try:
+            await self.event_store.append(
+                tenant_id=self.tenant_id,
+                run_id=self.run_id,
+                audience=RunEventAudienceDb.progress,
+                event_type="stage_start",
+                level=RunEventLevelDb.info,
+                stage=node_name,
+                message=f"Starting stage: {node_name}",
+            )
+            await self.session.flush()
+            await self.session.commit()
+        except Exception:
+            logger.debug("Pre-node stage_start commit failed; continuing", exc_info=True)
+            try:
+                await self.session.rollback()
+            except Exception:
+                pass
+
         try:
             if inspect.iscoroutinefunction(node_func):
                 next_state = await node_func(state, self)
