@@ -18,7 +18,10 @@ from app_services.project_runs import (
 )
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
-from core.evaluation import METRIC_EVAL_GROUNDING_PCT, METRIC_EVAL_STATUS
+from core.evaluation import METRIC_EVAL_STATUS
+
+# Kept here temporarily until get_evaluation endpoint is rewritten in the evaluation pipeline redesign.
+METRIC_EVAL_GROUNDING_PCT = "eval_grounding_pct"
 from core.tenancy import get_tenant_id
 from db.models.run_sections import RunSectionRow
 from db.models.runs import RunStatusDb

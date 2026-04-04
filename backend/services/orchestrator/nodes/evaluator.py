@@ -11,7 +11,6 @@ import logging
 import re
 
 from core.env import env_bool, now_utc
-from core.evaluation import ALLOWED_PROBLEMS, GROUNDING_SCHEMA
 from core.orchestrator.state import (
     EvaluatorDecision,
     EvidenceSnippetRef,
@@ -47,6 +46,36 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 emit_run_event = emit_node_progress
 _CITATION_MARKER_RE = re.compile(r"\[\^\d+\]|\[CITE:[^\]]+\]")
+
+# Kept here temporarily until evaluator.py is rewritten in the evaluation pipeline redesign.
+ALLOWED_PROBLEMS: frozenset[str] = frozenset({
+    "unsupported", "contradicted", "overstated",
+    "missing_citation", "invalid_citation", "not_in_pack",
+})
+GROUNDING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "section_id": {"type": "string"},
+        "grounding_score": {"type": "integer"},
+        "verdict": {"type": "string"},
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sentence_index": {"type": "integer"},
+                    "problem": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "citations": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["sentence_index", "problem", "notes", "citations"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["section_id", "grounding_score", "verdict", "issues"],
+    "additionalProperties": False,
+}
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 

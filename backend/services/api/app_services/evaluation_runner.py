@@ -16,12 +16,38 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from uuid import UUID
 
-from core.evaluation import (
-    ALLOWED_PROBLEMS,
-    GROUNDING_SCHEMA,
-    METRIC_EVAL_GROUNDING_PCT,
-    METRIC_EVAL_STATUS,
-)
+from core.evaluation import METRIC_EVAL_STATUS
+
+# Kept here temporarily until evaluation_runner.py is rewritten in the evaluation pipeline redesign.
+METRIC_EVAL_GROUNDING_PCT = "eval_grounding_pct"
+ALLOWED_PROBLEMS: frozenset[str] = frozenset({
+    "unsupported", "contradicted", "overstated",
+    "missing_citation", "invalid_citation", "not_in_pack",
+})
+GROUNDING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "section_id": {"type": "string"},
+        "grounding_score": {"type": "integer"},
+        "verdict": {"type": "string"},
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sentence_index": {"type": "integer"},
+                    "problem": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "citations": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["sentence_index", "problem", "notes", "citations"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["section_id", "grounding_score", "verdict", "issues"],
+    "additionalProperties": False,
+}
 from db.models.artifacts import ArtifactRow
 from db.models.draft_sections import DraftSectionRow
 from db.models.run_sections import RunSectionRow
