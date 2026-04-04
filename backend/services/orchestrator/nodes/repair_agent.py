@@ -19,11 +19,12 @@ from core.orchestrator.state import (
     OutlineSection,
 )
 from core.pipeline_events import instrument_node
+from core.ragas_extractor import RagasExtractor
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
-from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
+from db.repositories.section_claims import upsert_section_claims
 from langfuse.decorators import observe
 from llm import (
     LLMError,
@@ -275,15 +276,6 @@ def _load_draft_sections(session: Session, *, tenant_id, run_id) -> dict[str, Dr
     return {row.section_id: row for row in rows}
 
 
-def _load_section_reviews(session: Session, *, tenant_id, run_id) -> dict[str, SectionReviewRow]:
-    rows = (
-        session.query(SectionReviewRow)
-        .filter(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
-        .all()
-    )
-    return {row.section_id: row for row in rows}
-
-
 def _load_section_snippets(
     session: Session,
     *,
@@ -476,14 +468,9 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
     outline_by_id = _load_outline_by_id(state)
     ordered_ids = _load_section_order(state)
     draft_rows = _load_draft_sections(session, tenant_id=state.tenant_id, run_id=state.run_id)
-    review_rows = _load_section_reviews(session, tenant_id=state.tenant_id, run_id=state.run_id)
 
-    failing_sections = [
-        section_id
-        for section_id in ordered_ids
-        if review_rows.get(section_id) and review_rows[section_id].verdict != "pass"
-    ]
-    failing_section_ids = set(failing_sections)
+    failing_section_ids = set(state.sections_to_repair)
+    failing_sections = [sid for sid in ordered_ids if sid in failing_section_ids]
     if not failing_sections:
         return state
 
@@ -501,12 +488,12 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
     }
 
     repair_logs: list[dict] = []
+    repaired_sections: list[str] = []
 
     for section_id in failing_sections:
         section = outline_by_id[section_id]
-        review = review_rows.get(section_id)
-        issues = _normalize_issues(review.issues_json if review else [])
-        issue_indices = {issue["sentence_index"] for issue in issues}
+        issues: list[dict] = []
+        issue_indices: set[int] = set()
 
         original_text = section_texts.get(section_id, "")
         original_summary = section_summaries.get(section_id, "")
@@ -586,6 +573,38 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
         section_summaries[section_id] = revised_summary
         if log_entry:
             repair_logs.append(log_entry)
+        repaired_sections.append(section_id)
+
+    # Re-extract claims for repaired sections so manual evaluation gets fresh claims
+    if llm_client is not None and repaired_sections:
+        import asyncio
+        extractor = RagasExtractor(llm_client=llm_client)
+        for section_id in repaired_sections:
+            updated_text = section_texts.get(section_id, "")
+            snippet_refs = _load_section_snippets(
+                session, tenant_id=state.tenant_id, run_id=state.run_id,
+                section_id=section_id, state_snippets=state.section_evidence_snippets,
+            )
+            snippet_texts_list = [s.text for s in snippet_refs]
+            try:
+                loop = asyncio.new_event_loop()
+                fresh_claims = loop.run_until_complete(
+                    extractor.extract(updated_text, snippet_texts_list)
+                )
+                loop.close()
+            except Exception:
+                logger.warning(
+                    "Post-repair claim re-extraction failed for section %s",
+                    section_id,
+                    extra={"stage": "repair", "section_id": section_id},
+                    exc_info=True,
+                )
+                fresh_claims = []
+            if fresh_claims:
+                upsert_section_claims(
+                    session, tenant_id=state.tenant_id, run_id=state.run_id,
+                    section_id=section_id, claims=fresh_claims,
+                )
 
     report_title = (state.outline and state.outline.report_title) or f"Research Report: {state.user_query}"
     draft_lines: list[str] = [f"# {report_title}", ""]
