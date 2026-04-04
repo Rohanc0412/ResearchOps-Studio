@@ -26,7 +26,7 @@ from connectors.base import (
     SourceType,
 )
 
-SEARCHABLE_SOURCES: Final[tuple[str, ...]] = ("openalex", "arxiv", "europepmc", "core")
+SEARCHABLE_SOURCES: Final[tuple[str, ...]] = ("openalex", "arxiv", "europepmc")
 DEFAULT_COMMAND: Final[str] = "npx -y @futurelab-studio/latest-science-mcp@latest"
 
 
