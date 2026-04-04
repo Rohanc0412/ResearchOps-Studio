@@ -136,12 +136,13 @@ def _build_query_plan(
     llm_provider: str | None,
     llm_model: str | None,
     stage_models: dict[str, str | None] | None = None,
+    outline: "OutlineModel | None" = None,
 ) -> tuple[list[QueryPlan], bool]:
     base = " ".join(question.split())
     if not base:
         return [], False
 
-    max_queries = env_int("RETRIEVER_QUERY_COUNT", 8, min_value=6)
+    max_queries = env_int("RETRIEVER_QUERY_COUNT", 4, min_value=1)
 
     llm_plans = _build_query_plan_with_llm(
         question=base,
@@ -149,6 +150,7 @@ def _build_query_plan(
         llm_provider=llm_provider,
         llm_model=llm_model,
         stage_models=stage_models,
+        outline=outline,
     )
     if not llm_plans:
         raise ValueError("LLM query generation failed or returned no queries.")
@@ -1329,6 +1331,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         llm_provider=state.llm_provider,
         llm_model=state.llm_model,
         stage_models=state.stage_models,
+        outline=state.outline,
     )
     if not query_plan:
         raise ValueError("Question is required for retrieval")
@@ -1352,7 +1355,7 @@ def retriever_node(state: OrchestratorState, session: Session) -> OrchestratorSt
         "MCP rate limit: %.1f req/s (RETRIEVER_MCP_MAX_REQUESTS_PER_SECOND)", mcp_rate
     )
     mcp_connector = ScientificPapersMCPConnector(max_requests_per_second=mcp_rate)
-    mcp_max_per_source = env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 5, min_value=1)
+    mcp_max_per_source = env_int("RETRIEVER_MCP_MAX_PER_SOURCE", 2, min_value=1)
     retrieved_by_source: dict[str, list[RetrievedSource]] = {}
 
     raw_sources = _parallel_mcp_search(
