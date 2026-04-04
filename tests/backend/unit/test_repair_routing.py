@@ -727,3 +727,97 @@ def test_repair_agent_does_not_modify_passing_section_after_failing_section(db_s
     assert "Intro fixed with evidence" in repaired_intro.text
     # Passing section must be byte-for-byte identical to the original draft.
     assert untouched_next.text == "Next section opening. Next section detail."
+
+
+def test_repair_agent_logs_warning_when_self_check_below_threshold(db_session, monkeypatch, caplog):
+    import logging
+    from nodes.repair_agent import repair_agent_node
+    import nodes.repair_agent as repair_module
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+    _make_run(db_session, tenant_id=tenant_id, run_id=run_id)
+
+    class StubLLM:
+        def generate(self, _prompt, **_kwargs):
+            return json.dumps(
+                {
+                    "section_id": "intro",
+                    "revised_text": "Intro still weak [CITE:11111111-1111-1111-1111-111111111111].",
+                    "revised_summary": "Still weak.",
+                    "self_check": {
+                        "factual_sentence_count": 5,
+                        "supported_sentence_count": 3,
+                        "estimated_grounding_pct": 60,
+                    },
+                }
+            )
+
+    monkeypatch.setattr(repair_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
+
+    outline = OutlineModel(
+        sections=[
+            OutlineSection(
+                section_id="intro",
+                title="Introduction",
+                goal="Intro goal.",
+                key_points=["A"],
+                suggested_evidence_themes=["t"],
+                section_order=1,
+            )
+        ]
+    )
+    db_session.add_all(
+        [
+            DraftSectionRow(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                section_id="intro",
+                text="Unsupported intro sentence.",
+                section_summary="Old summary.",
+            ),
+            SectionReviewRow(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                section_id="intro",
+                verdict="fail",
+                issues_json=[
+                    {
+                        "sentence_index": 0,
+                        "problem": "unsupported",
+                        "notes": "Missing support.",
+                        "citations": [],
+                    }
+                ],
+                reviewed_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    state = OrchestratorState(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_query="test",
+        outline=outline,
+        section_evidence_snippets={
+            "intro": [
+                EvidenceSnippetRef(
+                    snippet_id="11111111-1111-1111-1111-111111111111",
+                    source_id=uuid4(),
+                    text="Intro evidence snippet.",
+                    char_start=0,
+                    char_end=21,
+                )
+            ]
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="nodes.repair_agent"):
+        repair_agent_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
+
+    assert any(
+        "self-check below threshold" in record.message and "intro" in record.message
+        for record in caplog.records
+    )
