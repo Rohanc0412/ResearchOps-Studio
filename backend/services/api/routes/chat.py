@@ -271,7 +271,19 @@ def _generate_quick_answer(
 
     try:
         if use_tools:
-            messages = [{"role": "user", "content": prompt}]
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful research assistant with access to a web search tool. "
+                        "Always use the web_search tool to find current, up-to-date information "
+                        "before answering — especially for questions about recent events, trends, "
+                        "research, technology, or anything that may have changed. "
+                        "Never rely solely on training data for current topics."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
             first_message = client.generate_with_tools(
                 messages, [WEB_SEARCH_TOOL], max_tokens=10000, temperature=0.4
             )
