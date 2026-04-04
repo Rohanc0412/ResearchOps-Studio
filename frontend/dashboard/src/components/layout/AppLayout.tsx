@@ -12,8 +12,8 @@ export function AppLayout() {
       <Sidebar />
       <main
         className={cx(
-          "flex min-h-0 flex-1 flex-col overflow-auto bg-obsidian-bg",
-          isFullBleed ? "p-0" : "px-8 py-8"
+          "flex min-h-0 flex-1 flex-col bg-obsidian-bg",
+          isFullBleed ? "p-0 overflow-hidden" : "px-8 py-8 overflow-auto"
         )}
       >
         <Outlet />
