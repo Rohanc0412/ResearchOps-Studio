@@ -70,8 +70,6 @@ from db.models.run_status_transitions import RunStatusTransitionRow
 from db.models.run_usage_metrics import RunUsageMetricRow
 from db.models.runs import RunRow
 from db.models.section_evidence import SectionEvidenceRow
-from db.models.section_review_issues import SectionReviewIssueCitationRow, SectionReviewIssueRow
-from db.models.section_reviews import SectionReviewRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippet_embeddings import SnippetEmbeddingRow
 from db.models.snippet_flags import SnippetFlagRow
