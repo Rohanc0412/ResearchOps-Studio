@@ -158,6 +158,8 @@ def _build_query_plan(
 
 def _normalize_intent(intent: str) -> str | None:
     normalized = intent.strip().lower().replace("_", " ")
+    if normalized.startswith("section:"):
+        return normalized
     mapping = {
         "failure modes": "failure modes",
         "failure mode": "failure modes",
