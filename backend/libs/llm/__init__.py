@@ -268,7 +268,7 @@ class OpenAICompatibleClient:
         self.last_completion_tokens = int(usage.get("completion_tokens") or 0)
         # Emit token counts into active Langfuse span (no-op when not enabled)
         try:
-            from langfuse.decorators import langfuse_context
+            from langfuse import langfuse_context
             langfuse_context.update_current_observation(
                 usage={
                     "input": self.last_prompt_tokens,
@@ -343,7 +343,7 @@ class OpenAICompatibleClient:
         self.last_completion_tokens = int(usage.get("completion_tokens") or 0)
         # Emit token counts into active Langfuse span (no-op when not enabled)
         try:
-            from langfuse.decorators import langfuse_context
+            from langfuse import langfuse_context
             langfuse_context.update_current_observation(
                 usage={
                     "input": self.last_prompt_tokens,
@@ -421,7 +421,7 @@ class BedrockClient:
         self.last_prompt_tokens = int(usage.get("inputTokens") or 0)
         self.last_completion_tokens = int(usage.get("outputTokens") or 0)
         try:
-            from langfuse.decorators import langfuse_context
+            from langfuse import langfuse_context
 
             langfuse_context.update_current_observation(
                 usage={

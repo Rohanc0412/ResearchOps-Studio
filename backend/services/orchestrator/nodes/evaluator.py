@@ -31,7 +31,7 @@ from db.repositories.evaluation_history import (
     record_evaluation_section_result_sync as record_evaluation_section_result,
 )
 from db.repositories.section_claims import upsert_section_claims
-from langfuse.decorators import observe
+from langfuse import observe
 from llm import LLMError, get_llm_client_for_stage
 from sqlalchemy.orm import Session
 

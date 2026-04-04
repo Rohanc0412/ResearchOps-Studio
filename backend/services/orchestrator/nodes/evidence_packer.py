@@ -51,7 +51,7 @@ from embeddings import (
     resolve_embed_trust_remote_code,
     resolve_embed_workers,
 )
-from langfuse.decorators import observe
+from langfuse import observe
 from retrieval.search import search_snippets
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session

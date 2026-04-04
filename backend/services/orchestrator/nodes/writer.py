@@ -17,7 +17,7 @@ from core.pipeline_events import instrument_node
 from core.pipeline_events.events import emit_node_progress, truncate_text
 from db.models.draft_sections import DraftSectionRow
 from db.models.section_evidence import SectionEvidenceRow
-from langfuse.decorators import observe
+from langfuse import observe
 from llm import (
     LLMError,
     extract_json_payload,

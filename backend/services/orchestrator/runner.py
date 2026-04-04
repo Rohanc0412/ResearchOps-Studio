@@ -303,7 +303,7 @@ async def run_orchestrator(
 
     if langfuse_enabled():
         try:
-            from langfuse.decorators import langfuse_context
+            from langfuse import langfuse_context
             langfuse_context.update_current_trace(
                 name="research_run",
                 id=str(run_id),

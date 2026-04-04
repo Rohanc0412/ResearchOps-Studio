@@ -65,7 +65,7 @@ from embeddings import (
     resolve_embed_workers,
 )
 from ingestion import ingest_source
-from langfuse.decorators import observe
+from langfuse import observe
 from llm import (
     LLMError,
     explain_llm_error,

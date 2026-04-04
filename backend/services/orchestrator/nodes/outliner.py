@@ -19,7 +19,7 @@ from core.pipeline_events import instrument_node
 from core.pipeline_events.events import emit_node_progress
 from db.models.outline_notes import OutlineNoteRow
 from db.models.run_sections import RunSectionRow
-from langfuse.decorators import observe
+from langfuse import observe
 from llm import (
     LLMError,
     extract_json_payload,

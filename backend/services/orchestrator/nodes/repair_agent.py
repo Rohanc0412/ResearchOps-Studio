@@ -25,7 +25,7 @@ from db.models.section_evidence import SectionEvidenceRow
 from db.models.snapshots import SnapshotRow
 from db.models.snippets import SnippetRow
 from db.repositories.section_claims import upsert_section_claims
-from langfuse.decorators import observe
+from langfuse import observe
 from llm import (
     LLMError,
     extract_json_payload,
