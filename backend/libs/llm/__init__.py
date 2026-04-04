@@ -29,7 +29,7 @@ class LLMError(RuntimeError):
 
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com"
-DEFAULT_HOSTED_MODEL = "gpt-4.1-mini"
+DEFAULT_HOSTED_MODEL = "gpt-5-nano"
 DEFAULT_BEDROCK_MODEL = "amazon.nova-lite-v1:0"
 
 

@@ -21,8 +21,8 @@ const defaultProps = {
 };
 
 describe("ChatComposer", () => {
-  it("uses GPT-4.1 Mini as the default hosted model", () => {
-    expect(DEFAULT_HOSTED_MODEL).toBe("gpt-4.1-mini");
+  it("uses GPT-5 Nano as the default hosted model", () => {
+    expect(DEFAULT_HOSTED_MODEL).toBe("gpt-5-nano");
     expect(
       MODEL_OPTIONS.some(
         (option) =>
