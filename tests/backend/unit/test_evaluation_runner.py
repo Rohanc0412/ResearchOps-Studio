@@ -247,8 +247,8 @@ async def test_faithfulness_runs_per_section_against_section_evidence():
 
 
 @pytest.mark.asyncio
-async def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
-    """When a section already contains cited factual sentences, use them directly as traceable claims."""
+async def test_faithfulness_always_uses_llm_claim_extraction():
+    """Faithfulness always uses LLM extraction for all factual claims, not just cited sentences."""
     from app_services.evaluation_runner import EvaluationRunner
 
     tenant_id = uuid4()
@@ -278,13 +278,16 @@ async def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
         _make_execute_result(scalar_result=None),   # faithfulness_pct metric
     )
 
-    mock_llm = MagicMock()
-    mock_llm.generate.return_value = json.dumps({
+    claims_response = json.dumps({"claims": ["Model A supports 100 languages.", "Model B fits within 8 GB VRAM."]})
+    verdicts_response = json.dumps({
         "verdicts": [
             {"claim_index": 0, "supported": True},
             {"claim_index": 1, "supported": True},
         ]
     })
+
+    mock_llm = MagicMock()
+    mock_llm.generate.side_effect = [claims_response, verdicts_response]
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
@@ -294,12 +297,12 @@ async def test_faithfulness_prefers_cited_sentences_over_llm_claim_extraction():
     assert event["total_claims"] == 2
     assert event["supported_claims"] == 2
     assert event["faithfulness_pct"] == 100
-    assert mock_llm.generate.call_count == 1
+    assert mock_llm.generate.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
-    """Artifact markdown should win over plain draft text because it preserves citation markers."""
+async def test_faithfulness_uses_artifact_markdown_over_draft_text():
+    """Artifact markdown should win over plain draft text for claim extraction source."""
     from app_services.evaluation_runner import EvaluationRunner
 
     tenant_id = uuid4()
@@ -329,13 +332,16 @@ async def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
         _make_execute_result(scalar_result=None),   # faithfulness_pct metric
     )
 
-    mock_llm = MagicMock()
-    mock_llm.generate.return_value = json.dumps({
+    claims_response = json.dumps({"claims": ["Model A supports 100 languages.", "Model B fits within 8 GB VRAM."]})
+    verdicts_response = json.dumps({
         "verdicts": [
             {"claim_index": 0, "supported": True},
             {"claim_index": 1, "supported": True},
         ]
     })
+
+    mock_llm = MagicMock()
+    mock_llm.generate.side_effect = [claims_response, verdicts_response]
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
         runner = EvaluationRunner(session=session, tenant_id=tenant_id, run_id=run_id)
@@ -345,7 +351,10 @@ async def test_faithfulness_uses_artifact_markdown_when_it_contains_citations():
     assert event["total_claims"] == 2
     assert event["supported_claims"] == 2
     assert event["faithfulness_pct"] == 100
-    assert mock_llm.generate.call_count == 1
+    assert mock_llm.generate.call_count == 2
+    # Verify the extraction prompt used the artifact markdown text, not the plain draft
+    extraction_prompt = mock_llm.generate.call_args_list[0].args[0]
+    assert "[^1]" in extraction_prompt
 
 
 @pytest.mark.asyncio
@@ -386,8 +395,9 @@ async def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
 
     mock_llm = MagicMock()
     mock_llm.generate.side_effect = [
-        LLMError("Hosted LLM request failed: 402 Payment Required"),
-        json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]}),
+        LLMError("Hosted LLM request failed: 402 Payment Required"),  # uncited extraction fails
+        json.dumps({"claims": ["A benchmark shows 15% lower latency."]}),  # cited extraction
+        json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]}),  # cited verification
     ]
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):
@@ -403,8 +413,8 @@ async def test_faithfulness_skips_section_when_claim_extraction_llm_fails():
 
 
 @pytest.mark.asyncio
-async def test_faithfulness_skips_section_when_verification_llm_fails():
-    """Manual evaluation should keep scoring later sections when one verification call fails."""
+async def test_faithfulness_skips_section_when_extraction_llm_fails():
+    """Manual evaluation should keep scoring later sections when one extraction call fails."""
     from app_services.evaluation_runner import EvaluationRunner
 
     tenant_id = uuid4()
@@ -416,7 +426,7 @@ async def test_faithfulness_skips_section_when_verification_llm_fails():
     first_section.section_order = 1
     first_draft = MagicMock()
     first_draft.section_id = "first"
-    first_draft.text = "Model A supports 100 languages [^1]."
+    first_draft.text = "Model A supports 100 languages."
 
     second_section = MagicMock()
     second_section.section_id = "second"
@@ -424,11 +434,7 @@ async def test_faithfulness_skips_section_when_verification_llm_fails():
     second_section.section_order = 2
     second_draft = MagicMock()
     second_draft.section_id = "second"
-    second_draft.text = "Model B fits within 8 GB VRAM [^2]."
-
-    first_snippet = MagicMock()
-    first_snippet.id = uuid4()
-    first_snippet.text = "Benchmarks show Model A supports 100 languages."
+    second_draft.text = "Model B fits within 8 GB VRAM."
 
     second_snippet = MagicMock()
     second_snippet.id = uuid4()
@@ -438,15 +444,16 @@ async def test_faithfulness_skips_section_when_verification_llm_fails():
         _make_execute_result(scalar_result=None),                        # artifact
         _make_execute_result(rows=[first_draft, second_draft]),          # drafts
         _make_execute_result(rows=[first_section, second_section]),      # sections
-        _make_execute_result(rows=[first_snippet]),                      # snippets for first
+        # first section is skipped (extraction fails) so no snippets query for it
         _make_execute_result(rows=[second_snippet]),                     # snippets for second
         _make_execute_result(scalar_result=None),                        # faithfulness_pct metric
     )
 
     mock_llm = MagicMock()
     mock_llm.generate.side_effect = [
-        LLMError("Hosted LLM request failed: 402 Payment Required"),
-        json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]}),
+        LLMError("Hosted LLM request failed: 402 Payment Required"),         # first extraction fails
+        json.dumps({"claims": ["Model B fits within 8 GB VRAM."]}),          # second extraction
+        json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]}),   # second verification
     ]
 
     with patch("app_services.evaluation_runner.get_llm_client_for_stage", return_value=mock_llm):

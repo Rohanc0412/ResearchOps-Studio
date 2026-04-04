@@ -151,22 +151,20 @@ def _compute_faithfulness_pct(
         if not section_text:
             continue
 
-        claims = _extract_cited_claims(section_text)
-        if not claims:
-            try:
-                claims = _extract_section_claims(
-                    llm_client,
-                    section_title=section.title,
-                    section_text=section_text,
-                )
-            except Exception:
-                logger.warning(
-                    "LLM claim extraction failed for section %s during pipeline faithfulness scoring.",
-                    section.section_id,
-                    extra={"stage": "evaluate", "section_id": section.section_id},
-                    exc_info=True,
-                )
-                continue
+        try:
+            claims = _extract_section_claims(
+                llm_client,
+                section_title=section.title,
+                section_text=section_text,
+            )
+        except Exception:
+            logger.warning(
+                "LLM claim extraction failed for section %s during pipeline faithfulness scoring.",
+                section.section_id,
+                extra={"stage": "evaluate", "section_id": section.section_id},
+                exc_info=True,
+            )
+            continue
         if not claims:
             continue
 

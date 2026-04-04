@@ -593,22 +593,20 @@ class EvaluationRunner:
             if not section_text.strip():
                 continue
 
-            claims = self._extract_cited_claims(section_text)
-            if not claims:
-                try:
-                    claims = self._extract_section_claims(
-                        llm_client=llm_client,
-                        section_title=section_title,
-                        section_text=section_text,
-                    )
-                except Exception:
-                    logger.warning(
-                        "LLM claim extraction failed for section %s during manual faithfulness scoring.",
-                        section_id,
-                        extra={"stage": "evaluate", "section_id": section_id},
-                        exc_info=True,
-                    )
-                    continue
+            try:
+                claims = self._extract_section_claims(
+                    llm_client=llm_client,
+                    section_title=section_title,
+                    section_text=section_text,
+                )
+            except Exception:
+                logger.warning(
+                    "LLM claim extraction failed for section %s during manual faithfulness scoring.",
+                    section_id,
+                    extra={"stage": "evaluate", "section_id": section_id},
+                    exc_info=True,
+                )
+                continue
             if not claims:
                 continue
 
