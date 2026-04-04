@@ -26,7 +26,7 @@ from connectors import ScientificPapersMCPConnector
 from connectors.base import RetrievedSource
 from connectors.dedup import deduplicate_sources
 from core.env import env_float, env_int
-from core.orchestrator.state import OrchestratorState, SourceRef
+from core.orchestrator.state import OrchestratorState, OutlineModel, SourceRef
 from core.pipeline_events import instrument_node
 from core.pipeline_events.events import emit_node_progress
 from db.models.run_checkpoints import RunCheckpointRow
@@ -244,6 +244,7 @@ def _build_query_plan_with_llm(
     llm_provider: str | None,
     llm_model: str | None,
     stage_models: dict[str, str | None] | None = None,
+    outline: "OutlineModel | None" = None,
 ) -> list[QueryPlan]:
     try:
         llm_client = get_llm_client_for_stage(
@@ -276,22 +277,51 @@ def _build_query_plan_with_llm(
         return []
 
     intents = ", ".join(ALLOWED_INTENTS)
-    prompt = (
-        f"Generate exactly {max_queries} diverse academic search queries for the research question below.\n"
-        "Return ONLY JSON with this schema:\n"
-        "{\n"
-        '  "queries": [\n'
-        '    {"intent": "survey|methods|benchmarks|failure modes|future '
-        'directions|recent work", "query": "..."}\n'
-        "  ]\n"
-        "}\n\n"
-        f"Question: {question}\n"
-        f"Allowed intents: {intents}\n"
-        "Rules:\n"
-        "- Use each intent at least once when possible\n"
-        "- Keep queries concise and specific\n"
-        "- Do not include numbering or commentary\n"
-    )
+
+    if outline and outline.sections:
+        section_lines = []
+        for section in outline.sections:
+            themes = ", ".join(section.suggested_evidence_themes[:4]) if section.suggested_evidence_themes else "general"
+            section_lines.append(
+                f'- intent: "section:{section.section_id}" | goal: {section.goal} | themes: {themes}'
+            )
+        sections_block = "\n".join(section_lines)
+        prompt = (
+            f"Generate exactly {max_queries} broad academic search queries AND one targeted query per section below.\n"
+            "Return ONLY JSON with this schema:\n"
+            "{\n"
+            '  "queries": [\n'
+            '    {"intent": "survey|methods|benchmarks|failure modes|future directions|recent work", "query": "..."},\n'
+            '    {"intent": "section:<section_id>", "query": "..."}\n'
+            "  ]\n"
+            "}\n\n"
+            f"Question: {question}\n\n"
+            f"Broad query intents (use each at least once, generate {max_queries} total): {intents}\n\n"
+            "Sections (generate exactly one query per section, intent must be 'section:<section_id>'):\n"
+            f"{sections_block}\n\n"
+            "Rules:\n"
+            f"- Generate exactly {max_queries} broad queries with intents from the allowed list\n"
+            f"- Generate exactly {len(outline.sections)} section queries with intent 'section:<section_id>'\n"
+            "- Keep queries concise and specific\n"
+            "- Do not include numbering or commentary\n"
+        )
+    else:
+        prompt = (
+            f"Generate exactly {max_queries} diverse academic search queries for the research question below.\n"
+            "Return ONLY JSON with this schema:\n"
+            "{\n"
+            '  "queries": [\n'
+            '    {"intent": "survey|methods|benchmarks|failure modes|future '
+            'directions|recent work", "query": "..."}\n'
+            "  ]\n"
+            "}\n\n"
+            f"Question: {question}\n"
+            f"Allowed intents: {intents}\n"
+            "Rules:\n"
+            "- Use each intent at least once when possible\n"
+            "- Keep queries concise and specific\n"
+            "- Do not include numbering or commentary\n"
+        )
     system = "You generate search queries as strict JSON only."
     try:
         log_llm_exchange("request", prompt, stage="retrieve", logger=logger)
@@ -348,6 +378,7 @@ def _build_query_plan_with_llm(
             return fallback
         return []
 
+    max_total = max_queries + (len(outline.sections) if outline and outline.sections else 0)
     plans: list[QueryPlan] = []
     seen_queries: set[str] = set()
     for item in items:
@@ -365,7 +396,7 @@ def _build_query_plan_with_llm(
             continue
         plans.append(QueryPlan(intent=intent, query=query))
         seen_queries.add(query)
-        if len(plans) >= max_queries:
+        if len(plans) >= max_total:
             break
 
     return plans
