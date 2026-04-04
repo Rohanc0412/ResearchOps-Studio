@@ -18,14 +18,10 @@ from app_services.project_runs import (
 )
 from core.auth.identity import Identity
 from core.auth.rbac import require_roles
-from core.evaluation import METRIC_EVAL_STATUS
-
-# Kept here temporarily until get_evaluation endpoint is rewritten in the evaluation pipeline redesign.
-METRIC_EVAL_GROUNDING_PCT = "eval_grounding_pct"
+from core.evaluation import METRIC_EVAL_HALLUCINATION_RATE, METRIC_EVAL_QUALITY_PCT, METRIC_EVAL_STATUS
 from core.tenancy import get_tenant_id
 from db.models.run_sections import RunSectionRow
 from db.models.runs import RunStatusDb
-from db.models.section_reviews import SectionReviewRow
 from db.repositories.evaluation_history import list_evaluation_pass_history
 from db.repositories.project_runs import get_run_usage_metrics, list_run_events
 from db.session import session_scope
@@ -373,101 +369,49 @@ async def get_evaluation(
     if status not in ("complete", "running") and history:
         status = "complete"
 
-    # Load section titles using async execute
+    latest_history = history[0] if history else None
+    latest_history_sections = latest_history["sections"] if latest_history else []
+
+    # Load section titles for display
     from sqlalchemy import select as sa_select
     section_result = await session.execute(
         sa_select(RunSectionRow)
         .where(RunSectionRow.tenant_id == tenant_id, RunSectionRow.run_id == run_id)
         .order_by(RunSectionRow.section_order)
     )
-    section_rows = list(section_result.scalars().all())
-    titles = {r.section_id: r.title for r in section_rows}
+    titles = {r.section_id: r.title for r in section_result.scalars().all()}
 
-    from db.models.section_review_issues import SectionReviewIssueRow
-    from sqlalchemy.orm import selectinload as sa_selectinload
-    reviews_result = await session.execute(
-        sa_select(SectionReviewRow)
-        .where(SectionReviewRow.tenant_id == tenant_id, SectionReviewRow.run_id == run_id)
-        .options(
-            sa_selectinload(SectionReviewRow.issues).selectinload(SectionReviewIssueRow.citations)
-        )
-    )
-    reviews = list(reviews_result.scalars().all())
-
-    issues_by_type: dict[str, int] = {}
-    latest_history = history[0] if history else None
-    sections_out = []
-    latest_history_sections = latest_history["sections"] if latest_history else []
-    latest_scores = {
-        section["section_id"]: section.get("grounding_score")
+    sections_out = [
+        {
+            "section_id": section["section_id"],
+            "title": titles.get(section["section_id"], section.get("title") or section["section_id"]),
+            "quality_score": section.get("quality_score"),
+            "claims": section.get("claims") or [],
+        }
         for section in latest_history_sections
-        if isinstance(section, dict)
-    }
-    if latest_history_sections:
-        sections_out = [
-            {
-                "section_id": section["section_id"],
-                "title": titles.get(section["section_id"], section.get("title") or section["section_id"]),
-                "grounding_score": section.get("grounding_score"),
-                "verdict": section.get("verdict"),
-                "issues": section.get("issues") or [],
-            }
-            for section in latest_history_sections
-            if isinstance(section, dict) and isinstance(section.get("section_id"), str)
-        ]
-        issues_by_type = dict(latest_history.get("issues_by_type") or {})
-    elif not (status == "running" and latest_history):
-        for review in reviews:
-            issues = review.issues_json or []
-            for issue in issues:
-                p = issue.get("problem", "unknown")
-                issues_by_type[p] = issues_by_type.get(p, 0) + 1
-            sections_out.append({
-                "section_id": review.section_id,
-                "title": titles.get(review.section_id, review.section_id),
-                "grounding_score": latest_scores.get(review.section_id),
-                "verdict": review.verdict,
-                "issues": issues,
-            })
+        if isinstance(section, dict) and isinstance(section.get("section_id"), str)
+    ]
 
     if status == "running":
-        grounding_pct = latest_history.get("grounding_pct") if latest_history else None
-        faithfulness_pct = latest_history.get("faithfulness_pct") if latest_history else None
-        sections_passed = latest_history.get("sections_passed") if latest_history else None
-        sections_total = latest_history.get("sections_total") if latest_history else None
+        quality_pct = latest_history.get("quality_pct") if latest_history else None
+        hallucination_rate = latest_history.get("hallucination_rate") if latest_history else None
         evaluated_at = latest_history.get("evaluated_at") if latest_history else None
     else:
-        grounding_pct = usage.get(METRIC_EVAL_GROUNDING_PCT)
-        if grounding_pct is None and latest_history:
-            grounding_pct = latest_history.get("grounding_pct")
-
-        faithfulness_pct = usage.get("eval_faithfulness_pct")
-        if faithfulness_pct is None and latest_history:
-            faithfulness_pct = latest_history.get("faithfulness_pct")
-
-        sections_passed = usage.get("eval_sections_passed")
-        if sections_passed is None and latest_history:
-            sections_passed = latest_history.get("sections_passed")
-        sections_total = usage.get("eval_sections_total")
-        if sections_total is None and latest_history:
-            sections_total = latest_history.get("sections_total")
+        quality_pct = usage.get(METRIC_EVAL_QUALITY_PCT)
+        if quality_pct is None and latest_history:
+            quality_pct = latest_history.get("quality_pct")
+        hallucination_rate = usage.get(METRIC_EVAL_HALLUCINATION_RATE)
+        if hallucination_rate is None and latest_history:
+            hallucination_rate = latest_history.get("hallucination_rate")
         evaluated_at = usage.get("eval_evaluated_at")
         if evaluated_at is None and latest_history:
             evaluated_at = latest_history.get("evaluated_at")
 
-    if sections_passed is None and not (status == "running" and latest_history):
-        sections_passed = sum(1 for r in reviews if r.verdict == "pass")
-    if sections_total is None and not (status == "running" and latest_history):
-        sections_total = len(reviews)
-
     return {
         "status": status,
         "evaluated_at": evaluated_at,
-        "grounding_pct": grounding_pct,
-        "faithfulness_pct": faithfulness_pct,
-        "sections_passed": sections_passed,
-        "sections_total": sections_total,
-        "issues_by_type": issues_by_type,
+        "quality_pct": quality_pct,
+        "hallucination_rate": hallucination_rate,
         "sections": sections_out,
         "history": history,
     }
