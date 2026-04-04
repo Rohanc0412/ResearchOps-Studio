@@ -298,6 +298,7 @@ def _generate_quick_answer(
                         "tool_calls": tool_calls,
                     }
                 )
+                all_snippets: list[str] = []
                 for tool_call in tool_calls:
                     fn_args = tool_call.get("function", {})
                     query = fn_args.get("arguments", {})
@@ -313,22 +314,24 @@ def _generate_quick_answer(
                             f"[{i+1}] {r.title}: {r.snippet[:300]}"
                             for i, r in enumerate(results)
                         ]
-                        tool_result = "\n\n".join(snippets) or "No results found."
+                        all_snippets.extend(snippets)
                     except Exception:
-                        tool_result = "Web search unavailable."
+                        pass
 
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id", "call_0"),
-                            "content": tool_result,
-                        }
-                    )
-                final_message = client.generate_with_tools(
-                    messages, [WEB_SEARCH_TOOL], max_tokens=10000, temperature=0.4,
-                    tool_choice="none",
+                search_context = "\n\n".join(all_snippets) if all_snippets else "No results found."
+                synthesis_prompt = (
+                    f"Here are current web search results for the user's question:\n\n"
+                    f"{search_context}\n\n"
+                    f"Using these results, answer the following question with specific, "
+                    f"up-to-date information. Reference the sources naturally.\n\n"
+                    f"Question: {message}"
                 )
-                response_text = (final_message.get("content") or "").strip()
+                response_text = client.generate(
+                    synthesis_prompt,
+                    system="You are a helpful research assistant. Answer based on the provided search results.",
+                    max_tokens=10000,
+                    temperature=0.4,
+                ).strip()
             else:
                 response_text = (first_message.get("content") or "").strip()
             # Fall back to direct generate if tools path yielded no content
