@@ -67,8 +67,14 @@ def _find_repo_root(start: Path) -> Path | None:
     return None
 
 
+def resolve_repo_root(start: Path | None = None) -> Path | None:
+    if start is None:
+        start = Path(__file__).resolve()
+    return _find_repo_root(start)
+
+
 def resolve_env_files() -> tuple[str, ...]:
-    repo_root = _find_repo_root(Path(__file__).resolve())
+    repo_root = resolve_repo_root()
     if repo_root is None:
         return ()
     env_file = repo_root / ".env"

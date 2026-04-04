@@ -2,7 +2,8 @@
 RepairAgent node - repairs failed sections and patches continuity.
 
 Uses an LLM to repair only failing sentences in a section and to
-patch the first two sentences of the next section for continuity.
+patch the first two sentences of the next section for continuity when
+that next section is not already scheduled for its own repair pass.
 """
 
 from __future__ import annotations
@@ -399,13 +400,13 @@ def _repair_with_llm(
         )
     else:
         next_section_context = (
-            "There is no next section. Repair only the current section.\n"
+            "There is no eligible next section to patch. Repair only the current section.\n"
             'Return "" for next_section_id, patched_next_text, and patched_next_summary.\n'
             'Set edits_json.continuity_patch to null.\n\n'
         )
 
     prompt = (
-        "Repair the current section and, if a next section exists, apply a continuity patch to it.\n"
+        "Repair the current section and, if an eligible next section exists, apply a continuity patch to it.\n"
         "Return ONLY JSON with this schema:\n"
         "{\n"
         '  "section_id": "...",\n'
@@ -527,6 +528,7 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
         for section_id in ordered_ids
         if review_rows.get(section_id) and review_rows[section_id].verdict != "pass"
     ]
+    failing_section_ids = set(failing_sections)
     if not failing_sections:
         return state
 
@@ -572,6 +574,13 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             next_summary = section_summaries.get(next_section_id, "")
             if not next_text:
                 raise ValueError(f"Draft section missing for {next_section_id}")
+        should_patch_next = (
+            next_section_id is not None and next_section_id not in failing_section_ids
+        )
+        patch_target_section_id = next_section_id if should_patch_next else None
+        patch_target_section = next_section if should_patch_next else None
+        patch_target_text = next_text if should_patch_next else None
+        patch_target_summary = next_summary if should_patch_next else None
 
         section_snippets = _load_section_snippets(
             session,
@@ -581,12 +590,12 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             state_snippets=state.section_evidence_snippets,
         )
         next_snippets: list[EvidenceSnippetRef] = []
-        if next_section_id is not None:
+        if patch_target_section_id is not None:
             next_snippets = _load_section_snippets(
                 session,
                 tenant_id=state.tenant_id,
                 run_id=state.run_id,
-                section_id=next_section_id,
+                section_id=patch_target_section_id,
                 state_snippets=state.section_evidence_snippets,
             )
 
@@ -602,12 +611,16 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             patched_next_text = ""
             patched_next_summary = ""
             patch_log = None
-            if next_section_id is not None and next_text is not None and next_section is not None:
+            if (
+                patch_target_section_id is not None
+                and patch_target_text is not None
+                and patch_target_section is not None
+            ):
                 patched_next_text, patched_next_summary, patch_log = _patch_next_section_narrative(
-                    next_section_id=next_section_id,
-                    next_section_text=next_text,
+                    next_section_id=patch_target_section_id,
+                    next_section_text=patch_target_text,
                     revised_summary=revised_summary,
-                    next_section_title=next_section.title,
+                    next_section_title=patch_target_section.title,
                 )
             edits_json = {
                 "repaired_section_edits": edits,
@@ -622,9 +635,9 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
                 prior_summary=prior_summary,
                 issues=issues,
                 evidence_snippets=section_snippets,
-                next_section=next_section,
-                next_section_text=next_text,
-                next_section_summary=next_summary,
+                next_section=patch_target_section,
+                next_section_text=patch_target_text,
+                next_section_summary=patch_target_summary,
                 next_section_snippets=next_snippets,
             )
 
@@ -634,16 +647,18 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             revised_text = str(repair_payload.get("revised_text", "")).strip()
             revised_summary = str(repair_payload.get("revised_summary", "")).strip()
             patched_next_id = str(repair_payload.get("next_section_id", "")).strip()
-            if next_section_id is None:
+            if patch_target_section_id is None:
                 if patched_next_id:
-                    raise ValueError("Repair response returned next_section_id for final section.")
+                    raise ValueError(
+                        "Repair response returned next_section_id without an eligible continuity target."
+                    )
             patched_next_text = str(repair_payload.get("patched_next_text", "")).strip()
             patched_next_summary = str(repair_payload.get("patched_next_summary", "")).strip()
-            if next_section_id is not None:
-                if patched_next_id != next_section_id or not patched_next_text:
+            if patch_target_section_id is not None:
+                if patched_next_id != patch_target_section_id or not patched_next_text:
                     raise ValueError(
                         "Repair response must include a next-section continuity patch "
-                        "for non-final sections."
+                        "for sections with an eligible continuity target."
                     )
             edits_json = (
                 repair_payload.get("edits_json") if isinstance(repair_payload, dict) else None
@@ -662,21 +677,21 @@ def repair_agent_node(state: OrchestratorState, session: Session) -> Orchestrato
             text=revised_text,
             summary=revised_summary,
         )
-        if next_section_id is not None:
+        if patch_target_section_id is not None:
             _persist_draft_section(
                 session,
                 tenant_id=state.tenant_id,
                 run_id=state.run_id,
-                section_id=next_section_id,
+                section_id=patch_target_section_id,
                 text=patched_next_text,
                 summary=patched_next_summary,
             )
 
         section_texts[section_id] = revised_text
         section_summaries[section_id] = revised_summary
-        if next_section_id is not None:
-            section_texts[next_section_id] = patched_next_text
-            section_summaries[next_section_id] = patched_next_summary
+        if patch_target_section_id is not None:
+            section_texts[patch_target_section_id] = patched_next_text
+            section_summaries[patch_target_section_id] = patched_next_summary
 
         if isinstance(edits_json, dict):
             repair_logs.append(edits_json)

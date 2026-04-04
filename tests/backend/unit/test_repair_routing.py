@@ -421,6 +421,209 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, monk
     assert "Conclusion fixed with evidence" in repaired_row.text
 
 
+def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail(
+    db_session, monkeypatch
+):
+    from nodes.repair_agent import repair_agent_node
+    import nodes.repair_agent as repair_module
+
+    tenant_id = uuid4()
+    run_id = uuid4()
+    _make_run(db_session, tenant_id=tenant_id, run_id=run_id)
+
+    prompts: list[str] = []
+
+    class StubLLM:
+        def generate(self, prompt, **_kwargs):
+            prompts.append(prompt)
+            if "Current Section ID: intro" in prompt:
+                return json.dumps(
+                    {
+                        "section_id": "intro",
+                        "revised_text": (
+                            "Intro fixed with evidence "
+                            "[CITE:11111111-1111-1111-1111-111111111111]."
+                        ),
+                        "revised_summary": "Fixed intro.\nStill concise.",
+                        "next_section_id": "",
+                        "patched_next_text": "",
+                        "patched_next_summary": "",
+                        "edits_json": {
+                            "repaired_section_edits": [
+                                {
+                                    "sentence_index": 0,
+                                    "before": "Unsupported intro sentence.",
+                                    "after": (
+                                        "Intro fixed with evidence "
+                                        "[CITE:11111111-1111-1111-1111-111111111111]."
+                                    ),
+                                    "change_type": "replace",
+                                }
+                            ],
+                            "continuity_patch": None,
+                        },
+                    }
+                )
+            return json.dumps(
+                {
+                    "section_id": "methods",
+                    "revised_text": (
+                        "Methods fixed with evidence "
+                        "[CITE:22222222-2222-2222-2222-222222222222]."
+                    ),
+                    "revised_summary": "Fixed methods.\nStill concise.",
+                    "next_section_id": "",
+                    "patched_next_text": "",
+                    "patched_next_summary": "",
+                    "edits_json": {
+                        "repaired_section_edits": [
+                            {
+                                "sentence_index": 0,
+                                "before": "Unsupported methods sentence.",
+                                "after": (
+                                    "Methods fixed with evidence "
+                                    "[CITE:22222222-2222-2222-2222-222222222222]."
+                                ),
+                                "change_type": "replace",
+                            }
+                        ],
+                        "continuity_patch": None,
+                    },
+                }
+            )
+
+    monkeypatch.setattr(repair_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
+    _make_snippet(db_session, tenant_id=tenant_id, snippet_id="22222222-2222-2222-2222-222222222222")
+
+    outline = OutlineModel(
+        sections=[
+            OutlineSection(
+                section_id="intro",
+                title="Introduction",
+                goal="Intro goal sentence one. Intro goal sentence two.",
+                key_points=["A", "B", "C", "D", "E", "F"],
+                suggested_evidence_themes=["introtheme"],
+                section_order=1,
+            ),
+            OutlineSection(
+                section_id="methods",
+                title="Methods",
+                goal="Methods goal sentence one. Methods goal sentence two.",
+                key_points=["A", "B", "C", "D", "E", "F"],
+                suggested_evidence_themes=["methodstheme"],
+                section_order=2,
+            ),
+        ]
+    )
+    db_session.add_all(
+        [
+            DraftSectionRow(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                section_id="intro",
+                text="Unsupported intro sentence.",
+                section_summary="Old intro summary.",
+            ),
+            DraftSectionRow(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                section_id="methods",
+                text="Unsupported methods sentence.",
+                section_summary="Old methods summary.",
+            ),
+            SectionReviewRow(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                section_id="intro",
+                verdict="fail",
+                issues_json=[
+                    {
+                        "sentence_index": 0,
+                        "problem": "unsupported",
+                        "notes": "Missing support.",
+                        "citations": [],
+                    }
+                ],
+                reviewed_at=datetime.now(UTC),
+            ),
+            SectionReviewRow(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                section_id="methods",
+                verdict="fail",
+                issues_json=[
+                    {
+                        "sentence_index": 0,
+                        "problem": "unsupported",
+                        "notes": "Missing support.",
+                        "citations": [],
+                    }
+                ],
+                reviewed_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    state = OrchestratorState(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        user_query="test",
+        outline=outline,
+        section_evidence_snippets={
+            "intro": [
+                EvidenceSnippetRef(
+                    snippet_id="11111111-1111-1111-1111-111111111111",
+                    source_id=uuid4(),
+                    text="Intro evidence snippet.",
+                    char_start=0,
+                    char_end=21,
+                )
+            ],
+            "methods": [
+                EvidenceSnippetRef(
+                    snippet_id="22222222-2222-2222-2222-222222222222",
+                    source_id=uuid4(),
+                    text="Methods evidence snippet.",
+                    char_start=0,
+                    char_end=23,
+                )
+            ],
+        },
+    )
+
+    result = repair_agent_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
+
+    repaired_intro = (
+        db_session.query(DraftSectionRow)
+        .filter(
+            DraftSectionRow.tenant_id == tenant_id,
+            DraftSectionRow.run_id == run_id,
+            DraftSectionRow.section_id == "intro",
+        )
+        .one()
+    )
+    repaired_methods = (
+        db_session.query(DraftSectionRow)
+        .filter(
+            DraftSectionRow.tenant_id == tenant_id,
+            DraftSectionRow.run_id == run_id,
+            DraftSectionRow.section_id == "methods",
+        )
+        .one()
+    )
+
+    assert result.repair_attempts == 1
+    assert len(prompts) == 2
+    assert "There is no eligible next section to patch." in prompts[0]
+    assert "Next Section ID: methods" not in prompts[0]
+    assert "Intro fixed with evidence" in repaired_intro.text
+    assert repaired_methods.text == (
+        "Methods fixed with evidence [CITE:22222222-2222-2222-2222-222222222222]."
+    )
+
+
 def test_repair_agent_requires_next_section_patch_for_non_final_section(db_session, monkeypatch):
     from nodes.repair_agent import repair_agent_node
     import nodes.repair_agent as repair_module

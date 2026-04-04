@@ -9,6 +9,7 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
+from core.env import resolve_repo_root
 from observability.context import request_id, run_id, service, tenant_id
 
 
@@ -237,6 +238,17 @@ class PrettyFormatter(logging.Formatter):
         return base
 
 
+def _resolve_log_file_path() -> str:
+    configured_path = (os.getenv("LOG_FILE_PATH") or "").strip()
+    if configured_path:
+        return configured_path
+
+    repo_root = resolve_repo_root(pathlib.Path(__file__).resolve())
+    if repo_root is None:
+        return ""
+    return str((repo_root / "artifacts" / "logs" / "backend.log").resolve())
+
+
 def setup_logging(app_service_name: str) -> None:
     """
     Configure logging once per process.
@@ -244,7 +256,7 @@ def setup_logging(app_service_name: str) -> None:
 
     Supports:
     - Human-readable console logging
-    - Optional file logging (RotatingFileHandler) if LOG_FILE_PATH is set
+    - File logging (RotatingFileHandler), defaulting to repo-local artifacts when unset
     """
     root = logging.getLogger()
 
@@ -272,8 +284,8 @@ def setup_logging(app_service_name: str) -> None:
     console_handler.setFormatter(PrettyFormatter())
     root.addHandler(console_handler)
 
-    # Optional file handler (enabled only if LOG_FILE_PATH is set)
-    log_file_path = (os.getenv("LOG_FILE_PATH") or "").strip()
+    # Default local file handler path keeps runtime logs under repo artifacts.
+    log_file_path = _resolve_log_file_path()
     if log_file_path:
         path = pathlib.Path(log_file_path)
         path.parent.mkdir(parents=True, exist_ok=True)

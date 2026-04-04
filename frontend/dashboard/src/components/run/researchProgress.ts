@@ -131,7 +131,9 @@ export function buildResearchProgressCardModel({
   const planEvent = contractEvents.find((e) => e.event_type === "retrieve.plan_created");
   const rawLabels = planEvent?.payload?.["step_labels"];
   const stepLabels: string[] = (
-    Array.isArray(rawLabels) && rawLabels.length === 6
+    Array.isArray(rawLabels) &&
+    rawLabels.length === 6 &&
+    (rawLabels as unknown[]).every((l) => typeof l === "string" && l.trim().length > 0)
       ? rawLabels as string[]
       : FALLBACK_STEP_LABELS
   );
@@ -168,7 +170,7 @@ export function buildResearchProgressCardModel({
     title,
     steps: STEP_IDS.map((id, index) => ({
       id,
-      label: stepLabels[index] ?? FALLBACK_STEP_LABELS[index] ?? "",
+      label: (stepLabels[index] || FALLBACK_STEP_LABELS[index]) ?? "",
       state:
         activeRun?.status === "succeeded" || index < currentStepIndex
           ? "complete"
@@ -346,7 +348,15 @@ function deriveStepMetrics(events: RunEvent[], status: ProgressStatus): (string 
   // ── Step 2: evidence_pack ─────────────────────────────────────
   let step2: string | null = null;
   {
-    const packedSections = events.filter(e => e.event_type === "evidence_pack.created").length;
+    // Only count events from the current iteration (after the last stage_start for evidence_pack).
+    // The pipeline can re-run evidence_pack in a repair loop, emitting evidence_pack.created for
+    // all sections again — counting across iterations would show e.g. "12 / 6 sections".
+    const lastStageStartIdx = events.reduce(
+      (acc, e, i) => (e.event_type === "stage_start" && e.stage === "evidence_pack" ? i : acc),
+      -1
+    );
+    const eventsThisIteration = lastStageStartIdx >= 0 ? events.slice(lastStageStartIdx) : events;
+    const packedSections = eventsThisIteration.filter(e => e.event_type === "evidence_pack.created").length;
     let outlineSections: number | null = null;
     for (const e of events) {
       if (e.event_type === "outline.created") {

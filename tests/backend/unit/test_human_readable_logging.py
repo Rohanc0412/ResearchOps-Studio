@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import sys
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 from fastapi import Request, Response
 
-from observability.logging_setup import PrettyFormatter
+from observability.logging_setup import PrettyFormatter, _resolve_log_file_path
 from observability.middleware import request_id_middleware
 
 
@@ -71,6 +72,20 @@ def test_pretty_formatter_includes_traceback_for_exceptions() -> None:
     assert "ERROR Research run failed" in rendered
     assert "Traceback" in rendered
     assert "RuntimeError: boom" in rendered
+
+
+def test_resolve_log_file_path_defaults_to_repo_artifacts_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOG_FILE_PATH", raising=False)
+    repo_root = Path(r"C:\repo")
+    monkeypatch.setattr("observability.logging_setup.resolve_repo_root", lambda _start=None: repo_root)
+
+    assert _resolve_log_file_path() == str((repo_root / "artifacts" / "logs" / "backend.log").resolve())
+
+
+def test_resolve_log_file_path_prefers_explicit_env_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_FILE_PATH", "custom/logs/app.log")
+
+    assert _resolve_log_file_path() == "custom/logs/app.log"
 
 
 @pytest.mark.asyncio
