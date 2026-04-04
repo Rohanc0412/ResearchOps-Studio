@@ -212,12 +212,12 @@ class OpenAICompatibleClient:
         payload: dict = {
             "model": self._request_model_name(),
             "messages": messages,
-            "temperature": temperature,
         }
         if self._uses_max_completion_tokens():
             payload["max_completion_tokens"] = max_tokens
         else:
             payload["max_tokens"] = max_tokens
+            payload["temperature"] = temperature
         return payload
 
     def generate(
