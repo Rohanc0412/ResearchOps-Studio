@@ -7,7 +7,7 @@ import {
   useRunEvaluateMutation,
   type EvaluationPass,
   type EvaluationSection,
-  type EvaluationIssue,
+  type EvaluationClaim,
 } from "../../api/evaluation";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
@@ -15,19 +15,19 @@ import { ErrorBanner } from "../ui/ErrorBanner";
 import { Spinner } from "../ui/Spinner";
 import { cx } from "../../utils/format";
 
-// ── Issue type display config ─────────────────────────────────────────────────
+// ── Verdict display config ────────────────────────────────────────────────────
 
-const ISSUE_COLORS: Record<string, { badge: string; dot: string }> = {
+const VERDICT_COLORS: Record<string, { badge: string; dot: string }> = {
+  supported:        { badge: "bg-green-500/10 text-green-400",   dot: "bg-green-400" },
   unsupported:      { badge: "bg-amber-500/10 text-amber-400",   dot: "bg-amber-400" },
   contradicted:     { badge: "bg-red-500/10 text-red-400",       dot: "bg-red-400" },
   missing_citation: { badge: "bg-obsidian-accent/10 text-obsidian-accent", dot: "bg-obsidian-accent" },
   overstated:       { badge: "bg-violet-500/10 text-violet-400", dot: "bg-violet-400" },
   invalid_citation: { badge: "bg-red-500/10 text-red-400",       dot: "bg-red-400" },
-  not_in_pack:      { badge: "bg-amber-500/10 text-amber-400",   dot: "bg-amber-400" },
 };
 
-function issueColors(problem: string) {
-  return ISSUE_COLORS[problem] ?? { badge: "bg-obsidian-border text-obsidian-muted", dot: "bg-obsidian-muted" };
+function verdictColors(verdict: string) {
+  return VERDICT_COLORS[verdict] ?? { badge: "bg-obsidian-border text-obsidian-muted", dot: "bg-obsidian-muted" };
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -54,16 +54,19 @@ function MetricCard({
   );
 }
 
-function IssueItem({ issue }: { issue: EvaluationIssue }) {
-  const colors = issueColors(issue.problem);
+function ClaimItem({ claim }: { claim: EvaluationClaim }) {
+  const colors = verdictColors(claim.verdict);
   return (
     <div className="flex flex-col gap-1.5">
-      <span className={cx("inline-block w-fit rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide", colors.badge)}>
-        {issue.problem.replace(/_/g, " ")}
-      </span>
-      {issue.notes && (
+      <div className="flex items-center gap-2">
+        <span className={cx("inline-block w-fit rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide", colors.badge)}>
+          {claim.verdict.replace(/_/g, " ")}
+        </span>
+        <span className="font-mono text-[11px] text-obsidian-muted">{claim.claim_text}</span>
+      </div>
+      {claim.notes && (
         <p className="border-l-2 border-obsidian-border pl-2 font-mono text-[11px] italic leading-relaxed text-obsidian-muted">
-          {issue.notes}
+          {claim.notes}
         </p>
       )}
     </div>
@@ -72,23 +75,28 @@ function IssueItem({ issue }: { issue: EvaluationIssue }) {
 
 function SectionRow({ section }: { section: EvaluationSection }) {
   const [open, setOpen] = useState(false);
-  const isFail = section.verdict === "fail";
+  const score = section.quality_score;
+  const isLow = score != null && score < 70;
+  const hasClaims = section.claims.length > 0;
+
+  const scoreLabel =
+    score != null
+      ? `${score}%`
+      : section.claims.length === 0
+        ? "no claims"
+        : "—";
+  const scoreColorClass = score == null ? "text-obsidian-muted" : score >= 70 ? "text-green-400" : "text-amber-400";
 
   const headerContent = (
     <>
-      <span className={cx("text-[13px]", isFail ? "font-semibold text-obsidian-text" : "text-obsidian-muted")}>
+      <span className={cx("text-[13px]", isLow ? "font-semibold text-obsidian-text" : "text-obsidian-muted")}>
         {section.title}
       </span>
       <div className="flex items-center gap-2.5">
-        <span
-          className={cx(
-            "rounded px-2 py-0.5 font-mono text-[10px] font-bold",
-            isFail ? "bg-red-500/10 text-red-400" : "bg-green-500/10 text-green-400"
-          )}
-        >
-          {section.verdict}
+        <span className={cx("rounded px-2 py-0.5 font-mono text-[10px] font-bold", scoreColorClass)}>
+          {scoreLabel}
         </span>
-        {isFail && (
+        {hasClaims && (
           <span className="text-[10px] text-obsidian-border">{open ? "▲" : "▼"}</span>
         )}
       </div>
@@ -96,8 +104,8 @@ function SectionRow({ section }: { section: EvaluationSection }) {
   );
 
   return (
-    <div className={cx("overflow-hidden rounded-[10px] border", isFail ? "border-red-500/20" : "border-obsidian-border")}>
-      {isFail ? (
+    <div className={cx("overflow-hidden rounded-[10px] border", isLow ? "border-amber-500/20" : "border-obsidian-border")}>
+      {hasClaims ? (
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -111,10 +119,10 @@ function SectionRow({ section }: { section: EvaluationSection }) {
         </div>
       )}
 
-      {isFail && open && section.issues.length > 0 && (
+      {hasClaims && open && (
         <div className="flex flex-col gap-3 border-t border-obsidian-border bg-obsidian-bg px-4 py-3">
-          {section.issues.map((issue, i) => (
-            <IssueItem key={i} issue={issue} />
+          {section.claims.map((claim, i) => (
+            <ClaimItem key={i} claim={claim} />
           ))}
         </div>
       )}
@@ -122,43 +130,6 @@ function SectionRow({ section }: { section: EvaluationSection }) {
   );
 }
 
-function IssueBreakdownBar({ issuesByType }: { issuesByType: Record<string, number> }) {
-  const total = Object.values(issuesByType).reduce((a, b) => a + b, 0);
-  if (total === 0) return null;
-
-  const entries = Object.entries(issuesByType).sort((a, b) => b[1] - a[1]);
-
-  return (
-    <div className="rounded-xl border border-obsidian-border bg-obsidian-surface-elevated p-4">
-      <p className="mb-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
-        Issue Breakdown
-      </p>
-      <div className="mb-3 flex h-1.5 gap-0.5 overflow-hidden rounded-full">
-        {entries.map(([problem, count]) => {
-          const colors = issueColors(problem);
-          return (
-            <div
-              key={problem}
-              className={cx("h-full", colors.dot)}
-              style={{ flex: count }}
-            />
-          );
-        })}
-      </div>
-      <div className="flex flex-wrap gap-3">
-        {entries.map(([problem, count]) => {
-          const colors = issueColors(problem);
-          return (
-            <span key={problem} className="flex items-center gap-1.5 font-mono text-[10px] text-obsidian-muted">
-              <span className={cx("h-1.5 w-1.5 rounded-full", colors.dot)} />
-              {count} {problem.replace(/_/g, " ")}
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 function formatPassScope(scope: string) {
   return scope === "manual" ? "Manual" : "Pipeline";
@@ -166,7 +137,8 @@ function formatPassScope(scope: string) {
 
 function EvaluationHistoryCard({ evaluationPass }: { evaluationPass: EvaluationPass }) {
   const [open, setOpen] = useState(false);
-  const hasFailures = (evaluationPass.sections ?? []).some((section) => section.verdict === "fail");
+  const qualityPct = evaluationPass.quality_pct;
+  const hallucinationRate = evaluationPass.hallucination_rate;
   const evaluatedLabel = evaluationPass.evaluated_at
     ? new Date(evaluationPass.evaluated_at).toLocaleString()
     : "Unknown";
@@ -179,29 +151,19 @@ function EvaluationHistoryCard({ evaluationPass }: { evaluationPass: EvaluationP
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
       >
         <div className="flex min-w-0 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
-              {formatPassScope(evaluationPass.scope)} pass {evaluationPass.pass_index}
-            </span>
-            <span
-              className={cx(
-                "rounded px-2 py-0.5 font-mono text-[10px] font-bold",
-                hasFailures ? "bg-amber-500/10 text-amber-400" : "bg-green-500/10 text-green-400"
-              )}
-            >
-              {(evaluationPass.sections_passed ?? 0)}/{evaluationPass.sections_total ?? 0} passed
-            </span>
-          </div>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-widest text-obsidian-muted">
+            {formatPassScope(evaluationPass.scope)} pass {evaluationPass.pass_index}
+          </span>
           <span className="font-mono text-[10px] text-obsidian-border">{evaluatedLabel}</span>
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block">
-            <div className="text-[12px] font-medium text-obsidian-text">
-              {evaluationPass.grounding_pct != null ? `${evaluationPass.grounding_pct}% grounding` : "No grounding score"}
+            <div className={cx("text-[12px] font-medium", qualityPct != null ? (qualityPct >= 70 ? "text-green-400" : "text-amber-400") : "text-obsidian-muted")}>
+              {qualityPct != null ? `${qualityPct}% quality` : "No score"}
             </div>
-            {evaluationPass.faithfulness_pct != null && (
+            {hallucinationRate != null && (
               <div className="font-mono text-[10px] text-obsidian-muted">
-                {evaluationPass.faithfulness_pct}% faithfulness
+                {hallucinationRate}% hallucination
               </div>
             )}
           </div>
@@ -211,12 +173,6 @@ function EvaluationHistoryCard({ evaluationPass }: { evaluationPass: EvaluationP
 
       {open && (
         <div className="border-t border-obsidian-border px-4 py-4">
-          {evaluationPass.issues_by_type && Object.keys(evaluationPass.issues_by_type).length > 0 && (
-            <div className="mb-4">
-              <IssueBreakdownBar issuesByType={evaluationPass.issues_by_type} />
-            </div>
-          )}
-
           <div className="flex flex-col gap-1">
             {evaluationPass.sections.map((section) => (
               <SectionRow key={`${evaluationPass.id}-${section.section_id}`} section={section} />
@@ -256,17 +212,10 @@ export function EvaluationTab({ runId }: { runId: string }) {
   const serverProgress =
     storedStatus === "running"
       ? {
-          step: result?.faithfulness_pct != null ? 3 : result?.grounding_pct != null ? 2 : 1,
-          stepLabel:
-            result?.faithfulness_pct != null
-              ? "Finalizing evaluation results..."
-              : result?.grounding_pct != null
-                ? "Computing answer faithfulness..."
-                : "Scoring section grounding...",
-          partialGrounding: result?.grounding_pct,
-          partialFaithfulness: result?.faithfulness_pct,
-          partialSectionsPassed: result?.sections_passed,
-          partialSectionsTotal: result?.sections_total,
+          step: 1,
+          stepLabel: "Verifying claims against evidence…",
+          partialQualityPct: result?.quality_pct,
+          partialHallucinationRate: result?.hallucination_rate,
           sections: result?.sections ?? latestHistory?.sections ?? [],
         }
       : null;
@@ -280,7 +229,7 @@ export function EvaluationTab({ runId }: { runId: string }) {
         <EmptyState
           icon={<CheckCircle2 className="h-5 w-5" />}
           title="No evaluation yet"
-          description="Score this report for grounding, faithfulness, and section coverage."
+          description="Score this report for claim quality and hallucination rate."
           action={
             <Button variant="primary" onClick={() => void mutate()}>
               <PlayCircle className="h-4 w-4" />
@@ -300,12 +249,12 @@ export function EvaluationTab({ runId }: { runId: string }) {
         <div className="rounded-xl border border-obsidian-border bg-obsidian-surface-elevated p-4">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[13px] font-semibold text-obsidian-text">Evaluating report...</span>
-            <span className="font-mono text-[11px] text-obsidian-muted">Step {activeProgress.step} of 3</span>
+            <span className="font-mono text-[11px] text-obsidian-muted">Step {activeProgress.step} of 2</span>
           </div>
           <div className="mb-2 h-1 overflow-hidden rounded-full bg-obsidian-border">
             <div
               className="h-full rounded-full bg-obsidian-accent transition-all duration-500"
-              style={{ width: `${Math.round((activeProgress.step / 3) * 100)}%` }}
+              style={{ width: `${Math.round((activeProgress.step / 2) * 100)}%` }}
             />
           </div>
           <p className="font-mono text-[11px] text-obsidian-accent">
@@ -313,35 +262,20 @@ export function EvaluationTab({ runId }: { runId: string }) {
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-2.5">
+        <div className="grid grid-cols-2 gap-2.5">
           <MetricCard
-            value={activeProgress.partialGrounding != null ? `${activeProgress.partialGrounding}%` : "-"}
-            label="Grounding Score"
-            sublabel="latest available"
-            colorClass={activeProgress.partialGrounding != null ? "text-green-400" : "text-obsidian-muted"}
+            value={activeProgress.partialQualityPct != null ? `${activeProgress.partialQualityPct}%` : "-"}
+            label="Quality Score"
+            sublabel="available after scoring"
+            colorClass={activeProgress.partialQualityPct != null ? "text-green-400" : "text-obsidian-muted"}
             borderClass="border-t-2 border-t-green-500/30"
           />
           <MetricCard
-            value={activeProgress.partialFaithfulness != null ? `${activeProgress.partialFaithfulness}%` : "-"}
-            label="Answer Faithfulness"
-            sublabel="available after step 2"
-            colorClass={activeProgress.partialFaithfulness != null ? "text-amber-400" : "text-obsidian-muted"}
+            value={activeProgress.partialHallucinationRate != null ? `${activeProgress.partialHallucinationRate}%` : "-"}
+            label="Hallucination Rate"
+            sublabel="available after scoring"
+            colorClass={activeProgress.partialHallucinationRate != null ? "text-amber-400" : "text-obsidian-muted"}
             borderClass="border-t-2 border-t-amber-500/30"
-          />
-          <MetricCard
-            value={
-              activeProgress.partialSectionsPassed != null && activeProgress.partialSectionsTotal != null
-                ? `${activeProgress.partialSectionsPassed}/${activeProgress.partialSectionsTotal}`
-                : "-"
-            }
-            label="Sections Passed"
-            sublabel=">= 70% grounding threshold"
-            colorClass={
-              activeProgress.partialSectionsPassed != null && activeProgress.partialSectionsTotal != null
-                ? "text-obsidian-text"
-                : "text-obsidian-muted"
-            }
-            borderClass="border-t-2 border-t-obsidian-accent/20"
           />
         </div>
 
@@ -371,27 +305,20 @@ export function EvaluationTab({ runId }: { runId: string }) {
       <div className="flex flex-col gap-4">
         {mutationError && <ErrorBanner message={mutationError} />}
 
-        <div className="grid grid-cols-3 gap-2.5">
+        <div className="grid grid-cols-2 gap-2.5">
           <MetricCard
-            value={result.grounding_pct != null ? `${result.grounding_pct}%` : "—"}
-            label="Grounding Score"
-            sublabel="facts backed by evidence"
-            colorClass={scoreColor(result.grounding_pct)}
+            value={result.quality_pct != null ? `${result.quality_pct}%` : "—"}
+            label="Quality Score"
+            sublabel="weighted claim quality"
+            colorClass={scoreColor(result.quality_pct)}
             borderClass="border-t-2 border-t-green-500/50"
           />
           <MetricCard
-            value={result.faithfulness_pct != null ? `${result.faithfulness_pct}%` : "—"}
-            label="Answer Faithfulness"
-            sublabel="claims traceable to sources"
-            colorClass={scoreColor(result.faithfulness_pct)}
+            value={result.hallucination_rate != null ? `${result.hallucination_rate}%` : "—"}
+            label="Hallucination Rate"
+            sublabel="contradicted + unsupported"
+            colorClass={result.hallucination_rate == null ? "text-obsidian-muted" : result.hallucination_rate <= 10 ? "text-green-400" : "text-amber-400"}
             borderClass="border-t-2 border-t-amber-500/50"
-          />
-          <MetricCard
-            value={`${result.sections_passed ?? 0}/${result.sections_total ?? 0}`}
-            label="Sections Passed"
-            sublabel="≥ 70% grounding threshold"
-            colorClass="text-obsidian-text"
-            borderClass="border-t-2 border-t-obsidian-accent/50"
           />
         </div>
 
@@ -406,10 +333,6 @@ export function EvaluationTab({ runId }: { runId: string }) {
             Re-evaluate
           </Button>
         </div>
-
-        {result.issues_by_type && Object.keys(result.issues_by_type).length > 0 && (
-          <IssueBreakdownBar issuesByType={result.issues_by_type} />
-        )}
 
         {(result.sections?.length ?? 0) > 0 && (
           <div className="flex flex-col gap-4">
