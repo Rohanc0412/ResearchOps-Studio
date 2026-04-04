@@ -9,7 +9,6 @@ from uuid import UUID
 
 import pytest
 from db.models.run_sections import RunSectionRow
-from db.models.section_reviews import SectionReviewRow
 from db.repositories.evaluation_history import (
     create_evaluation_pass,
     finalize_evaluation_pass,
@@ -89,9 +88,8 @@ async def test_evaluation_history_is_append_only_across_passes() -> None:
             section_id="intro",
             section_title="Introduction",
             section_order=1,
-            verdict="fail",
-            grounding_score=45,
-            issues=[{"sentence_index": 0, "problem": "unsupported", "notes": "Missing evidence", "citations": []}],
+            quality_score=45,
+            claims=[{"claim_index": 0, "claim_text": "AI is used widely.", "verdict": "unsupported", "citations": [], "notes": "Missing evidence"}],
         )
         await record_evaluation_section_result(
             session=session,
@@ -100,17 +98,15 @@ async def test_evaluation_history_is_append_only_across_passes() -> None:
             section_id="results",
             section_title="Results",
             section_order=2,
-            verdict="pass",
-            grounding_score=88,
-            issues=[],
+            quality_score=88,
+            claims=[],
         )
         await finalize_evaluation_pass(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_one.id,
-            grounding_pct=67,
-            sections_passed=1,
-            sections_total=2,
+            quality_pct=67,
+            hallucination_rate=20,
             issues_by_type={"unsupported": 1},
         )
 
@@ -127,9 +123,8 @@ async def test_evaluation_history_is_append_only_across_passes() -> None:
             section_id="intro",
             section_title="Introduction",
             section_order=1,
-            verdict="pass",
-            grounding_score=85,
-            issues=[],
+            quality_score=85,
+            claims=[],
         )
         await record_evaluation_section_result(
             session=session,
@@ -138,17 +133,15 @@ async def test_evaluation_history_is_append_only_across_passes() -> None:
             section_id="results",
             section_title="Results",
             section_order=2,
-            verdict="pass",
-            grounding_score=92,
-            issues=[],
+            quality_score=92,
+            claims=[],
         )
         await finalize_evaluation_pass(
             session=session,
             tenant_id=tenant_id,
             evaluation_pass_id=pass_two.id,
-            grounding_pct=89,
-            sections_passed=2,
-            sections_total=2,
+            quality_pct=89,
+            hallucination_rate=5,
             issues_by_type={},
         )
         await session.commit()
@@ -161,10 +154,10 @@ async def test_evaluation_history_is_append_only_across_passes() -> None:
 
         assert len(history) == 2
         assert history[0]["pass_index"] == 2
-        assert history[0]["sections_passed"] == 2
+        assert history[0]["quality_pct"] == 89
         assert history[1]["pass_index"] == 1
-        assert history[1]["sections_passed"] == 1
-        assert history[1]["sections"][0]["verdict"] == "fail"
+        assert history[1]["quality_pct"] == 67
+        assert history[1]["sections"][0]["quality_score"] == 45
 
     await engine.dispose()
 
@@ -228,22 +221,6 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
                 ]
             )
 
-            latest_review_intro = SectionReviewRow(
-                tenant_id=tenant_id,
-                run_id=run.id,
-                section_id="intro",
-                verdict="pass",
-            )
-            latest_review_intro.issues_json = []
-            latest_review_results = SectionReviewRow(
-                tenant_id=tenant_id,
-                run_id=run.id,
-                section_id="results",
-                verdict="pass",
-            )
-            latest_review_results.issues_json = []
-            session.add_all([latest_review_intro, latest_review_results])
-
             pass_one = await create_evaluation_pass(
                 session=session,
                 tenant_id=tenant_id,
@@ -257,9 +234,8 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
                 section_id="intro",
                 section_title="Introduction",
                 section_order=1,
-                verdict="fail",
-                grounding_score=45,
-                issues=[{"sentence_index": 0, "problem": "unsupported", "notes": "Missing evidence", "citations": []}],
+                quality_score=45,
+                claims=[{"claim_index": 0, "claim_text": "AI is widely used.", "verdict": "unsupported", "citations": [], "notes": "Missing evidence"}],
             )
             await record_evaluation_section_result(
                 session=session,
@@ -268,17 +244,15 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
                 section_id="results",
                 section_title="Results",
                 section_order=2,
-                verdict="pass",
-                grounding_score=88,
-                issues=[],
+                quality_score=88,
+                claims=[],
             )
             await finalize_evaluation_pass(
                 session=session,
                 tenant_id=tenant_id,
                 evaluation_pass_id=pass_one.id,
-                grounding_pct=67,
-                sections_passed=1,
-                sections_total=2,
+                quality_pct=67,
+                hallucination_rate=20,
                 issues_by_type={"unsupported": 1},
             )
 
@@ -295,9 +269,8 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
                 section_id="intro",
                 section_title="Introduction",
                 section_order=1,
-                verdict="pass",
-                grounding_score=85,
-                issues=[],
+                quality_score=85,
+                claims=[],
             )
             await record_evaluation_section_result(
                 session=session,
@@ -306,21 +279,18 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
                 section_id="results",
                 section_title="Results",
                 section_order=2,
-                verdict="pass",
-                grounding_score=92,
-                issues=[],
+                quality_score=92,
+                claims=[],
             )
             await finalize_evaluation_pass(
                 session=session,
                 tenant_id=tenant_id,
                 evaluation_pass_id=pass_two.id,
-                grounding_pct=89,
-                faithfulness_pct=93,
-                sections_passed=2,
-                sections_total=2,
+                quality_pct=89,
+                hallucination_rate=5,
                 issues_by_type={},
             )
-            patch_run_usage_metrics(run, {"eval_sections_passed": 2, "eval_sections_total": 2})
+            patch_run_usage_metrics(run, {"eval_quality_pct": 89, "eval_hallucination_rate": 5})
             return str(run.id)
 
     run_id = asyncio.run(_setup())
@@ -330,15 +300,13 @@ def test_get_evaluation_returns_pipeline_history_without_manual_eval_status(api_
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "complete"
-    assert payload["grounding_pct"] == 89
-    assert payload["faithfulness_pct"] == 93
-    assert payload["sections_passed"] == 2
-    assert payload["sections_total"] == 2
+    assert payload["quality_pct"] == 89
+    assert payload["hallucination_rate"] == 5
     assert len(payload["history"]) == 2
     assert payload["history"][0]["pass_index"] == 2
     assert payload["history"][1]["pass_index"] == 1
-    assert payload["history"][1]["sections_passed"] == 1
-    assert payload["history"][1]["sections"][0]["verdict"] == "fail"
+    assert payload["history"][1]["quality_pct"] == 67
+    assert payload["history"][1]["sections"][0]["quality_score"] == 45
 
 
 def test_get_evaluation_includes_running_pass_history(api_client) -> None:
@@ -387,9 +355,8 @@ def test_get_evaluation_includes_running_pass_history(api_client) -> None:
                 section_id="intro",
                 section_title="Introduction",
                 section_order=1,
-                verdict="fail",
-                grounding_score=72,
-                issues=[{"sentence_index": 0, "problem": "unsupported", "notes": "Still checking", "citations": []}],
+                quality_score=72,
+                claims=[{"claim_index": 0, "claim_text": "AI helps.", "verdict": "supported", "citations": [], "notes": ""}],
             )
             patch_run_usage_metrics(run, {"eval_status": "running"})
             return str(run.id)
@@ -404,5 +371,4 @@ def test_get_evaluation_includes_running_pass_history(api_client) -> None:
     assert len(payload["history"]) == 1
     assert payload["history"][0]["status"] == "running"
     assert payload["history"][0]["scope"] == "manual"
-    assert payload["history"][0]["sections"][0]["grounding_score"] == 72
-    assert payload["sections"][0]["grounding_score"] == 72
+    assert payload["history"][0]["sections"][0]["quality_score"] == 72

@@ -195,6 +195,7 @@ class OrchestratorState(BaseModel):
     # Stage 11: Evaluation
     evaluator_decision: EvaluatorDecision | None = None
     evaluation_reason: str = ""
+    sections_to_repair: list[str] = Field(default_factory=list)  # section_ids needing repair
 
     # Step labels (LLM-planned at run start, streamed to frontend)
     step_labels: list[str] | None = None

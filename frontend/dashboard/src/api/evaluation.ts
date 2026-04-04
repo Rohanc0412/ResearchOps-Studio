@@ -8,20 +8,20 @@ import { accessToken, handleUnauthorized } from "./auth";
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 
-export const EvaluationIssueSchema = z.object({
-  sentence_index: z.number(),
-  problem: z.string(),
-  notes: z.string(),
+export const EvaluationClaimSchema = z.object({
+  claim_index: z.number(),
+  claim_text: z.string(),
+  verdict: z.string(),
   citations: z.array(z.string()),
+  notes: z.string().optional(),
 });
-export type EvaluationIssue = z.infer<typeof EvaluationIssueSchema>;
+export type EvaluationClaim = z.infer<typeof EvaluationClaimSchema>;
 
 export const EvaluationSectionSchema = z.object({
   section_id: z.string(),
   title: z.string(),
-  grounding_score: z.number().nullable(),
-  verdict: z.enum(["pass", "fail"]),
-  issues: z.array(EvaluationIssueSchema),
+  quality_score: z.number().nullable(),
+  claims: z.array(EvaluationClaimSchema),
 });
 export type EvaluationSection = z.infer<typeof EvaluationSectionSchema>;
 
@@ -31,11 +31,8 @@ export const EvaluationPassSchema = z.object({
   pass_index: z.number(),
   status: z.string(),
   evaluated_at: z.string().nullable().optional(),
-  grounding_pct: z.number().nullable().optional(),
-  faithfulness_pct: z.number().nullable().optional(),
-  sections_passed: z.number().nullable().optional(),
-  sections_total: z.number().nullable().optional(),
-  issues_by_type: z.record(z.number()).optional(),
+  quality_pct: z.number().nullable().optional(),
+  hallucination_rate: z.number().nullable().optional(),
   sections: z.array(EvaluationSectionSchema),
 });
 export type EvaluationPass = z.infer<typeof EvaluationPassSchema>;
@@ -43,11 +40,8 @@ export type EvaluationPass = z.infer<typeof EvaluationPassSchema>;
 export const EvaluationResultSchema = z.object({
   status: z.enum(["none", "running", "complete"]),
   evaluated_at: z.string().nullable().optional(),
-  grounding_pct: z.number().nullable().optional(),
-  faithfulness_pct: z.number().nullable().optional(),
-  sections_passed: z.number().nullable().optional(),
-  sections_total: z.number().nullable().optional(),
-  issues_by_type: z.record(z.number()).optional(),
+  quality_pct: z.number().nullable().optional(),
+  hallucination_rate: z.number().nullable().optional(),
   sections: z.array(EvaluationSectionSchema).optional(),
   history: z.array(EvaluationPassSchema).optional(),
 });
@@ -56,10 +50,8 @@ export type EvaluationResult = z.infer<typeof EvaluationResultSchema>;
 export const EvaluationProgressSchema = z.object({
   step: z.number(),
   stepLabel: z.string(),
-  partialGrounding: z.number().nullable().optional(),
-  partialFaithfulness: z.number().nullable().optional(),
-  partialSectionsPassed: z.number().nullable().optional(),
-  partialSectionsTotal: z.number().nullable().optional(),
+  partialQualityPct: z.number().nullable().optional(),
+  partialHallucinationRate: z.number().nullable().optional(),
   sections: z.array(EvaluationSectionSchema),
 });
 export type EvaluationProgress = z.infer<typeof EvaluationProgressSchema>;
@@ -145,39 +137,24 @@ export function useRunEvaluateMutation(runId: string) {
               step: event["step"] as number,
               stepLabel: event["label"] as string,
               sections: prev?.sections ?? [],
-              partialGrounding: prev?.partialGrounding,
-              partialFaithfulness: prev?.partialFaithfulness,
-              partialSectionsPassed: prev?.partialSectionsPassed,
-              partialSectionsTotal: prev?.partialSectionsTotal,
+              partialQualityPct: prev?.partialQualityPct,
+              partialHallucinationRate: prev?.partialHallucinationRate,
             }));
           }
 
           if (type === "evaluation.section") {
-            const sec = EvaluationSectionSchema.safeParse(event);
+            const sec = EvaluationSectionSchema.safeParse({
+              section_id: event["section_id"],
+              title: event["section_title"],
+              quality_score: event["quality_score"] ?? null,
+              claims: event["verdicts"] ?? [],
+            });
             if (sec.success) {
               setProgress((prev) => ({
                 ...(prev ?? { step: 1, stepLabel: "Scoring sections..." }),
                 sections: [...(prev?.sections ?? []), sec.data],
               }));
             }
-          }
-
-          if (type === "evaluation.grounding_done") {
-            setProgress((prev) => ({
-              ...(prev ?? { step: 1, stepLabel: "Grounding complete" }),
-              sections: prev?.sections ?? [],
-              partialGrounding: event["overall_grounding_pct"] as number,
-              partialSectionsPassed: event["pass_count"] as number,
-              partialSectionsTotal: ((event["pass_count"] as number) ?? 0) + ((event["fail_count"] as number) ?? 0),
-            }));
-          }
-
-          if (type === "evaluation.faithfulness_done") {
-            setProgress((prev) => ({
-              ...(prev ?? { step: 2, stepLabel: "Faithfulness complete" }),
-              sections: prev?.sections ?? [],
-              partialFaithfulness: (event["faithfulness_pct"] as number | null) ?? undefined,
-            }));
           }
 
           if (type === "evaluation.complete") {

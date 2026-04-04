@@ -12,7 +12,6 @@ from db.init_db import init_db_sync as init_db
 from db.models.draft_sections import DraftSectionRow
 from db.models.projects import ProjectRow
 from db.models.runs import RunRow, RunStatusDb
-from db.models.section_reviews import SectionReviewRow
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -127,37 +126,13 @@ def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):
     run_id = uuid4()
     _make_run(db_session, tenant_id=tenant_id, run_id=run_id)
 
-    responses = iter(
-        [
-            json.dumps(
-                {
-                    "section_id": "intro",
-                    "grounding_score": 75,
-                    "verdict": "fail",
-                    "issues": [
-                        {
-                            "sentence_index": 0,
-                            "problem": "unsupported",
-                            "notes": "Needs repair.",
-                            "citations": ["11111111-1111-1111-1111-111111111111"],
-                        }
-                    ],
-                }
-            ),
-            json.dumps(
-                {
-                    "section_id": "conclusion",
-                    "grounding_score": 95,
-                    "verdict": "pass",
-                    "issues": [],
-                }
-            ),
-        ]
-    )
-
     class StubLLM:
-        def generate(self, _prompt, **_kwargs):
-            return next(responses)
+        def generate(self, prompt, **_kwargs):
+            # Return empty claims for intro (quality_score=0 → repair),
+            # one claim for conclusion (quality_score=100 → no repair).
+            if "Intro sentence" in prompt:
+                return '{"claims": []}'
+            return '{"claims": ["Conclusion sentence."]}'
 
     monkeypatch.setattr(evaluator_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
     _make_snippet(db_session, tenant_id=tenant_id, snippet_id="11111111-1111-1111-1111-111111111111")
@@ -231,9 +206,11 @@ def test_evaluator_routes_any_failed_section_to_repair(db_session, monkeypatch):
     result = evaluator_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
 
     assert result.evaluator_decision == EvaluatorDecision.CONTINUE_REPAIR
+    assert "intro" in result.sections_to_repair
+    assert "conclusion" not in result.sections_to_repair
 
 
-def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatch):
+def test_evaluator_persists_pipeline_quality_metrics(db_session, monkeypatch):
     from nodes.evaluator import evaluator_node
     import nodes.evaluator as evaluator_module
 
@@ -244,18 +221,7 @@ def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatc
 
     class StubLLM:
         def generate(self, prompt, **_kwargs):
-            if "Rate the semantic grounding of the drafted section" in prompt:
-                return json.dumps(
-                    {
-                        "section_id": "intro",
-                        "grounding_score": 90,
-                        "verdict": "pass",
-                        "issues": [],
-                    }
-                )
-            if "For each numbered claim" in prompt:
-                return json.dumps({"verdicts": [{"claim_index": 0, "supported": True}]})
-            return json.dumps({"claims": ["Intro sentence."]})
+            return '{"claims": ["Intro sentence."]}'
 
     monkeypatch.setattr(evaluator_module, "get_llm_client_for_stage", lambda *_args, **_kwargs: StubLLM())
     _make_snippet(db_session, tenant_id=tenant_id, snippet_id=snippet_id)
@@ -308,8 +274,8 @@ def test_evaluator_persists_pipeline_faithfulness_metrics(db_session, monkeypatc
         run_id=run_id,
     )
     assert len(history) == 1
-    assert history[0]["grounding_pct"] == 90
-    assert history[0]["faithfulness_pct"] == 100
+    assert history[0]["quality_pct"] == 100
+    assert history[0]["hallucination_rate"] == 0
 
 
 def test_repair_agent_repairs_last_section_without_next_section(db_session, monkeypatch):
@@ -359,23 +325,6 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, monk
             section_summary="Old summary line one.\nOld summary line two.",
         )
     )
-    db_session.add(
-        SectionReviewRow(
-            tenant_id=tenant_id,
-            run_id=run_id,
-            section_id="conclusion",
-            verdict="fail",
-            issues_json=[
-                {
-                    "sentence_index": 0,
-                    "problem": "unsupported",
-                    "notes": "Missing support.",
-                    "citations": [],
-                }
-            ],
-            reviewed_at=datetime.now(UTC),
-        )
-    )
     db_session.flush()
 
     state = OrchestratorState(
@@ -383,6 +332,7 @@ def test_repair_agent_repairs_last_section_without_next_section(db_session, monk
         run_id=run_id,
         user_query="test",
         outline=outline,
+        sections_to_repair=["conclusion"],
         section_evidence_snippets={
             "conclusion": [
                 EvidenceSnippetRef(
@@ -443,6 +393,7 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
                         },
                     }
                 )
+            # All other calls (repair methods + claim re-extraction) default to methods repair
             return json.dumps(
                 {
                     "section_id": "methods",
@@ -499,36 +450,6 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
                 text="Unsupported methods sentence.",
                 section_summary="Old methods summary.",
             ),
-            SectionReviewRow(
-                tenant_id=tenant_id,
-                run_id=run_id,
-                section_id="intro",
-                verdict="fail",
-                issues_json=[
-                    {
-                        "sentence_index": 0,
-                        "problem": "unsupported",
-                        "notes": "Missing support.",
-                        "citations": [],
-                    }
-                ],
-                reviewed_at=datetime.now(UTC),
-            ),
-            SectionReviewRow(
-                tenant_id=tenant_id,
-                run_id=run_id,
-                section_id="methods",
-                verdict="fail",
-                issues_json=[
-                    {
-                        "sentence_index": 0,
-                        "problem": "unsupported",
-                        "notes": "Missing support.",
-                        "citations": [],
-                    }
-                ],
-                reviewed_at=datetime.now(UTC),
-            ),
         ]
     )
     db_session.flush()
@@ -538,6 +459,7 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
         run_id=run_id,
         user_query="test",
         outline=outline,
+        sections_to_repair=["intro", "methods"],
         section_evidence_snippets={
             "intro": [
                 EvidenceSnippetRef(
@@ -582,9 +504,11 @@ def test_repair_agent_calls_each_failed_section_once_when_adjacent_sections_fail
     )
 
     assert result.repair_attempts == 1
-    assert len(prompts) == 2
-    assert "FAILED a 70% grounding evaluation" in prompts[0]
-    assert "Section ID: intro" in prompts[0]
+    # First two prompts are the repair calls (intro + methods). Post-repair extraction
+    # calls are also made but are counted separately and use claim extraction prompts.
+    repair_prompts = [p for p in prompts if "FAILED a 70% grounding evaluation" in p]
+    assert len(repair_prompts) == 2
+    assert "Section ID: intro" in repair_prompts[0]
     assert "Intro fixed with evidence" in repaired_intro.text
     assert repaired_methods.text == (
         "Methods fixed with evidence [CITE:22222222-2222-2222-2222-222222222222]."
@@ -654,21 +578,6 @@ def test_repair_agent_does_not_modify_passing_section_after_failing_section(db_s
                 text="Next section opening. Next section detail.",
                 section_summary="Old next summary.",
             ),
-            SectionReviewRow(
-                tenant_id=tenant_id,
-                run_id=run_id,
-                section_id="intro",
-                verdict="fail",
-                issues_json=[
-                    {
-                        "sentence_index": 0,
-                        "problem": "unsupported",
-                        "notes": "Missing support.",
-                        "citations": [],
-                    }
-                ],
-                reviewed_at=datetime.now(UTC),
-            ),
         ]
     )
     db_session.flush()
@@ -678,6 +587,7 @@ def test_repair_agent_does_not_modify_passing_section_after_failing_section(db_s
         run_id=run_id,
         user_query="test",
         outline=outline,
+        sections_to_repair=["intro"],
         section_evidence_snippets={
             "intro": [
                 EvidenceSnippetRef(
@@ -700,7 +610,6 @@ def test_repair_agent_does_not_modify_passing_section_after_failing_section(db_s
         },
     )
 
-    # Continuity patch is disabled: the passing "next" section must not be touched.
     result = repair_agent_node.__wrapped__(state, _RuntimeSessionProxy(db_session))
 
     assert result.repair_attempts == 1
@@ -777,21 +686,6 @@ def test_repair_agent_logs_warning_when_self_check_below_threshold(db_session, m
                 text="Unsupported intro sentence.",
                 section_summary="Old summary.",
             ),
-            SectionReviewRow(
-                tenant_id=tenant_id,
-                run_id=run_id,
-                section_id="intro",
-                verdict="fail",
-                issues_json=[
-                    {
-                        "sentence_index": 0,
-                        "problem": "unsupported",
-                        "notes": "Missing support.",
-                        "citations": [],
-                    }
-                ],
-                reviewed_at=datetime.now(UTC),
-            ),
         ]
     )
     db_session.flush()
@@ -801,6 +695,7 @@ def test_repair_agent_logs_warning_when_self_check_below_threshold(db_session, m
         run_id=run_id,
         user_query="test",
         outline=outline,
+        sections_to_repair=["intro"],
         section_evidence_snippets={
             "intro": [
                 EvidenceSnippetRef(

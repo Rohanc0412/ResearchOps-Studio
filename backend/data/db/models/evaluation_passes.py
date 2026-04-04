@@ -48,10 +48,8 @@ class EvaluationPassRow(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="running", server_default="running"
     )
-    grounding_pct: Mapped[int | None] = mapped_column(Integer(), nullable=True)
-    faithfulness_pct: Mapped[int | None] = mapped_column(Integer(), nullable=True)
-    sections_passed: Mapped[int | None] = mapped_column(Integer(), nullable=True)
-    sections_total: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    quality_pct: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    hallucination_rate: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     issues_by_type_json: Mapped[dict] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict, server_default="{}"
     )
