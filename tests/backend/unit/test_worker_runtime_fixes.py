@@ -21,6 +21,25 @@ sys.modules.setdefault(
     ),
 )
 
+
+def _observe(func=None, **_kwargs):
+    if func is None:
+        return lambda wrapped: wrapped
+    return func
+
+
+sys.modules.setdefault(
+    "langfuse",
+    types.SimpleNamespace(
+        Langfuse=lambda **_kwargs: object(),
+        langfuse_context=types.SimpleNamespace(
+            update_current_observation=lambda **_kwargs: None,
+            update_current_trace=lambda **_kwargs: None,
+        ),
+        observe=_observe,
+    ),
+)
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "data"))
 
@@ -428,6 +447,7 @@ def test_run_once_sync_research_dispatch_is_disabled(monkeypatch):
 def test_run_forever_and_main_delegate_runtime_setup(monkeypatch):
     stop_event = Event()
     calls: list[str] = []
+
     class FakeEngine:
         async def dispose(self):
             calls.append("dispose")
@@ -459,12 +479,12 @@ def test_run_forever_and_main_delegate_runtime_setup(monkeypatch):
         return False
 
     monkeypatch.setattr(worker_main, "run_once_async", fake_run_once_async)
+
     async def fake_sleep(seconds):
         calls.append(f"sleep:{seconds}")
 
     monkeypatch.setattr(worker_main.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(worker_main, "resolve_env_files", lambda: ["a.env", "b.env"])
-    monkeypatch.setattr(worker_main, "load_dotenv", lambda path, override=False: calls.append(f"dotenv:{path}:{override}"))
+    monkeypatch.setattr(worker_main, "load_root_env", lambda: calls.append("root_env"))
     monkeypatch.setattr(worker_main, "setup_logging", lambda service: calls.append(f"logging:{service}"))
     original_run_forever(poll_seconds=0.25, stop_event=stop_event)
     monkeypatch.setattr(worker_main, "run_forever", lambda poll_seconds: calls.append(f"main_run:{poll_seconds}"))
@@ -476,7 +496,6 @@ def test_run_forever_and_main_delegate_runtime_setup(monkeypatch):
     assert "run_once:True" in calls
     assert "sleep:0.25" in calls
     assert "dispose" in calls
-    assert "dotenv:a.env:False" in calls
-    assert "dotenv:b.env:False" in calls
+    assert "root_env" in calls
     assert f"logging:{worker_main.SERVICE_WORKER}" in calls
     assert "main_run:0.25" in calls

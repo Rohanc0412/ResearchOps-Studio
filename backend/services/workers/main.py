@@ -7,13 +7,12 @@ from uuid import UUID
 
 from core import get_settings
 from core.constants import SERVICE_WORKER
-from core.env import resolve_env_files
+from core.env import load_root_env
 from db.init_db import init_db
 from db.models import JobRow, RunRow
 from db.models.jobs import JobStatusDb
 from db.models.runs import RunStatusDb
 from db.session import create_db_engine, create_sessionmaker, session_scope
-from dotenv import load_dotenv
 from observability import setup_logging
 from research import RESEARCH_JOB_TYPE, process_research_run
 from sqlalchemy import select, update
@@ -348,8 +347,7 @@ def run_forever(*, poll_seconds: float, stop_event: Event | None = None) -> None
 
 
 def main() -> None:
-    for env_file in resolve_env_files():
-        load_dotenv(env_file, override=False)
+    load_root_env()
     setup_logging(SERVICE_WORKER)
     settings = get_settings()
     run_forever(poll_seconds=settings.worker_poll_seconds)

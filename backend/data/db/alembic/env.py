@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import db.models  # noqa: F401  # ensure models register with Base.metadata
 from alembic import context
 from db.models.base import Base
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
 target_metadata = Base.metadata
+
+_ROOT_ENV_FILE = Path(__file__).resolve().parents[4] / ".env"
+if _ROOT_ENV_FILE.exists():
+    load_dotenv(_ROOT_ENV_FILE, override=False)
 
 
 def _get_database_url() -> str:

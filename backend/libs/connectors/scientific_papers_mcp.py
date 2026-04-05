@@ -28,6 +28,7 @@ from connectors.base import (
 
 SEARCHABLE_SOURCES: Final[tuple[str, ...]] = ("openalex", "arxiv", "europepmc")
 DEFAULT_COMMAND: Final[str] = "npx -y @futurelab-studio/latest-science-mcp@latest"
+DEFAULT_FALLBACK_TEXT_MAX_CHARS: Final[int] = 200000
 
 
 @dataclass(frozen=True)
@@ -57,9 +58,7 @@ class ScientificPapersMCPConnector(BaseConnector):
         super().__init__(
             max_requests_per_second=max_requests_per_second, timeout_seconds=timeout_seconds
         )
-        self._command = (
-            command or os.getenv("SCIENTIFIC_PAPERS_MCP_COMMAND") or DEFAULT_COMMAND
-        ).strip()
+        self._command = (command or DEFAULT_COMMAND).strip()
         configured_sources = sources or self._load_sources_from_env()
         self.sources = [source for source in configured_sources if source in SEARCHABLE_SOURCES]
         if not self.sources:
@@ -336,18 +335,10 @@ class ScientificPapersMCPConnector(BaseConnector):
         normalized = normalized.strip()
         if not normalized:
             return None
-        max_chars = self._fallback_text_max_chars()
+        max_chars = DEFAULT_FALLBACK_TEXT_MAX_CHARS
         if len(normalized) > max_chars:
             normalized = normalized[:max_chars].rstrip()
         return normalized
-
-    def _fallback_text_max_chars(self) -> int:
-        raw = os.getenv("SCIENTIFIC_PAPERS_MCP_FALLBACK_TEXT_MAX_CHARS", "200000")
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 200000
-        return max(1000, value)
 
     def _to_retrieved_source(self, record: MCPPaperRecord) -> RetrievedSource:
         year = self._extract_year(record.published_at)

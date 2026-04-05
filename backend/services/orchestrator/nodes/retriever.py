@@ -49,7 +49,6 @@ from embeddings import (
     get_embed_worker_pool,
     get_free_ram_gb,
     get_hf_client,
-    get_ollama_client,
     get_sentence_transformer_client,
     resolve_bedrock_embed_batch_size,
     resolve_bedrock_embed_concurrency,
@@ -421,15 +420,6 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
         raise EmbedError(
             "Embeddings are required for reranking but provider is disabled."
         )
-    if provider_name == "ollama":
-        model_name = resolve_embed_model(provider_name)
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
-        timeout_seconds = env_int("OLLAMA_TIMEOUT_SECONDS", 60, min_value=5)
-        return get_ollama_client(
-            model_name=model_name,
-            base_url=base_url,
-            timeout_seconds=timeout_seconds,
-        )
     if provider_name in {"hf", "huggingface", "hosted", "inference"}:
         model_name = resolve_embed_model(provider_name)
         base_url = os.getenv(
@@ -456,10 +446,7 @@ def _get_embed_client(llm_provider: str | None) -> EmbeddingClient | None:
         region_name = resolve_bedrock_embed_region_name()
         model_name = resolve_embed_model(provider_name)
         if not region_name:
-            raise EmbedError(
-                "Bedrock embeddings require BEDROCK_EMBED_REGION or "
-                "BEDROCK_REGION/AWS_REGION/AWS_DEFAULT_REGION."
-            )
+            raise EmbedError("Bedrock embeddings require AWS_REGION.")
         if not model_name or not model_name.strip():
             raise EmbedError("Bedrock embeddings require BEDROCK_EMBED_MODEL.")
         return get_bedrock_client(
@@ -495,7 +482,7 @@ def _embedding_text_for_source(
         full_text = source.full_text.strip()
         text = f"{title}\n\n{full_text}" if title else full_text
     text = text.strip()
-    raw = os.getenv("RETRIEVER_EMBED_TEXT_MAX_CHARS")
+    raw = os.getenv("EMBED_TEXT_MAX_CHARS")
     if raw and raw.strip():
         try:
             max_chars = int(raw)
@@ -811,7 +798,7 @@ def _rank_sources(
             texts_to_embed.append(text)
             pending.append((idx, canonical_id, text_hash, cached_row))
 
-        batch_size = env_int("RETRIEVER_EMBED_BATCH", 32, min_value=1)
+        batch_size = env_int("EMBED_BATCH_SIZE", 32, min_value=1)
         stats["batch_count"] = (
             math.ceil(len(texts_to_embed) / batch_size) if texts_to_embed else 0
         )

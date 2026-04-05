@@ -20,13 +20,11 @@ RUN pip install --no-cache-dir -r requirements.dev.txt
 FROM prod-deps AS production
 COPY backend/. /app
 ENV PYTHONPATH=/app/services/api:/app/services/orchestrator:/app/services/workers:/app/libs:/app/libs/research_rules:/app/data
-ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
 EXPOSE 8000
 CMD ["python", "-m", "main"]
 
 FROM dev-deps AS dev
 COPY backend/. /app
 ENV PYTHONPATH=/app/services/api:/app/services/orchestrator:/app/services/workers:/app/libs:/app/libs/research_rules:/app/data
-ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
 EXPOSE 8000
 CMD ["python", "-m", "main"]

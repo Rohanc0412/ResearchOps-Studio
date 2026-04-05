@@ -1,7 +1,10 @@
-.PHONY: up down logs test fmt lint run-api run-worker dev
+.PHONY: up up-doppler down logs test fmt lint run-api run-worker dev
 
 up:
 	docker compose -f deployment/compose.yaml up --build
+
+up-doppler:
+	doppler run -- docker compose -f deployment/compose.yaml up --build
 
 down:
 	docker compose -f deployment/compose.yaml down -v
@@ -29,4 +32,4 @@ run-worker:
 	python -m main
 
 dev:
-	honcho start
+	doppler run -- python ../scripts/dev.py

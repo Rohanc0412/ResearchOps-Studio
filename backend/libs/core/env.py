@@ -4,6 +4,8 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 def now_utc() -> datetime:
     """Return the current UTC datetime (timezone-aware)."""
@@ -73,12 +75,20 @@ def resolve_repo_root(start: Path | None = None) -> Path | None:
     return _find_repo_root(start)
 
 
-def resolve_env_files() -> tuple[str, ...]:
-    repo_root = resolve_repo_root()
+def resolve_root_env_file(start: Path | None = None) -> Path | None:
+    repo_root = resolve_repo_root(start)
     if repo_root is None:
-        return ()
+        return None
     env_file = repo_root / ".env"
     if not env_file.exists():
-        return ()
-    return (str(env_file.resolve()),)
+        return None
+    return env_file.resolve()
+
+
+def load_root_env(start: Path | None = None) -> Path | None:
+    env_file = resolve_root_env_file(start)
+    if env_file is None:
+        return None
+    load_dotenv(env_file, override=False)
+    return env_file
 

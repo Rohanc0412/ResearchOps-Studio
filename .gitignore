@@ -9,7 +9,8 @@ venv/
 ENV/
 env/
 
-# Env files
+# Root `.env` is supported for local non-secret config only.
+# Service-local `.env` files are legacy and should not be recreated.
 .env
 .env.*
 *.local
@@ -86,3 +87,4 @@ docs/e2e-test-report-*.md
 *.p12
 *.pfx
 .worktrees/
+.mcp.json

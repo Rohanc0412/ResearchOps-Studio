@@ -5,14 +5,12 @@ import logging
 import uvicorn
 from app import create_app
 from core import SERVICE_API, get_settings
-from core.env import resolve_env_files
-from dotenv import load_dotenv
+from core.env import load_root_env
 from observability import setup_logging
 
 
 def main() -> None:
-    for env_file in resolve_env_files():
-        load_dotenv(env_file, override=False)
+    load_root_env()
     settings = get_settings()
     setup_logging(SERVICE_API)
     logging.getLogger(__name__).info(

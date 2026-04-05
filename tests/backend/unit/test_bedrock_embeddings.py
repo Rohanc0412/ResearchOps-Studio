@@ -5,13 +5,17 @@ import json
 import threading
 import time
 
+import langfuse
 import pytest
+
+if not hasattr(langfuse, "observe"):
+    langfuse.observe = lambda *args, **kwargs: (lambda func: func)
+
 from nodes import retriever as retriever_module
 
 
 def test_resolve_embed_provider_stays_explicit(monkeypatch):
     monkeypatch.delenv("EMBED_PROVIDER", raising=False)
-    monkeypatch.delenv("RETRIEVER_EMBED_PROVIDER", raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "bedrock")
 
     from embeddings import resolve_embed_provider
@@ -88,7 +92,7 @@ def test_retriever_get_embed_client_selects_bedrock_when_explicit(monkeypatch):
     sentinel = object()
     monkeypatch.setenv("EMBED_PROVIDER", "bedrock")
     monkeypatch.setenv("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0")
-    monkeypatch.setenv("BEDROCK_EMBED_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setattr(retriever_module, "get_bedrock_client", lambda **_: sentinel)
 
     assert retriever_module._get_embed_client("hosted") is sentinel
@@ -97,10 +101,7 @@ def test_retriever_get_embed_client_selects_bedrock_when_explicit(monkeypatch):
 def test_retriever_get_embed_client_requires_bedrock_region(monkeypatch):
     monkeypatch.setenv("EMBED_PROVIDER", "bedrock")
     monkeypatch.setenv("BEDROCK_EMBED_MODEL", "amazon.titan-embed-text-v2:0")
-    monkeypatch.delenv("BEDROCK_EMBED_REGION", raising=False)
-    monkeypatch.delenv("BEDROCK_REGION", raising=False)
     monkeypatch.delenv("AWS_REGION", raising=False)
-    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
 
-    with pytest.raises(retriever_module.EmbedError, match="BEDROCK_EMBED_REGION"):
+    with pytest.raises(retriever_module.EmbedError, match="AWS_REGION"):
         retriever_module._get_embed_client("hosted")

@@ -11,13 +11,13 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from dataclasses import dataclass
 from typing import Any
 
-from core.env import env_float, env_int, env_optional_int
+from core.env import env_float, env_int
 
 DEFAULT_BEDROCK_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 
 # ---------------------------------------------------------------------------
 # Shared embedding configuration resolvers
-# Reads EMBED_* env vars; falls back to legacy RETRIEVER_EMBED_* for compat.
+# Reads the canonical EMBED_* env vars only.
 # ---------------------------------------------------------------------------
 
 
@@ -25,41 +25,29 @@ def resolve_embed_provider(llm_provider: str | None = None) -> str:
     """Return the embedding provider name.
 
     Resolution order:
-    1. EMBED_PROVIDER env var (or legacy RETRIEVER_EMBED_PROVIDER)
+    1. EMBED_PROVIDER env var
     2. Hard default: ``"local"``
     """
     _ = llm_provider
-    raw = os.getenv("EMBED_PROVIDER") or os.getenv("RETRIEVER_EMBED_PROVIDER")
+    raw = os.getenv("EMBED_PROVIDER")
     if raw and raw.strip():
         return raw.strip().lower()
     return "local"
 
 
 def resolve_embed_model(provider: str) -> str:
-    raw = None
-    if provider == "bedrock":
-        raw = os.getenv("BEDROCK_EMBED_MODEL")
-    elif provider in {"hf", "huggingface", "hosted", "inference"}:
-        raw = os.getenv("HF_EMBED_MODEL")
-    raw = raw or os.getenv("EMBED_MODEL") or os.getenv("RETRIEVER_EMBED_MODEL")
+    raw = os.getenv("BEDROCK_EMBED_MODEL") if provider == "bedrock" else os.getenv("EMBED_MODEL")
     if raw and raw.strip():
         return raw.strip()
     if provider == "bedrock":
         return DEFAULT_BEDROCK_EMBED_MODEL
-    if provider == "ollama":
-        return "nomic-embed-text"
     if provider in {"local", "sentence-transformers", "bge"}:
         return "BAAI/bge-m3"
     return "text-embedding-3-small"
 
 
 def resolve_bedrock_embed_region_name() -> str | None:
-    raw = (
-        os.getenv("BEDROCK_EMBED_REGION")
-        or os.getenv("BEDROCK_REGION")
-        or os.getenv("AWS_REGION")
-        or os.getenv("AWS_DEFAULT_REGION")
-    )
+    raw = os.getenv("AWS_REGION")
     if raw and raw.strip():
         return raw.strip()
     return None
@@ -78,11 +66,7 @@ def resolve_bedrock_embed_timeout_seconds() -> float:
 
 
 def resolve_embed_device() -> str:
-    raw = (
-        os.getenv("EMBED_DEVICE")
-        or os.getenv("RETRIEVER_EMBED_DEVICE")
-        or os.getenv("EMBEDDING_DEVICE")
-    )
+    raw = os.getenv("EMBED_DEVICE")
     if raw and raw.strip():
         return raw.strip()
     try:
@@ -94,7 +78,7 @@ def resolve_embed_device() -> str:
 
 
 def resolve_embed_dtype(device: str) -> str | None:
-    raw = os.getenv("EMBED_DTYPE") or os.getenv("RETRIEVER_EMBED_DTYPE")
+    raw = os.getenv("EMBED_DTYPE")
     if raw and raw.strip():
         return raw.strip().lower()
     if device.startswith("cuda"):
@@ -103,23 +87,21 @@ def resolve_embed_dtype(device: str) -> str | None:
 
 
 def resolve_embed_normalize() -> bool:
-    raw = os.getenv("EMBED_NORMALIZE") or os.getenv("RETRIEVER_EMBED_NORMALIZE")
+    raw = os.getenv("EMBED_NORMALIZE")
     if not raw:
         return True
     return raw.strip().lower() not in {"0", "false", "no"}
 
 
 def resolve_embed_trust_remote_code(model_name: str) -> bool:
-    raw = os.getenv("EMBED_TRUST_REMOTE_CODE") or os.getenv(
-        "RETRIEVER_EMBED_TRUST_REMOTE_CODE"
-    )
+    raw = os.getenv("EMBED_TRUST_REMOTE_CODE")
     if raw and raw.strip():
         return raw.strip().lower() in {"1", "true", "yes"}
     return "bge-m3" in model_name.lower()
 
 
 def resolve_embed_max_seq_len() -> int | None:
-    raw = os.getenv("EMBED_MAX_SEQ_LEN") or os.getenv("RETRIEVER_EMBED_MAX_SEQ_LEN")
+    raw = os.getenv("EMBED_MAX_SEQ_LEN")
     if not raw or not raw.strip():
         return None
     try:
@@ -131,7 +113,7 @@ def resolve_embed_max_seq_len() -> int | None:
 
 def resolve_embed_workers() -> int:
     """Return the configured hard cap on embedding pool workers (default 3)."""
-    raw = os.getenv("EMBED_WORKERS") or os.getenv("RETRIEVER_EMBED_MODELS")
+    raw = os.getenv("EMBED_WORKERS")
     if raw and raw.strip():
         try:
             value = int(raw)
@@ -143,7 +125,6 @@ def resolve_embed_workers() -> int:
 
 _EMBED_CLIENTS: dict[tuple, SentenceTransformerEmbedClient] = {}
 _EMBED_MODEL_CONFIGS: dict[str, set[tuple]] = {}
-_OLLAMA_CLIENTS: dict[tuple, OllamaEmbedClient] = {}
 _HF_CLIENTS: dict[tuple, HuggingFaceEmbedClient] = {}
 _BEDROCK_CLIENTS: dict[tuple, BedrockEmbedClient] = {}
 
@@ -209,76 +190,6 @@ class SentenceTransformerEmbedClient:
             convert_to_numpy=True,
         )
         return embeddings.tolist()
-
-
-@dataclass
-class OllamaEmbedClient:
-    model_name: str
-    base_url: str
-    timeout_seconds: float
-
-    def __post_init__(self) -> None:
-        import httpx
-
-        self._http = httpx.Client(timeout=self.timeout_seconds)
-
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        max_chars = env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
-        if max_chars is not None:
-            texts = [
-                text[:max_chars] if len(text) > max_chars else text for text in texts
-            ]
-        try:
-            data = self._post_json(
-                "/api/embed", {"model": self.model_name, "input": texts}
-            )
-            embeddings = data.get("embeddings")
-            if embeddings is None:
-                embedding = data.get("embedding")
-                if isinstance(embedding, list):
-                    return [embedding]
-            if not isinstance(embeddings, list):
-                raise RuntimeError("Ollama embed response missing embeddings list.")
-            if len(embeddings) != len(texts):
-                raise RuntimeError(
-                    f"Ollama embeddings count mismatch: expected {len(texts)} got {len(embeddings)}"
-                )
-            return embeddings
-        except Exception as exc:
-            # If Ollama's batch endpoint fails intermittently, split the batch and retry.
-            if _is_http_status(exc, 500) and len(texts) > 1:
-                mid = len(texts) // 2
-                return self.embed_texts(texts[:mid]) + self.embed_texts(texts[mid:])
-            if (
-                _is_http_status(exc, 404)
-                or _is_http_status(exc, 400)
-                or _is_http_status(exc, 500)
-            ):
-                return [self._embed_single(text) for text in texts]
-            raise RuntimeError(f"Ollama embeddings request failed: {exc}") from exc
-
-    def _embed_single(self, text: str) -> list[float]:
-        max_chars = env_optional_int("OLLAMA_EMBED_TEXT_MAX_CHARS", min_value=1)
-        if max_chars is not None and len(text) > max_chars:
-            text = text[:max_chars]
-        data = self._post_json(
-            "/api/embeddings", {"model": self.model_name, "prompt": text}
-        )
-        embedding = data.get("embedding")
-        if not isinstance(embedding, list):
-            raise RuntimeError("Ollama embeddings response missing embedding.")
-        return embedding
-
-    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self.base_url.rstrip('/')}{path}"
-        resp = self._http.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, dict):
-            raise RuntimeError("Ollama embeddings response invalid.")
-        return data
 
 
 @dataclass
@@ -454,17 +365,6 @@ class BedrockEmbedClient:
         raise RuntimeError("Bedrock embeddings response missing embedding.")
 
 
-def _is_http_status(exc: Exception, status_code: int) -> bool:
-    try:
-        import httpx
-
-        if isinstance(exc, httpx.HTTPStatusError):
-            return exc.response is not None and exc.response.status_code == status_code
-    except Exception:
-        return False
-    return False
-
-
 def _coerce_hf_embeddings(data: Any, *, expected: int) -> list[list[float]]:
     if not isinstance(data, list):
         raise RuntimeError("Hugging Face embeddings response invalid.")
@@ -554,22 +454,6 @@ def get_sentence_transformer_client(
         trust_remote_code=trust_remote_code,
     )
     _EMBED_CLIENTS[cache_key] = client
-    return client
-
-
-def get_ollama_client(
-    *, model_name: str, base_url: str, timeout_seconds: float
-) -> OllamaEmbedClient:
-    cache_key = (model_name, base_url, timeout_seconds)
-    cached = _OLLAMA_CLIENTS.get(cache_key)
-    if cached is not None:
-        return cached
-    client = OllamaEmbedClient(
-        model_name=model_name,
-        base_url=base_url,
-        timeout_seconds=timeout_seconds,
-    )
-    _OLLAMA_CLIENTS[cache_key] = client
     return client
 
 

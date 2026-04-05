@@ -1,2 +1,0 @@
-api: PYTHONPATH=./services/api:./libs:./libs/research_rules:./data LOG_LEVEL=${LOG_LEVEL:-INFO} LOG_FORMAT=${LOG_FORMAT:-pretty} python -m main
-worker: PYTHONPATH=./services/workers:./services/orchestrator:./libs:./libs/research_rules:./data LOG_LEVEL=${LOG_LEVEL:-INFO} LOG_FORMAT=${LOG_FORMAT:-pretty} python -m main

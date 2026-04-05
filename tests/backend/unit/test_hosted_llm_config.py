@@ -3,38 +3,47 @@ from __future__ import annotations
 import pytest
 
 
-def test_get_llm_client_uses_openai_env_fallbacks(monkeypatch):
-    monkeypatch.delenv("HOSTED_LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("HOSTED_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("HOSTED_LLM_MODEL", raising=False)
-    monkeypatch.delenv("OPENAI_MODEL", raising=False)
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+def test_get_llm_client_uses_hosted_env_only(monkeypatch):
+    monkeypatch.setenv("HOSTED_LLM_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv("HOSTED_LLM_API_KEY", "test-hosted-key")
+    monkeypatch.setenv("HOSTED_LLM_MODEL", "test-model")
 
     from llm import get_llm_client
 
     client = get_llm_client("hosted", None)
 
     assert client is not None
-    assert client.base_url == "https://api.openai.com"
-    assert client.api_key == "test-openai-key"
-    assert client.model_name == "gpt-4.1-mini"
+    assert client.base_url == "https://api.example.com"
+    assert client.api_key == "test-hosted-key"
+    assert client.model_name == "test-model"
+
+
+def test_get_llm_client_ignores_removed_openai_aliases(monkeypatch):
+    monkeypatch.delenv("HOSTED_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("HOSTED_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("HOSTED_LLM_MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com")
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-key")
+    monkeypatch.setenv("OPENAI_MODEL", "legacy-model")
+
+    from llm import LLMError, get_llm_client
+
+    with pytest.raises(LLMError, match="HOSTED_LLM_API_KEY"):
+        get_llm_client("hosted", None)
 
 
 def test_resolve_model_for_stage_falls_back_to_default_hosted_model(monkeypatch):
     monkeypatch.delenv("LLM_MODEL_CHEAP", raising=False)
     monkeypatch.delenv("LLM_MODEL_CAPABLE", raising=False)
     monkeypatch.delenv("HOSTED_LLM_MODEL", raising=False)
-    monkeypatch.delenv("OPENAI_MODEL", raising=False)
 
     from llm import resolve_model_for_stage
 
-    assert resolve_model_for_stage("draft", None, "hosted", None) == "gpt-4.1-mini"
+    assert resolve_model_for_stage("draft", None, "hosted", None) == "gpt-5-nano"
 
 
 def test_get_llm_client_uses_bedrock_defaults(monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-east-1")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     monkeypatch.delenv("AWS_CONFIG_FILE", raising=False)
@@ -55,7 +64,6 @@ def test_get_llm_client_uses_bedrock_defaults(monkeypatch):
 
 def test_get_llm_client_raises_for_missing_bedrock_region(monkeypatch):
     monkeypatch.delenv("AWS_REGION", raising=False)
-    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     monkeypatch.delenv("AWS_CONFIG_FILE", raising=False)
@@ -83,10 +91,8 @@ def test_explain_llm_error_surfaces_quota_issue():
 def test_explain_llm_error_surfaces_bedrock_config_guidance():
     from llm import explain_llm_error
 
-    message = explain_llm_error(
-        "Bedrock LLM not configured. Set BEDROCK_REGION or AWS_REGION/AWS_DEFAULT_REGION."
-    )
+    message = explain_llm_error("Bedrock LLM not configured. Set AWS_REGION.")
 
     assert "bedrock" in message.lower()
     assert "aws_region" in message.lower()
-    assert "openai" not in message.lower()
+    assert "bedrock_region" not in message.lower()

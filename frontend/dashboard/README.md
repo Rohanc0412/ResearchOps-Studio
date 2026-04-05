@@ -5,18 +5,26 @@ Production-grade React dashboard for ResearchOps Studio.
 ## Setup
 
 ```powershell
-cd frontend/dashboard
+cd C:\Projects\ResearchOps-Studio\frontend\dashboard
 npm install
 ```
 
-Edit `frontend/dashboard/.env`:
+The frontend reads `VITE_` variables from the repo root `.env` because Vite is configured with `envDir` pointing at the repository root. Do not create a frontend-local `.env` file.
 
-- `VITE_API_BASE_URL` (e.g. `http://localhost:8000`)
-- Recommended for local dev: set `VITE_API_BASE_URL=/api` (Vite dev proxy forwards to `http://localhost:8000`).
+- Put non-secret frontend values such as `VITE_API_BASE_URL=/api` in [`.env`](C:/Projects/ResearchOps-Studio/.env).
+- Provide secrets through Doppler when running the repo-level dev command.
 
 Run:
 
 ```powershell
+cd C:\Projects\ResearchOps-Studio
+doppler run -- python scripts/dev.py
+```
+
+To run only the frontend:
+
+```powershell
+cd C:\Projects\ResearchOps-Studio\frontend\dashboard
 npm run dev
 ```
 

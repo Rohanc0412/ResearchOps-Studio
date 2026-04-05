@@ -5,12 +5,14 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from core.env import resolve_env_files
+from core.env import resolve_root_env_file
+
+_ROOT_ENV_FILE = resolve_root_env_file()
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=resolve_env_files() or ".env",
+        env_file=str(_ROOT_ENV_FILE) if _ROOT_ENV_FILE is not None else None,
         env_file_encoding="utf-8",
         extra="ignore",
         env_ignore_empty=True,

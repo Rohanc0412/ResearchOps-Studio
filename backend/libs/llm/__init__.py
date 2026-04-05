@@ -28,7 +28,7 @@ class LLMError(RuntimeError):
     """Raised when an LLM request fails."""
 
 
-DEFAULT_OPENAI_BASE_URL = "https://api.openai.com"
+DEFAULT_HOSTED_BASE_URL = "https://api.openai.com"
 DEFAULT_HOSTED_MODEL = "gpt-5-nano"
 DEFAULT_BEDROCK_MODEL = "amazon.nova-lite-v1:0"
 
@@ -76,27 +76,19 @@ def resolve_model_for_stage(
 
 
 def _resolve_hosted_base_url() -> str | None:
-    return (
-        os.getenv("HOSTED_LLM_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
-        or DEFAULT_OPENAI_BASE_URL
-    )
+    return os.getenv("HOSTED_LLM_BASE_URL") or DEFAULT_HOSTED_BASE_URL
 
 
 def _resolve_hosted_api_key() -> str | None:
-    return os.getenv("HOSTED_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    return os.getenv("HOSTED_LLM_API_KEY")
 
 
 def _resolve_hosted_model_name(model: str | None = None) -> str | None:
-    return model or os.getenv("HOSTED_LLM_MODEL") or os.getenv("OPENAI_MODEL") or DEFAULT_HOSTED_MODEL
+    return model or os.getenv("HOSTED_LLM_MODEL") or DEFAULT_HOSTED_MODEL
 
 
 def _resolve_bedrock_region_name() -> str | None:
-    return (
-        os.getenv("BEDROCK_REGION")
-        or os.getenv("AWS_REGION")
-        or os.getenv("AWS_DEFAULT_REGION")
-    )
+    return os.getenv("AWS_REGION")
 
 
 def _resolve_bedrock_model_name(model: str | None = None) -> str | None:
@@ -167,13 +159,12 @@ def explain_llm_error(reason: str) -> str:
         )
     if "bedrock" in lowered and "not configured" in lowered:
         return (
-            "The Bedrock LLM is not configured. Set BEDROCK_REGION or AWS_REGION/AWS_DEFAULT_REGION "
-            "and verify BEDROCK_MODEL."
+            "The Bedrock LLM is not configured. Set AWS_REGION and verify BEDROCK_MODEL."
         )
     if "not configured" in lowered:
         return (
-            "The hosted LLM is not configured. Set HOSTED_LLM_API_KEY or OPENAI_API_KEY "
-            "and verify the base URL/model settings."
+            "The hosted LLM is not configured. Set HOSTED_LLM_API_KEY and verify "
+            "HOSTED_LLM_BASE_URL/HOSTED_LLM_MODEL."
         )
     if text:
         return text
@@ -486,8 +477,8 @@ def get_llm_client(
         model_name = _resolve_hosted_model_name(model)
         if not base_url or not api_key or not model_name:
             raise LLMError(
-                "Hosted LLM not configured. Set HOSTED_LLM_API_KEY or OPENAI_API_KEY, "
-                "and optionally HOSTED_LLM_BASE_URL/OPENAI_BASE_URL plus HOSTED_LLM_MODEL/OPENAI_MODEL."
+                "Hosted LLM not configured. Set HOSTED_LLM_API_KEY and optionally "
+                "HOSTED_LLM_BASE_URL plus HOSTED_LLM_MODEL."
             )
         return OpenAICompatibleClient(
             base_url=base_url,
@@ -500,9 +491,7 @@ def get_llm_client(
         region_name = _resolve_bedrock_region_name()
         model_name = _resolve_bedrock_model_name(model)
         if not region_name:
-            raise LLMError(
-                "Bedrock LLM not configured. Set BEDROCK_REGION or AWS_REGION/AWS_DEFAULT_REGION."
-            )
+            raise LLMError("Bedrock LLM not configured. Set AWS_REGION.")
         if not model_name:
             raise LLMError("Bedrock LLM not configured. Set BEDROCK_MODEL.")
         return BedrockClient(
@@ -523,10 +512,8 @@ def get_llm_client_for_stage(
 ) -> LLMProvider | None:
     stage_key = stage.strip().upper().replace("-", "_")
     # Operator-level env override (highest priority — sits above user stage_models)
-    provider_override = os.getenv(f"LLM_PROVIDER_{stage_key}") or os.getenv(
-        f"LLM_{stage_key}_PROVIDER"
-    )
-    model_override = os.getenv(f"LLM_MODEL_{stage_key}") or os.getenv(f"LLM_{stage_key}_MODEL")
+    provider_override = os.getenv(f"LLM_PROVIDER_{stage_key}")
+    model_override = os.getenv(f"LLM_MODEL_{stage_key}")
     resolved_provider = provider_override or provider
     # If operator has set an explicit stage env var, use it directly (skip routing)
     if model_override:
@@ -552,16 +539,12 @@ def _resolve_timeout_seconds(stage_key: str | None = None) -> float:
             return None
 
     if stage_key:
-        for key in (
-            f"LLM_TIMEOUT_SECONDS_{stage_key}",
-            f"LLM_{stage_key}_TIMEOUT_SECONDS",
-            f"HOSTED_LLM_TIMEOUT_SECONDS_{stage_key}",
-        ):
+        for key in (f"LLM_TIMEOUT_SECONDS_{stage_key}",):
             value = _read_timeout(key)
             if value is not None and value > 0:
                 return value
 
-    for key in ("LLM_TIMEOUT_SECONDS", "HOSTED_LLM_TIMEOUT_SECONDS"):
+    for key in ("LLM_TIMEOUT_SECONDS",):
         value = _read_timeout(key)
         if value is not None and value > 0:
             return value

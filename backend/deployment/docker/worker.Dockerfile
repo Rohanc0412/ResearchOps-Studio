@@ -41,11 +41,9 @@ RUN pip install --no-cache-dir -r requirements.dev.txt
 FROM torch-deps AS production
 COPY backend/. /app
 ENV PYTHONPATH=/app/services/workers:/app/services/orchestrator:/app/services/api:/app/libs:/app/data
-ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
 CMD ["python", "/app/services/workers/main.py"]
 
 FROM dev-deps AS dev
 COPY backend/. /app
 ENV PYTHONPATH=/app/services/workers:/app/services/orchestrator:/app/services/api:/app/libs:/app/data
-ENV SCIENTIFIC_PAPERS_MCP_COMMAND=latest-science-mcp
 CMD ["python", "/app/services/workers/main.py"]

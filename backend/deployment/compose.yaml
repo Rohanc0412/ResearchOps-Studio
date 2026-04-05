@@ -1,3 +1,16 @@
+x-secret-env: &secret-env
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET-}
+  AUTH_REFRESH_TOKEN_SECRET: ${AUTH_REFRESH_TOKEN_SECRET-}
+  AUTH_PASSWORD_RESET_SECRET: ${AUTH_PASSWORD_RESET_SECRET-}
+  HOSTED_LLM_API_KEY: ${HOSTED_LLM_API_KEY-}
+  TAVILY_API_KEY: ${TAVILY_API_KEY-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN-}
+  HF_TOKEN: ${HF_TOKEN-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD-}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY-}
+
 name: research_studio
 
 services:
@@ -63,14 +76,13 @@ services:
       dockerfile: backend/deployment/docker/api.Dockerfile
       target: production
     env_file:
-      - ../../.env
+      - path: ../../.env
+        required: false
     environment:
+      <<: *secret-env
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
       API_HOST: 0.0.0.0
       API_PORT: 8000
-      AUTH_REQUIRED: "true"
-      DEV_BYPASS_AUTH: "false"
-      AUTH_JWT_SECRET: "${AUTH_JWT_SECRET:-dev-insecure-secret}"
     ports:
       - "8000:8000"
     depends_on:
@@ -93,10 +105,11 @@ services:
       target: production
     gpus: all
     env_file:
-      - ../../.env
+      - path: ../../.env
+        required: false
     environment:
+      <<: *secret-env
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/researchops
-      WORKER_POLL_SECONDS: "1.0"
       HF_HOME: /app/.cache/huggingface
       HUGGINGFACE_HUB_CACHE: /app/.cache/huggingface/hub
       TRANSFORMERS_CACHE: /app/.cache/huggingface/transformers

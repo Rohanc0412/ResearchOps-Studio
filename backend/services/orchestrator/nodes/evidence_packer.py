@@ -36,7 +36,6 @@ from embeddings import (
     get_embed_worker_pool,
     get_free_ram_gb,
     get_hf_client,
-    get_ollama_client,
     get_sentence_transformer_client,
     resolve_bedrock_embed_batch_size,
     resolve_bedrock_embed_concurrency,
@@ -95,15 +94,6 @@ def _env_float(name: str, default: float, *, min_value: float | None = None) -> 
 
 def _get_embed_client() -> EmbeddingClient:
     provider = resolve_embed_provider()
-    if provider == "ollama":
-        model_name = resolve_embed_model(provider)
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
-        timeout_seconds = _env_int("OLLAMA_TIMEOUT_SECONDS", 60, min_value=5)
-        return get_ollama_client(
-            model_name=model_name,
-            base_url=base_url,
-            timeout_seconds=timeout_seconds,
-        )
     if provider in {"hf", "huggingface", "hosted", "inference"}:
         model_name = resolve_embed_model(provider)
         base_url = os.getenv(
@@ -130,10 +120,7 @@ def _get_embed_client() -> EmbeddingClient:
         region_name = resolve_bedrock_embed_region_name()
         model_name = resolve_embed_model(provider)
         if not region_name:
-            raise ValueError(
-                "Bedrock embeddings require BEDROCK_EMBED_REGION or "
-                "BEDROCK_REGION/AWS_REGION/AWS_DEFAULT_REGION."
-            )
+            raise ValueError("Bedrock embeddings require AWS_REGION.")
         if not model_name or not model_name.strip():
             raise ValueError("Bedrock embeddings require BEDROCK_EMBED_MODEL.")
         return get_bedrock_client(
