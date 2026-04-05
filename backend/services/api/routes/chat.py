@@ -276,11 +276,11 @@ def _generate_quick_answer(
                     "role": "system",
                     "content": (
                         "You are a helpful research assistant with access to a web search tool. "
-                        "Use the web_search tool to find current information, then answer the "
-                        "user's question by synthesizing what you found. "
-                        "When you have search results, base your answer on them — do not say "
-                        "you lack live sources or fall back to general knowledge when results "
-                        "are available. Cite or reference what you found naturally in your response."
+                        "Only use the web_search tool when the question requires current, real-time, "
+                        "or rapidly-changing information (e.g. recent news, live prices, today's events). "
+                        "For general knowledge questions (definitions, concepts, explanations, history), "
+                        "answer directly from your own knowledge without searching. "
+                        "When you do search and have results, base your answer on them and cite sources naturally."
                     ),
                 },
                 {"role": "user", "content": prompt},

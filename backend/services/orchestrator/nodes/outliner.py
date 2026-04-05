@@ -337,6 +337,8 @@ def _normalize_outline(outline: OutlineModel) -> OutlineModel:
     return OutlineModel(
         sections=normalized_sections,
         total_estimated_words=outline.total_estimated_words,
+        report_title=outline.report_title,
+        step_labels=outline.step_labels,
     )
 
 
