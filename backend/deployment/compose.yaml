@@ -31,30 +31,14 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
 
-  postgres_test_db_init:
-    image: pgvector/pgvector:pg16
-    environment:
-      PGPASSWORD: postgres
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command:
-      - /bin/sh
-      - -ec
-      - >
-        psql -h postgres -U postgres -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'researchops_test'" |
-        grep -q 1 ||
-        psql -h postgres -U postgres -d postgres -c "CREATE DATABASE researchops_test"
-    restart: "no"
-
   backend-tests:
     build:
       context: ../..
       dockerfile: backend/deployment/docker/api.Dockerfile
       target: dev
     depends_on:
-      postgres_test_db_init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     volumes:
       - ../../tests:/app/tests
     working_dir: /app
